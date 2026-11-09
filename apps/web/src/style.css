@@ -1,0 +1,9 @@
+:root { font-family: system-ui, sans-serif; color: #202a28; background: #f4f6f5; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+.shell { max-width: 960px; margin: 0 auto; padding: 24px; }
+header { display: flex; justify-content: space-between; border-bottom: 1px solid #cbd4cf; padding-bottom: 16px; }
+header span { color: #57675f; }
+section { padding: 48px 0; }
+h1 { font-size: 28px; margin: 0 0 16px; }
+p { line-height: 1.7; color: #57675f; }

@@ -1,6 +1,52 @@
 name: itsm-dev
 
 services:
+  web:
+    image: ${ITSM_IMAGE_PREFIX:-local/itsm}-web:${ITSM_IMAGE_TAG:-dev}
+    build:
+      context: ../..
+      dockerfile: apps/web/Dockerfile
+    ports:
+      - "127.0.0.1:${ITSM_WEB_PORT:-8088}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - itsm_frontend
+    restart: unless-stopped
+
+  api:
+    image: ${ITSM_IMAGE_PREFIX:-local/itsm}-api:${ITSM_IMAGE_TAG:-dev}
+    build:
+      context: ../..
+      dockerfile: apps/api/Dockerfile
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - itsm_frontend
+      - itsm_backend
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:3000/api/v1/health', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  worker:
+    image: ${ITSM_IMAGE_PREFIX:-local/itsm}-worker:${ITSM_IMAGE_TAG:-dev}
+    build:
+      context: ../..
+      dockerfile: apps/worker/Dockerfile
+    environment:
+      REDIS_URL: redis://:${ITSM_REDIS_PASSWORD:?Set ITSM_REDIS_PASSWORD in the private env file}@redis:6379
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - itsm_backend
+    restart: unless-stopped
+
   db:
     image: postgres:16-alpine
     environment:
@@ -35,6 +81,7 @@ services:
     restart: unless-stopped
 
 networks:
+  itsm_frontend:
   itsm_backend:
     internal: true
 

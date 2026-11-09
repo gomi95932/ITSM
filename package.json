@@ -1,0 +1,11 @@
+{
+  "name": "itsm",
+  "private": true,
+  "workspaces": ["apps/*", "packages/*"],
+  "scripts": {
+    "build": "npm run build -w @itsm/contracts && npm run build -w @itsm/api && npm run build -w @itsm/worker && npm run build -w @itsm/web",
+    "test": "npm run test --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  },
+  "engines": { "node": ">=22" }
+}
