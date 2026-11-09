@@ -48,7 +48,7 @@ services:
     restart: unless-stopped
 
   db:
-    image: postgres:16-alpine
+    image: ${ITSM_POSTGRES_IMAGE:-postgres:16-alpine}
     environment:
       POSTGRES_DB: itsm
       POSTGRES_USER: itsm
@@ -65,7 +65,7 @@ services:
     restart: unless-stopped
 
   redis:
-    image: redis:7.4-alpine
+    image: ${ITSM_REDIS_IMAGE:-redis:7.4-alpine}
     environment:
       ITSM_REDIS_PASSWORD: ${ITSM_REDIS_PASSWORD:?Set ITSM_REDIS_PASSWORD in the private env file}
     command: ["sh", "-c", "exec redis-server --appendonly yes --requirepass \"$$ITSM_REDIS_PASSWORD\""]

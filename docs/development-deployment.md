@@ -13,9 +13,9 @@
 
 ## 镜像发布与手工验证
 
-`main` 的 Application CI 通过后，GitHub Actions 向私有 GHCR 发布 `ghcr.io/gomi95932/itsm-{api,web,worker}:<commit-sha>`。首次先验证三个镜像在仓库 Packages 中可见，并为服务器配置仅具 `read:packages` 权限的受控拉取身份。不要把 GHCR 凭据提交到仓库或写入 Compose 文件。
+`main` 的 Application CI 通过后，GitHub Actions 向私有 GHCR 发布 `ghcr.io/gomi95932/itsm-{api,web,worker,postgres,redis}:<commit-sha>`。PostgreSQL 和 Redis 来源分别为 Docker 官方镜像的 `postgres:16-alpine`、`redis:7.4-alpine`，在 GitHub Runner 拉取后复制到本仓库 GHCR；上线前核对其实际来源 digest 和平台架构。首次先验证五个镜像在仓库 Packages 中可见，并为服务器配置仅具 `read:packages` 权限的受控拉取身份。不要把 GHCR 凭据提交到仓库或写入 Compose 文件。
 
-在 `.env` 中设置 `ITSM_IMAGE_PREFIX=ghcr.io/gomi95932/itsm` 与精确的 `ITSM_IMAGE_TAG=<commit-sha>`，然后使用 `docker compose ... pull`、`docker compose ... up -d --no-build`。记录源提交、镜像 digest、执行人、时间和验证结果。当前不启用 GitHub 托管 Runner 直连内网，也不在这台承载其他服务的机器上运行可执行不受信任 PR 的自托管 Runner。
+在 `.env` 中设置 `ITSM_IMAGE_PREFIX=ghcr.io/gomi95932/itsm`、`ITSM_IMAGE_TAG=<commit-sha>`、`ITSM_POSTGRES_IMAGE=ghcr.io/gomi95932/itsm-postgres:<commit-sha>`、`ITSM_REDIS_IMAGE=ghcr.io/gomi95932/itsm-redis:<commit-sha>`，然后使用 `docker compose ... pull`、`docker compose ... up -d --no-build`。镜像标记固定到经验证的提交；部署记录还应保存各平台的实际 digest。当前不启用 GitHub 托管 Runner 直连内网，也不在这台承载其他服务的机器上运行可执行不受信任 PR 的自托管 Runner。
 
 验收分成四个门槛：Docker Engine 与 Compose 可执行；服务器能经受控出口访问 GitHub/GHCR；指定 SHA 的镜像可拉取且容器健康；通过 SSH 隧道打开页面与健康接口。任一门槛失败都保留现有服务原状并记录失败点，不宣称开发环境就绪。
 

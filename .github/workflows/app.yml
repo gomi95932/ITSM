@@ -58,3 +58,35 @@ jobs:
           file: apps/${{ matrix.app }}/Dockerfile
           push: true
           tags: ghcr.io/${{ steps.name.outputs.repository }}-${{ matrix.app }}:${{ github.sha }}
+
+  publish-data-images:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build-test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        include:
+          - app: postgres
+            upstream: postgres:16-alpine
+          - app: redis
+            upstream: redis:7.4-alpine
+    steps:
+      - name: Normalize image name
+        id: name
+        run: echo "repository=${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Copy tested upstream image to private GHCR
+        env:
+          SOURCE: ${{ matrix.upstream }}
+          TARGET: ghcr.io/${{ steps.name.outputs.repository }}-${{ matrix.app }}:${{ github.sha }}
+        run: |
+          docker pull "$SOURCE"
+          docker tag "$SOURCE" "$TARGET"
+          docker push "$TARGET"
