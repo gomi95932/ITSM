@@ -1,11 +1,20 @@
 # 开发验证机运行手册（T01 阶段）
 
-目标机器为 `10.10.81.125`。当前部署尚未执行；其现有 PostgreSQL、Redis、OpenClaw 等服务不属于 ITSM。安装 Docker、创建持久化目录和开放访问前，先确认变更窗口、端口和备份目标。不要使用未挂载的磁盘，也不要对宿主机执行全局 prune 或删除卷。
+目标机器为 `10.10.81.125`。Docker 已安装，ITSM 应用部署尚未执行；其现有 PostgreSQL、Redis、OpenClaw 等服务不属于 ITSM。创建持久化目录和开放访问前，先确认变更窗口、端口和备份目标。不要使用未挂载的磁盘，也不要对宿主机执行全局 prune 或删除卷。
+
+## 2026-11-09 基础环境检查记录
+
+- Ubuntu 24.04.4 LTS；根卷可用约 846 GB，内存约 15 GiB；未操作其他磁盘。
+- 经用户确认，通过 Ubuntu 软件源安装 `docker.io` 和 `docker-compose-v2`。Docker Engine 29.1.3、Compose 2.40.3，docker/containerd 为 active；Docker 数据目录 `/var/lib/docker`。
+- 宿主 postgresql/redis-server 仍为 active，原有 1883/5432/6379/9090 监听仍在；这是进程/端口核对，不是原有应用的业务回归测试。8088 未占用。
+- 未把 `ituser` 加入 docker 组，管理员操作仍经 sudo；未开放 Docker TCP API，未启动 ITSM 容器。
+- 安装提示运行内核为 6.8.0-146-generic，而已安装内核为 6.8.0-147-generic；待安排维护窗口重启，本次未重启。
+- 软件源可访问；GitHub 直连超时，既有 127.0.0.1:7890 代理访问 GitHub TLS 握手失败。GHCR 的 HTTPS 接口有响应，但未验证私有镜像授权与完整下载；Docker Hub 直连超时。
+- 待验收：远端 CI、私有 GHCR 拉取身份、五个发布镜像、隔离目录/测试口令、Compose 实际启动、SSH 隧道访问、回退演练。Docker 安装完成不等于开发验证环境整体就绪。
 
 ## 首次准备
 
-1. 按 Docker 官方 Ubuntu 安装文档安装 Engine 与 Compose plugin，确认 `docker compose version`。Docker 控制权等同高权限；由受控管理员执行部署。
-   当前系统为 Ubuntu 24.04.4；`ituser` 的 sudo 需要交互密码。软件源可访问，但 GitHub 直连超时，现有本机代理访问 GitHub 的 TLS 握手失败。安装前先确认经批准的 GitHub/GHCR 网络出口；不能用未经审核的第三方 GitHub 镜像代替，也不能把密码输入自动化脚本。
+1. Docker/Compose 已通过 Ubuntu 软件源安装，版本见上述记录。Docker 控制权等同高权限；由受控管理员执行部署。`ituser` 的 sudo 需要交互密码；不能用未经审核的第三方 GitHub 镜像代替，也不能把密码输入自动化脚本。部署前仍需确认经批准的 GitHub/GHCR 网络出口。
 2. 在隔离目录建立仓库只读工作副本，固定在已通过 CI 的提交 SHA。开发机不直接编辑业务代码。准备 `infra/compose/.env`，只放测试口令，限制为 `0600`；绝不上传到 GitHub。
 3. 检查 `ITSM_WEB_PORT` 未占用。Web 仅监听 `127.0.0.1:8088`（可配置）；从本机通过 SSH 本地转发访问。正式开放前必须完成真实身份认证与 HTTPS。
 4. 用 `docker compose --env-file infra/compose/.env -f infra/compose/compose.yaml config --quiet` 校验，再用 `docker compose ... up -d --build` 启动 T01 骨架，`docker compose ... ps` 检查健康状态。启动日志不得出现数据库口令。

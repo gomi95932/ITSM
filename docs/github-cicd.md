@@ -2,7 +2,7 @@
 
 ## 现状与目标
 
-仓库已有 T01 应用骨架、锁文件和 `Application CI` 工作流，但本次改动尚未推送，CI/镜像发布尚未实跑。现有 `Bootstrap checks` 检查仓库配置；`Application CI / build-test` 将执行依赖安装、构建、类型检查、单测、Compose 静态校验和容器冒烟测试，`main` 通过后 `publish` 将发布三个 SHA 镜像。`10.10.81.125` 尚未安装 Docker，且 GitHub/GHCR 连通性尚未验收。不要将本文件当成已完成的部署记录。
+仓库已有 T01 应用骨架、锁文件和 `Application CI` 工作流，位于 `feat/t01-runtime-ci` 分支，尚未合并 main。当前分支 push 和 PR 会运行 CI；结果尚未核实。现有 `Bootstrap checks` 检查仓库配置；`Application CI / build-test` 将执行依赖安装、构建、类型检查、单测、Compose 静态校验和容器冒烟测试，`main` 通过后发布五个 SHA 镜像。`10.10.81.125` 已安装并验证 Docker/Compose，但 GitHub/GHCR 完整部署链路尚未验收。不要将本文件当成已完成的部署记录。
 
 目标链路：本机只编辑/提交代码 -> 功能分支 PR -> GitHub 托管 Runner 构建/测试 -> 合并 `main` -> 构建带提交 SHA 的镜像并发布至私有 GHCR -> 经批准部署到开发测试机 -> 健康检查、记录版本和回退点。开发测试机可在必要时构建测试镜像，但不编辑业务代码；本机不运行应用或测试数据库。
 

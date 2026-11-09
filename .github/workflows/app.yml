@@ -3,7 +3,7 @@ name: Application CI
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, feat/t01-runtime-ci]
 
 permissions:
   contents: read
