@@ -1,0 +1,29 @@
+name: Bootstrap checks
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  repository-config:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check required files and whitespace
+        run: |
+          test -s README.md
+          test -s docs/github-cicd.md
+          test -s infra/compose/compose.yaml
+          git show --format= --check HEAD
+      - name: Validate Compose configuration with example credentials
+        run: docker compose --env-file infra/compose/.env.example -f infra/compose/compose.yaml config --quiet
+      - name: Reject tracked private environment files
+        run: |
+          if git ls-files | grep -E '(^|/)\.env($|\.)' | grep -vE '(^|/)\.env\.example$'; then
+            echo 'Private environment files must not be committed' >&2
+            exit 1
+          fi

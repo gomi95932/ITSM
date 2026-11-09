@@ -1,0 +1,43 @@
+name: itsm-dev
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: itsm
+      POSTGRES_USER: itsm
+      POSTGRES_PASSWORD: ${ITSM_DB_PASSWORD:?Set ITSM_DB_PASSWORD in the private env file}
+    volumes:
+      - itsm_pgdata:/var/lib/postgresql/data
+    networks:
+      - itsm_backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U itsm -d itsm"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7.4-alpine
+    environment:
+      ITSM_REDIS_PASSWORD: ${ITSM_REDIS_PASSWORD:?Set ITSM_REDIS_PASSWORD in the private env file}
+    command: ["sh", "-c", "exec redis-server --appendonly yes --requirepass \"$$ITSM_REDIS_PASSWORD\""]
+    volumes:
+      - itsm_redisdata:/data
+    networks:
+      - itsm_backend
+    healthcheck:
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$ITSM_REDIS_PASSWORD\" redis-cli ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+networks:
+  itsm_backend:
+    internal: true
+
+volumes:
+  itsm_pgdata:
+  itsm_redisdata:
