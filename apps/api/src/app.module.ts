@@ -9,6 +9,8 @@ import { WorkspaceController } from './workspace.controller.js';
 import { SlaService } from './sla.service.js';
 import { IntakePolicyService } from './intake-policy.service.js';
 import { DelegationsController } from './delegations.controller.js';
+import { RequestCatalogController } from './request-catalog.controller.js';
+import { RequestCatalogService } from './request-catalog.service.js';
 
-@Module({ controllers: [HealthController, TicketsController,AuthController,WorkspaceController,DelegationsController], providers: [Database,AuthService,TicketsService,SlaService,IntakePolicyService] })
+@Module({ controllers: [HealthController, TicketsController,AuthController,WorkspaceController,DelegationsController,RequestCatalogController], providers: [Database,AuthService,TicketsService,SlaService,IntakePolicyService,RequestCatalogService] })
 export class AppModule {}
