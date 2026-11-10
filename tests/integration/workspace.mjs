@@ -10,7 +10,10 @@ assert.equal((await request('/auth/config')).data.mode,'development');
 assert.equal((await request('/auth/me')).data.id,'employee-1');
 assert.equal((await request('/auth/me','')).status,401);
 assert.equal((await request('/auth/dingtalk','employee-1','POST',{code:'invalid123'})).status,401);
-assert.equal((await request('/catalog')).data.items.filter(item=>item.available).length,4);
+assert.deepEqual(
+  (await request('/catalog')).data.items.filter(item=>item.available).map(item=>item.code).sort(),
+  ['GEN-OTHER','INC-BIZ','INC-MAIL','INC-NET','INC-PC']
+);
 assert.equal((await request('/support-groups')).status,404);
 assert.equal((await request('/notifications')).status,404);
 assert.equal((await request('/voice/config')).data.recordingEnabled,false);
