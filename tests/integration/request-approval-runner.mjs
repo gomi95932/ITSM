@@ -207,6 +207,11 @@ try {
   await maintainRequestApprovals(db);
   assert.equal((await row(managerChanged.id)).state,'BLOCKED');
   await mapping();
+  const changedScope=await fresh(); const changedScopeRow=await process(changedScope.id);
+  records.get(changedScopeRow.provider_instance_id).state='APPROVED';
+  await db.query(`UPDATE tickets SET fields='{"role":"changed-after-submission"}' WHERE id=$1`,[changedScope.input.ticketId]);
+  await maintainRequestApprovals(db);
+  assert.equal((await row(changedScope.id)).last_error,'APPROVAL_REQUEST_CHANGED','changed scope cannot reuse approval');
   const identityChanged=await fresh(); await process(identityChanged.id);
   await db.query("UPDATE identity_links SET ding_user_id='CI-DING-REASSIGNED' WHERE corp_id=$1 AND employee_id=$2",[corp,employee('owner')]);
   await maintainRequestApprovals(db);

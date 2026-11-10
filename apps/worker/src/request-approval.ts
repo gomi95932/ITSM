@@ -6,6 +6,7 @@ type Approver = Person & { role: string };
 export type ApprovalSnapshot = {
   serviceCode: string; formVersion: number; templateId: string; requestedValidityDays: number;
   applicant: Person; approvers: Approver[]; catalog: Record<string, unknown>;
+  request: { subject: string; description: string; fields: Record<string, unknown> };
   managerMapping?: { managerId: string; sourceReference: string; verifiedAt: string; reviewBefore: string };
 };
 type State = 'QUEUED' | 'CREATING' | 'CREATE_UNCERTAIN' | 'PENDING' | 'APPROVED' | 'REJECTED' | 'WITHDRAWN' | 'EXPIRED' | 'BLOCKED';
@@ -85,6 +86,7 @@ export async function enqueueRequestApproval(client: PoolClient, input: {
   }
   const snapshot: ApprovalSnapshot = {serviceCode:ticket.service_code,formVersion:ticket.form_version,
     templateId:catalog.approval.templateId,requestedValidityDays:input.requestedValidityDays,applicant,approvers,catalog,
+    request:{subject:ticket.subject,description:ticket.description,fields:ticket.fields},
     ...(managerMapping ? {managerMapping} : {})};
   const result = await client.query<Approval>(`INSERT INTO request_approvals(ticket_id,corp_id,snapshot,expires_at)
     VALUES ($1,$2,$3,$4) RETURNING *,now() AS clock`,[ticket.id,input.corpId,JSON.stringify(snapshot),input.expiresAt]);
@@ -94,8 +96,13 @@ export async function enqueueRequestApproval(client: PoolClient, input: {
 
 async function localBlock(client: PoolClient, row: Approval): Promise<string | null> {
   if (row.expires_at <= row.clock) return 'APPROVAL_EXPIRED';
-  const ticket = (await client.query('SELECT status FROM tickets WHERE id=$1 FOR SHARE',[row.ticket_id])).rows[0];
+  const ticket = (await client.query('SELECT * FROM tickets WHERE id=$1 FOR SHARE',[row.ticket_id])).rows[0];
   if (ticket?.status !== 'WAITING_APPROVAL') return 'TICKET_NOT_AWAITING_APPROVAL';
+  if (ticket.requester_id !== row.snapshot.applicant.employeeId || ticket.service_code !== row.snapshot.serviceCode
+    || ticket.service_type !== 'REQ' || ticket.form_version !== row.snapshot.formVersion
+    || canonical(ticket.catalog_snapshot) !== canonical(row.snapshot.catalog)
+    || canonical({subject:ticket.subject,description:ticket.description,fields:ticket.fields}) !== canonical(row.snapshot.request))
+    return 'APPROVAL_REQUEST_CHANGED';
   for (const expected of [row.snapshot.applicant,...row.snapshot.approvers]) {
     try {
       const current = await person(client,expected.employeeId,row.corp_id);
