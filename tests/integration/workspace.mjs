@@ -38,7 +38,10 @@ await action('agent-1','RESOLVE',{comment:'已恢复',resolutionCategory:'FIX',e
 assert.equal((await request(`/tickets/${id}`)).data.sla[0].completed,true);
 await action('employee-1','REOPEN',{reason:'再次出现问题'});
 const cycles=(await request(`/tickets/${id}`)).data.sla;assert.equal(cycles.length,2);assert.equal(cycles[0].completed,true);assert.equal(cycles[1].completed,false);
-await action('agent-1','REASSIGN',{targetGroupId:'applications',reason:'应用侧继续排查'});
+await action('agent-1','REASSIGN',{targetGroupId:'applications',targetAssigneeId:'agent-2',reason:'应用侧继续排查'});
+assert.equal((await request(`/tickets/${id}`,'agent-1')).status,200);
+assert.equal((await request(`/tickets/${id}`,'agent-2')).status,200);
+await action('agent-2','ACCEPT_HANDOVER',{comment:'应用支持已接收'});
 assert.equal((await request(`/tickets/${id}`,'agent-1')).status,404);
 assert.equal((await request(`/tickets/${id}`,'agent-2')).status,200);
 await action('agent-2','RESOLVE',{comment:'问题解决',resolutionCategory:'FIX',evidence:'重新登录成功'});

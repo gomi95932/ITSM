@@ -20,7 +20,7 @@ const compose=(args,options)=>run('docker',[...prefix,...args],options);
 const sql=async query=>(await compose(['exec','-T','db','sh','-ec','PGPASSWORD="$POSTGRES_PASSWORD" exec psql -v ON_ERROR_STOP=1 -U itsm -d itsm -Atc "$1"','sh',query])).text;
 try {
   const before=await sql('SELECT json_agg(s ORDER BY name) FROM schema_migrations s');
-  assert.equal(JSON.parse(before).length,2);
+  assert.equal(JSON.parse(before).length,3);
   await compose(['run','--rm','--no-deps','migrate']);
   assert.equal(await sql('SELECT json_agg(s ORDER BY name) FROM schema_migrations s'),before,'repeated migrations must preserve the ledger');
   const first=JSON.parse(before)[0];
@@ -32,7 +32,7 @@ try {
   const migrations=resolve(directory,'migrations');
   const { mkdir }=await import('node:fs/promises'); await mkdir(migrations);
   for (const file of await readdir('db/migrations')) await copyFile(resolve('db/migrations',file),resolve(migrations,file));
-  await writeFile(resolve(migrations,'003_atomic_failure.sql'),'CREATE TABLE migration_atomic_probe(id integer); SELECT 1/0;');
+  await writeFile(resolve(migrations,'004_atomic_failure.sql'),'CREATE TABLE migration_atomic_probe(id integer); SELECT 1/0;');
   const failed=await compose(['run','--rm','--no-deps','-v',`${migrations}:/srv/db/migrations:ro`,'migrate'],{success:false});
   assert.notEqual(failed.code,0,'invalid migration must fail');
   assert.equal(await sql("SELECT to_regclass('public.migration_atomic_probe') IS NULL"),'t','failed migration must roll back DDL');

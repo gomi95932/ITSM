@@ -1,9 +1,9 @@
 -- Local/CI fixtures only. Never load this file in production.
 INSERT INTO employees(id, display_name) VALUES
-  ('employee-1', '演示员工一'), ('employee-2', '演示员工二'), ('agent-1', '服务台工程师'), ('agent-2', '应用支持工程师')
+  ('employee-1', '演示员工一'), ('employee-2', '演示员工二'), ('agent-1', '服务台工程师'), ('agent-2', '应用支持工程师'), ('agent-3', '服务台协作工程师')
 ON CONFLICT (id) DO NOTHING;
 INSERT INTO support_groups(id, name) VALUES ('service-desk', 'IT 服务台'),('applications','应用支持组') ON CONFLICT (id) DO NOTHING;
-INSERT INTO group_memberships(employee_id, group_id) VALUES ('agent-1', 'service-desk'),('agent-2','applications') ON CONFLICT DO NOTHING;
+INSERT INTO group_memberships(employee_id, group_id) VALUES ('agent-1', 'service-desk'),('agent-2','applications'),('agent-3','service-desk') ON CONFLICT DO NOTHING;
 INSERT INTO service_catalog(code, type, form_version, published, group_id, required_fields)
 VALUES ('INC-BIZ', 'INC', 1, true, 'service-desk', '[]'::jsonb)
 ON CONFLICT (code) DO NOTHING;

@@ -39,7 +39,8 @@ async function expand() {
     const result = await client.query('SELECT id,ticket_id FROM outbox_events WHERE expanded_at IS NULL ORDER BY created_at LIMIT 20 FOR UPDATE SKIP LOCKED');
     for (const event of result.rows) {
       await client.query(`INSERT INTO notification_deliveries(outbox_id,employee_id)
-        SELECT $1,e.id FROM employees e JOIN tickets t ON t.id=$2 WHERE e.active AND (e.id=t.requester_id OR EXISTS
+        SELECT $1,e.id FROM employees e JOIN tickets t ON t.id=$2 WHERE e.active AND (e.id=t.requester_id OR
+          (e.id=t.pending_assignee_id AND EXISTS (SELECT 1 FROM group_memberships m WHERE m.employee_id=e.id AND m.group_id=t.pending_group_id)) OR EXISTS
           (SELECT 1 FROM group_memberships m WHERE m.employee_id=e.id AND m.group_id=t.owner_group_id)) ON CONFLICT DO NOTHING`,[event.id,event.ticket_id]);
       await client.query("UPDATE outbox_events SET expanded_at=now(),state='EXPANDED' WHERE id=$1",[event.id]);
     }
@@ -49,12 +50,13 @@ async function expand() {
 async function deliver() {
   if (mode === 'disabled') return;
   await transaction(async client => {
-    const result = await client.query(`SELECT d.*,t.id AS ticket_id,t.number,t.requester_id,t.owner_group_id,e.action,e.detail,e.to_status,e.id AS event_id
+    const result = await client.query(`SELECT d.*,t.id AS ticket_id,t.number,t.requester_id,t.owner_group_id,t.pending_assignee_id,t.pending_group_id,e.action,e.detail,e.to_status,e.id AS event_id
       FROM notification_deliveries d JOIN outbox_events o ON o.id=d.outbox_id JOIN ticket_events e ON e.id=o.event_id JOIN tickets t ON t.id=o.ticket_id
       WHERE d.state IN ('PENDING','SENDING') AND d.next_at<=now() ORDER BY d.next_at,d.id LIMIT 1 FOR UPDATE OF d SKIP LOCKED`);
     const row = result.rows[0]; if (!row) return;
-    const recipient = await client.query(`SELECT e.active,l.ding_user_id,EXISTS(SELECT 1 FROM group_memberships WHERE employee_id=e.id AND group_id=$3) AS member
-      FROM employees e LEFT JOIN identity_links l ON l.employee_id=e.id AND l.corp_id=$2 WHERE e.id=$1`,[row.employee_id,process.env.DINGTALK_CORP_ID ?? '',row.owner_group_id]);
+    const recipient = await client.query(`SELECT e.active,l.ding_user_id,EXISTS(SELECT 1 FROM group_memberships WHERE employee_id=e.id AND
+      (group_id=$3 OR (e.id=$4 AND group_id=$5))) AS member
+      FROM employees e LEFT JOIN identity_links l ON l.employee_id=e.id AND l.corp_id=$2 WHERE e.id=$1`,[row.employee_id,process.env.DINGTALK_CORP_ID ?? '',row.owner_group_id,row.pending_assignee_id,row.pending_group_id]);
     const user = recipient.rows[0];
     if (!user?.active || (row.employee_id !== row.requester_id && !user.member)) {
       await client.query("UPDATE notification_deliveries SET state='SKIPPED',last_error='RECIPIENT_NO_LONGER_AUTHORIZED',updated_at=now() WHERE id=$1",[row.id]); return;
@@ -70,13 +72,13 @@ async function deliver() {
         const sent = status.send_result?.sent_userid_list ?? [];
         if (!Array.isArray(sent) || !sent.includes(user.ding_user_id)) throw new Error('DELIVERY_NOT_CONFIRMED');
         await client.query("UPDATE notification_deliveries SET state='DELIVERED',last_error=NULL,updated_at=now() WHERE id=$1",[row.id]);
-        if (row.action === 'ACCEPT' && row.employee_id === row.requester_id)
+        if (['ACCEPT','ACCEPT_HANDOVER'].includes(row.action) && row.employee_id === row.requester_id)
           await client.query('UPDATE sla_cycles SET responded_at=now() WHERE ticket_id=$1 AND cycle=1 AND responded_at IS NULL',[row.ticket_id]);
       } else {
         const base = new URL(process.env.ITSM_PUBLIC_URL ?? '');
         if (base.protocol !== 'https:') throw new Error('HTTPS_DEEP_LINK_REQUIRED');
         base.hash = `/tickets/${row.ticket_id}`;
-        const reply = ['ACCEPT','REQUEST_INFO','RESOLVE'].includes(row.action) ? String(row.detail.comment ?? '').slice(0,500) : '';
+        const reply = ['ACCEPT','ACCEPT_HANDOVER','REQUEST_INFO','RESOLVE'].includes(row.action) ? String(row.detail.comment ?? '').slice(0,500) : '';
         const data = await provider('asyncsend_v2',{ agent_id:process.env.DINGTALK_AGENT_ID,userid_list:user.ding_user_id,to_all_user:false,
           msg:{ msgtype:'link',link:{ title:`IT 服务台 · ${row.number}`,text:`${row.to_status}${reply ? `\n${reply}` : ''}`,messageUrl:base.toString(),picUrl:'' } } });
         if (data.task_id === undefined) throw new Error('TASK_NOT_RETURNED');
@@ -91,11 +93,37 @@ async function deliver() {
   });
 }
 
-async function record(client:PoolClient,row:any,action:string,detail:object,from:string,to:string) {
+async function record(client:PoolClient,row:any,action:string,detail:object,from:string,to:string,previous?:any) {
   const event = randomUUID(), request = randomUUID();
   await client.query('INSERT INTO ticket_events(id,ticket_id,actor_id,action,from_status,to_status,detail,request_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)',[event,row.id,'system:scheduler',action,from,to,JSON.stringify(detail),request]);
-  await client.query('INSERT INTO audit_logs(ticket_id,event_id,actor_id,request_id,action,before_value,after_value) VALUES ($1,$2,$3,$4,$5,$6,$7)',[row.id,event,'system:scheduler',request,action,JSON.stringify({ status:from }),JSON.stringify({ status:to,version:row.version })]);
+  const ownership=(value:any)=>({ ownerGroupId:value.owner_group_id,assigneeId:value.assignee_id,pendingGroupId:value.pending_group_id,pendingAssigneeId:value.pending_assignee_id });
+  await client.query('INSERT INTO audit_logs(ticket_id,event_id,actor_id,request_id,action,before_value,after_value) VALUES ($1,$2,$3,$4,$5,$6,$7)',[row.id,event,'system:scheduler',request,action,JSON.stringify({ status:from,...(previous ? ownership(previous) : {}) }),JSON.stringify({ status:to,version:row.version,...ownership(row) })]);
   await client.query('INSERT INTO outbox_events(ticket_id,event_id,kind,payload) VALUES ($1,$2,$3,$4)',[row.id,event,'TICKET_CHANGED',JSON.stringify({ ticketId:row.id,eventId:event })]);
+}
+
+async function recoverOwnership() {
+  await transaction(async client => {
+    const rows = await client.query(`SELECT t.* FROM tickets t WHERE t.status NOT IN ('CLOSED','CANCELLED','REJECTED') AND
+      ((t.assignee_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM employees e JOIN group_memberships m ON m.employee_id=e.id
+        WHERE e.id=t.assignee_id AND e.active AND m.group_id=t.owner_group_id)) OR
+       (t.pending_assignee_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM employees e JOIN group_memberships m ON m.employee_id=e.id
+        WHERE e.id=t.pending_assignee_id AND e.active AND m.group_id=t.pending_group_id)))
+      ORDER BY t.updated_at,t.id LIMIT 100 FOR UPDATE OF t SKIP LOCKED`);
+    for (const row of rows.rows) {
+      const valid = async (employee:string|null,group:string|null) => !employee || !!(await client.query(`SELECT e.id FROM employees e
+        JOIN group_memberships m ON m.employee_id=e.id WHERE e.id=$1 AND e.active AND m.group_id=$2 FOR SHARE OF e,m`,[employee,group])).rowCount;
+      const ownerValid = await valid(row.assignee_id,row.owner_group_id);
+      const targetValid = await valid(row.pending_assignee_id,row.pending_group_id);
+      if (ownerValid && targetValid) continue;
+      const updated = await client.query(`UPDATE tickets SET assignee_id=$2,pending_group_id=NULL,pending_assignee_id=NULL,
+        version=version+1,updated_at=now() WHERE id=$1 RETURNING *`,[row.id,ownerValid ? row.assignee_id : null]);
+      await record(client,updated.rows[0],'OWNERSHIP_RECOVERED',{
+        reason:ownerValid ? 'HANDOVER_TARGET_UNAVAILABLE' : 'ASSIGNEE_UNAVAILABLE',
+        oldAssigneeId:row.assignee_id,oldPendingAssigneeId:row.pending_assignee_id,
+      },row.status,row.status,row);
+    }
+    await client.query('DELETE FROM auth_sessions WHERE employee_id IN (SELECT id FROM employees WHERE NOT active)');
+  });
 }
 
 async function timers() {
@@ -107,8 +135,8 @@ async function timers() {
       await client.query('UPDATE tickets SET sla_checked_at=now() WHERE id=$1',[row.id]);
       const closeHours = Number(process.env.AUTO_CLOSE_HOURS ?? 72);
       if (row.status === 'PENDING_CONFIRMATION' && closeHours > 0 && row.clock.getTime()-row.updated_at.getTime() >= closeHours*3600000) {
-        const updated = await client.query("UPDATE tickets SET status='CLOSED',version=version+1,updated_at=now() WHERE id=$1 RETURNING *",[row.id]);
-        await record(client,updated.rows[0],'AUTO_CLOSE',{ reason:`待确认超过 ${closeHours} 小时自动关闭` },row.status,'CLOSED');
+        const updated = await client.query("UPDATE tickets SET status='CLOSED',pending_group_id=NULL,pending_assignee_id=NULL,version=version+1,updated_at=now() WHERE id=$1 RETURNING *",[row.id]);
+        await record(client,updated.rows[0],'AUTO_CLOSE',{ reason:`待确认超过 ${closeHours} 小时自动关闭` },row.status,'CLOSED',row);
         continue;
       }
       const end = row.completed_at ?? row.clock;
@@ -129,7 +157,7 @@ async function timers() {
 let ticks = 0;
 async function tick() {
   try {
-    if (ticks++ % 15 === 0) await timers();
+    if (ticks++ % 15 === 0) { await recoverOwnership(); await timers(); }
     await expand();
     for (let i=0;i<10 && !stopped;i++) await deliver();
     await writeFile('/tmp/itsm-worker-heartbeat', String(Date.now()), { mode:0o600 });

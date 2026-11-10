@@ -1,5 +1,6 @@
 import { test,expect } from '@playwright/test';
 test('employee and IT workbench complete a real ticket round trip',async({page})=>{
+  test.setTimeout(60000);
   await page.setViewportSize({width:1440,height:1000});await page.goto('/');
   await expect(page.getByRole('heading',{name:'我的工单',exact:true})).toBeVisible();
   await page.screenshot({path:'test-results/employee-desktop.png',fullPage:true});
@@ -23,6 +24,30 @@ test('employee and IT workbench complete a real ticket round trip',async({page})
   await page.getByRole('checkbox',{name:'本次内容不含密码、密钥及安全事件证据'}).check();
   await page.getByRole('button',{name:'接单并回复',exact:true}).last().click();
   await expect(page.getByRole('button',{name:'提交解决方案',exact:true})).toBeVisible();
+  await expect(page.locator('.ticket-meta')).toContainText('处理人：服务台工程师');
+  await page.getByRole('button',{name:'发起交接',exact:true}).click();
+  await page.getByRole('textbox',{name:'原因',exact:true}).fill('应用支持组继续排查登录服务');
+  await page.getByRole('combobox',{name:'目标支持组',exact:true}).selectOption('applications');
+  await page.getByRole('combobox',{name:'接收人',exact:true}).selectOption('agent-2');
+  await page.getByRole('checkbox',{name:'本次内容不含密码、密钥及安全事件证据'}).check();
+  await page.screenshot({path:'test-results/handover-desktop.png',fullPage:true});
+  await page.setViewportSize({width:390,height:844});
+  await page.screenshot({path:'test-results/handover-mobile.png',fullPage:true});
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+  await page.getByRole('button',{name:'发起交接',exact:true}).last().click();
+  await expect(page.locator('.ticket-meta')).toContainText('待交接：应用支持工程师');
+  await expect(page.locator('.ticket-meta')).toContainText('处理人：服务台工程师');
+  await page.getByRole('combobox',{name:'开发身份'}).selectOption('agent-2');
+  await page.goto('/'+ticketHash);
+  await page.getByRole('button',{name:'确认接收',exact:true}).click();
+  await page.getByRole('textbox',{name:'回复内容'}).fill('应用支持已接收，将继续排查');
+  await page.getByRole('checkbox',{name:'本次内容不含密码、密钥及安全事件证据'}).check();
+  await page.getByRole('button',{name:'确认接收',exact:true}).last().click();
+  await expect(page.locator('.ticket-meta')).toContainText('处理人：应用支持工程师');
+  await expect(page.locator('.ticket-meta')).not.toContainText('待交接');
+  await page.screenshot({path:'test-results/handover-accepted-mobile.png',fullPage:true});
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+  await page.setViewportSize({width:1440,height:1000});
   await page.getByRole('button',{name:'提交解决方案',exact:true}).click();
   await page.getByRole('textbox',{name:'解决说明'}).fill('已恢复登录服务');
   await page.getByRole('combobox',{name:'解决分类'}).selectOption({label:'故障恢复'});

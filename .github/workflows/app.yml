@@ -65,6 +65,8 @@ jobs:
           '
       - name: Verify immutable migrations and isolated backup recovery
         run: node tests/integration/migrations.mjs
+      - name: Verify personal ownership, handover and disabled-person recovery
+        run: node tests/integration/ownership.mjs
       - name: Install CI browser
         run: npx playwright install --with-deps chromium
       - name: Exercise desktop and mobile employee and agent flows

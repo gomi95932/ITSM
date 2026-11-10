@@ -22,6 +22,11 @@ export async function api<T>(path: string,options: { method?: string; body?: unk
   return data as T;
 }
 export const messages: Record<string,string> = {
+  OWNER_GROUP_REQUIRED:'仅当前责任组可执行此操作。',PERSONAL_OWNER_REQUIRED:'仅当前处理人可执行此操作，请先完成交接。',
+  TICKET_ALREADY_ASSIGNED:'工单已有处理人，请刷新工单。',HANDOVER_PENDING:'工单正在交接，请先处理现有交接。',
+  HANDOVER_TARGET_REQUIRED:'仅指定接收人可确认或退回交接。',HANDOVER_NOT_PENDING:'当前没有待处理的交接。',
+  INVALID_HANDOVER_TARGET:'接收人须为目标支持组内的有效成员，且不能是当前操作人。',
+  REASSIGN_DETAILS_REQUIRED:'请选择目标支持组、接收人并填写交接原因。',HANDOVER_REASON_REQUIRED:'请填写退回或撤回交接的原因。',
   CONTENT_DECLARATION_REQUIRED:'请确认本次内容不含密码、密钥及安全事件证据。',
   SECURITY_CHANNEL_REQUIRED:'此内容不能提交到普通工单或语音草稿，请使用安全事件联络渠道；请勿粘贴密码、密钥或证据。',
   LOGIN_REQUIRED:'登录已失效，请重新进入应用。',EMPLOYEE_DISABLED:'账号已停用，请联系服务台。',CSRF_FAILED:'会话校验失败，请重新登录。',
