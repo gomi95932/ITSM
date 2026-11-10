@@ -11,8 +11,8 @@ async function request(path,user=requester,body,key=randomUUID()){
 async function sql(query){
   return new Promise((resolve,reject)=>{
     const child=spawn('docker',['compose','--project-name','itsm-dev','--env-file',process.env.ITSM_CI_ENV,'-f','infra/compose/compose.yaml','exec','-T','db','sh','-ec','PGPASSWORD="$POSTGRES_PASSWORD" exec psql -v ON_ERROR_STOP=1 -U itsm -d itsm -Atc "$1"','sh',query],{stdio:['ignore','pipe','pipe']});
-    let text='',error='';child.stdout.on('data',chunk=>{text+=chunk;});child.stderr.on('data',chunk=>{error+=chunk;});child.on('error',reject);
-    child.on('close',code=>code===0?resolve(text.trim()):reject(new Error(`TRIAGE_FIXTURE_SQL_FAILED: ${error.slice(0,1000)}`)));
+    let text='';child.stdout.on('data',chunk=>{text+=chunk;});child.on('error',reject);
+    child.on('close',code=>code===0?resolve(text.trim()):reject(new Error('TRIAGE_FIXTURE_SQL_FAILED')));
   });
 }
 const quote=value=>`'${String(value).replaceAll("'","''")}'`;
@@ -59,10 +59,12 @@ assert.equal((await request('/tickets?mine=true&page=1&size=100',proxy)).data.it
 assert.equal((await request(`/tickets/${t.id}/actions`,proxy,{action:'CANCEL',expectedVersion:t.version})).status,403);
 assert.equal((await request(`/delegations/${grantId}/revoke`,proxy,{})).status,404);
 // A proxy with independent supervisor authority may not confirm their own submission.
-await sql(`INSERT INTO priority_reviewers(employee_id,group_id) VALUES ('${proxy}','service-desk')`);
+await sql(`INSERT INTO group_memberships(employee_id,group_id) VALUES (${quote(proxy)},'service-desk');
+  INSERT INTO priority_reviewers(employee_id,group_id) VALUES (${quote(proxy)},'service-desk')`);
 const p1=(await create(proxy,{delegationId:grantId,impact:'COMPANY',urgency:'HIGH'})).data;
 assert.equal((await request(`/tickets/${p1.id}/priority-review`,proxy,{expectedVersion:p1.version,priority:'P1',reason:'Independent review required'})).status,403);
-await sql(`DELETE FROM priority_reviewers WHERE employee_id=${quote(proxy)}`);
+await sql(`DELETE FROM priority_reviewers WHERE employee_id=${quote(proxy)} AND group_id='service-desk';
+  DELETE FROM group_memberships WHERE employee_id=${quote(proxy)} AND group_id='service-desk'`);
 const action=async(ticket,user,name,fields={})=>{
   const response=await request(`/tickets/${ticket.id}/actions`,user,{action:name,expectedVersion:ticket.version,...fields});
   assert.equal(response.status,200,JSON.stringify(response));return response.data;
