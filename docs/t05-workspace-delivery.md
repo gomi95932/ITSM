@@ -17,7 +17,7 @@
 
 ## 开发验证配置
 
-`infra/compose/compose.yaml` 是开发/CI 专用，仍会加载 `db/seeds/dev.sql`。不得直接用于生产。迁移顺序是 001 → 002 → 开发种子，可重复执行；正式发布前需要版本校验式迁移及备份恢复演练，不允许任意修改已发布迁移。
+`infra/compose/compose.yaml` 是开发/CI 专用，不得直接用于生产。当前迁移工具按编号执行 SQL，以 `schema_migrations` 保存 SHA256 账本，拒绝已应用文件变更，并用事务回滚失败批次。开发种子仅在显式设置 `ITSM_SEED_DEV_DATA=true` 时加载，默认关闭；生产模式禁止加载。CI 为隔离测试显式启用虚拟人员种子，不代表服务器会自动导入种子。新的迁移、隔离恢复验证记录见 `docs/runtime-ci-delivery.md`；真实开发服务器恢复演练仍待执行。
 
 默认 `ENABLE_DEV_AUTH=true`、`ITSM_NODE_ENV=development`、`NOTIFICATION_MODE=fake`。开发身份仅用于隔离环境；`NODE_ENV=production` 强制忽略开发身份头。禁止把启用开发身份的服务直接暴露给企业正式用户。
 
