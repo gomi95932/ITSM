@@ -11,6 +11,12 @@ permissions:
 jobs:
   build-test:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      ITSM_CI_ENV: ${{ runner.temp }}/itsm-ci.env
+    outputs:
+      postgres-image: ${{ steps.tested-data.outputs.postgres }}
+      redis-image: ${{ steps.tested-data.outputs.redis }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -21,9 +27,16 @@ jobs:
       - run: npm run build
       - run: npm run typecheck
       - run: npm test
-      - run: docker compose --env-file infra/compose/.env.example -f infra/compose/compose.yaml config --quiet
+      - name: Create private disposable CI configuration
+        run: node scripts/create-development-env.mjs "$ITSM_CI_ENV" --seed-development-fixtures
+      - run: docker compose --env-file "$ITSM_CI_ENV" -f infra/compose/compose.yaml config --quiet
       - name: Build and start isolated test stack
-        run: docker compose --env-file infra/compose/.env.example -f infra/compose/compose.yaml up -d --build --wait --wait-timeout 180
+        run: docker compose --env-file "$ITSM_CI_ENV" -f infra/compose/compose.yaml up -d --build --wait --wait-timeout 180
+      - name: Record data images actually tested
+        id: tested-data
+        run: |
+          echo "postgres=$(docker image inspect postgres:16-alpine --format '{{index .RepoDigests 0}}')" >> "$GITHUB_OUTPUT"
+          echo "redis=$(docker image inspect redis:7.4-alpine --format '{{index .RepoDigests 0}}')" >> "$GITHUB_OUTPUT"
       - name: Check web and API routes
         run: |
           curl --fail --silent --show-error http://127.0.0.1:8088/ -o /dev/null
@@ -31,7 +44,7 @@ jobs:
       - name: Exercise ticket API and database audit invariants
         run: |
           node tests/integration/tickets.mjs
-          docker compose --env-file infra/compose/.env.example -f infra/compose/compose.yaml exec -T db sh -ec '
+          docker compose --env-file "$ITSM_CI_ENV" -f infra/compose/compose.yaml exec -T db sh -ec '
             export PGPASSWORD="$POSTGRES_PASSWORD"
             psql -U itsm -d itsm -tAc "SELECT count(*) FROM tickets" | grep -q "^2$"
             psql -U itsm -d itsm -tAc "SELECT count(*) FROM ticket_events" | grep -q "^5$"
@@ -40,6 +53,8 @@ jobs:
           '
       - name: Exercise workspace permissions, SLA and voice draft invariants
         run: node tests/integration/workspace.mjs
+      - name: Verify immutable migrations and isolated backup recovery
+        run: node tests/integration/migrations.mjs
       - name: Install CI browser
         run: npx playwright install --with-deps chromium
       - name: Exercise desktop and mobile employee and agent flows
@@ -52,7 +67,7 @@ jobs:
           retention-days: 14
       - name: Show containers on failure
         if: failure()
-        run: docker compose --env-file infra/compose/.env.example -f infra/compose/compose.yaml ps -a
+        run: docker compose --env-file "$ITSM_CI_ENV" -f infra/compose/compose.yaml ps -a
 
   publish:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -92,9 +107,9 @@ jobs:
       matrix:
         include:
           - app: postgres
-            upstream: postgres:16-alpine
+            upstream: ${{ needs.build-test.outputs.postgres-image }}
           - app: redis
-            upstream: redis:7.4-alpine
+            upstream: ${{ needs.build-test.outputs.redis-image }}
     steps:
       - name: Normalize image name
         id: name
@@ -112,3 +127,34 @@ jobs:
           docker pull "$SOURCE"
           docker tag "$SOURCE" "$TARGET"
           docker push "$TARGET"
+
+  release-bundle:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [build-test, publish, publish-data-images]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Package verified main commit and immutable image digests
+        run: |
+          node scripts/package-release.mjs "$GITHUB_SHA" "$RUNNER_TEMP/itsm-release"
+          tar -czf "itsm-release-${GITHUB_SHA}.tar.gz" -C "$RUNNER_TEMP/itsm-release" .
+          sha256sum "itsm-release-${GITHUB_SHA}.tar.gz" > "itsm-release-${GITHUB_SHA}.tar.gz.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: itsm-release-${{ github.sha }}
+          path: |
+            itsm-release-*.tar.gz
+            itsm-release-*.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 30

@@ -15,6 +15,8 @@ WORKDIR /srv
 COPY --from=build /srv/node_modules ./node_modules
 COPY --from=build /srv/packages/contracts ./packages/contracts
 COPY --from=build /srv/apps/api ./apps/api
+COPY --from=build /srv/db ./db
+COPY --from=build /srv/scripts/migrate.mjs ./scripts/migrate.mjs
 USER node
 EXPOSE 3000
 CMD ["node", "apps/api/dist/main.js"]

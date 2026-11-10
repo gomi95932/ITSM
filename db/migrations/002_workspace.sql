@@ -1,4 +1,3 @@
-BEGIN;
 ALTER TABLE service_catalog ADD COLUMN IF NOT EXISTS name text NOT NULL DEFAULT '';
 ALTER TABLE service_catalog ADD COLUMN IF NOT EXISTS description text NOT NULL DEFAULT '';
 ALTER TABLE service_catalog ADD COLUMN IF NOT EXISTS field_schema jsonb NOT NULL DEFAULT '[]';
@@ -59,4 +58,3 @@ CREATE TABLE IF NOT EXISTS sla_signals (
   created_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY(ticket_id,cycle,kind)
 );
 ALTER TABLE voice_drafts ADD COLUMN IF NOT EXISTS ticket_id uuid REFERENCES tickets(id);
-COMMIT;

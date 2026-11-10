@@ -1,5 +1,3 @@
-BEGIN;
-
 CREATE TABLE IF NOT EXISTS employees (
   id text PRIMARY KEY,
   display_name text NOT NULL,
@@ -84,5 +82,3 @@ CREATE TABLE IF NOT EXISTS api_idempotency (
   response jsonb,
   PRIMARY KEY (actor_id, scope, key)
 );
-
-COMMIT;

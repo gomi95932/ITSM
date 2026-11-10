@@ -2,7 +2,7 @@ name: itsm-dev
 
 services:
   web:
-    image: ${ITSM_IMAGE_PREFIX:-local/itsm}-web:${ITSM_IMAGE_TAG:-dev}
+    image: ${ITSM_WEB_IMAGE:-${ITSM_IMAGE_PREFIX:-local/itsm}-web:${ITSM_IMAGE_TAG:-dev}}
     build:
       context: ../..
       dockerfile: apps/web/Dockerfile
@@ -15,8 +15,14 @@ services:
       - itsm_frontend
     restart: unless-stopped
 
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/api/v1/health/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
   api:
-    image: ${ITSM_IMAGE_PREFIX:-local/itsm}-api:${ITSM_IMAGE_TAG:-dev}
+    image: ${ITSM_API_IMAGE:-${ITSM_IMAGE_PREFIX:-local/itsm}-api:${ITSM_IMAGE_TAG:-dev}}
     build:
       context: ../..
       dockerfile: apps/api/Dockerfile
@@ -44,14 +50,14 @@ services:
       - itsm_frontend
       - itsm_backend
     healthcheck:
-      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:3000/api/v1/health', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:3000/api/v1/health/ready', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
       interval: 10s
       timeout: 5s
       retries: 5
     restart: unless-stopped
 
   worker:
-    image: ${ITSM_IMAGE_PREFIX:-local/itsm}-worker:${ITSM_IMAGE_TAG:-dev}
+    image: ${ITSM_WORKER_IMAGE:-${ITSM_IMAGE_PREFIX:-local/itsm}-worker:${ITSM_IMAGE_TAG:-dev}}
     build:
       context: ../..
       dockerfile: apps/worker/Dockerfile
@@ -80,6 +86,12 @@ services:
     networks:
       - itsm_backend
       - itsm_egress
+    healthcheck:
+      test: ["CMD", "node", "-e", "const n=Number(require('fs').readFileSync('/tmp/itsm-worker-heartbeat','utf8')); process.exit(Number.isFinite(n) && Date.now()-n>=0 && Date.now()-n<90000 ? 0 : 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
     restart: unless-stopped
 
   db:
@@ -100,16 +112,18 @@ services:
     restart: unless-stopped
 
   migrate:
-    image: ${ITSM_POSTGRES_IMAGE:-postgres:16-alpine}
+    image: ${ITSM_API_IMAGE:-${ITSM_IMAGE_PREFIX:-local/itsm}-api:${ITSM_IMAGE_TAG:-dev}}
+    build:
+      context: ../..
+      dockerfile: apps/api/Dockerfile
     environment:
-      PGHOST: db
-      PGDATABASE: itsm
-      PGUSER: itsm
-      PGPASSWORD: ${ITSM_DB_PASSWORD:?Set ITSM_DB_PASSWORD in the private env file}
-    volumes:
-      - ../../db/migrations:/migrations:ro
-      - ../../db/seeds:/seeds:ro
-    command: ["sh", "-ec", "psql -v ON_ERROR_STOP=1 -f /migrations/001_ticket_core.sql && psql -v ON_ERROR_STOP=1 -f /migrations/002_workspace.sql && psql -v ON_ERROR_STOP=1 -f /seeds/dev.sql"]
+      NODE_ENV: ${ITSM_NODE_ENV:-development}
+      DB_HOST: db
+      DB_NAME: itsm
+      DB_USER: itsm
+      DB_PASSWORD: ${ITSM_DB_PASSWORD:?Set ITSM_DB_PASSWORD in the private env file}
+      ITSM_SEED_DEV_DATA: ${ITSM_SEED_DEV_DATA:-false}
+    command: ["node", "scripts/migrate.mjs"]
     depends_on:
       db:
         condition: service_healthy

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { writeFile } from 'node:fs/promises';
 import { Pool, type PoolClient } from 'pg';
 import { serviceMinutes } from '@itsm/contracts';
 
@@ -127,7 +128,12 @@ async function timers() {
 }
 let ticks = 0;
 async function tick() {
-  try { if (ticks++ % 15 === 0) await timers(); await expand(); for (let i=0;i<10 && !stopped;i++) await deliver(); }
+  try {
+    if (ticks++ % 15 === 0) await timers();
+    await expand();
+    for (let i=0;i<10 && !stopped;i++) await deliver();
+    await writeFile('/tmp/itsm-worker-heartbeat', String(Date.now()), { mode:0o600 });
+  }
   catch { console.error('ITSM worker cycle failed; retrying without logging payloads'); }
   finally { if (!stopped) timer = setTimeout(() => { void tick(); },2000); else await db.end(); }
 }
