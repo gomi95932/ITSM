@@ -78,7 +78,7 @@ jobs:
           path: test-results/
           retention-days: 14
       - name: Show containers on failure
-        if: failure()
+        if: failure() && env.ITSM_CI_ENV != ''
         run: docker compose --env-file "$ITSM_CI_ENV" -f infra/compose/compose.yaml ps -a
 
   publish:
