@@ -142,6 +142,43 @@ try {
   assert.equal((await row(unavailableAfterApproval.id)).last_verified_at,null,'failed lookup clears approval evidence');
   await retire(unavailableAfterApproval.id);
 
+  const callbackRace=await fresh(); const callbackRow=await process(callbackRace.id);
+  records.get(callbackRow.provider_instance_id).state='APPROVED';
+  assert.equal((await process(callbackRace.id)).state,'APPROVED');
+  const firstHint=randomUUID();
+  assert.equal(await hint(callbackRace.id,firstHint),true);
+  assert.equal((await row(callbackRace.id)).state,'PENDING','new hint invalidates approval until reinspection');
+  assert.equal((await row(callbackRace.id)).last_verified_at,null);
+  assert.equal(await hint(callbackRace.id,firstHint),false,'duplicate hint does not mutate the ledger');
+  assert.equal((await process(callbackRace.id)).state,'APPROVED');
+  const verifiedBeforeDuplicate=(await row(callbackRace.id)).last_verified_at.getTime();
+  assert.equal(await hint(callbackRace.id,firstHint),false);
+  assert.equal((await row(callbackRace.id)).state,'APPROVED','replayed hint cannot clear freshly reverified approval');
+  assert.equal((await row(callbackRace.id)).last_verified_at.getTime(),verifiedBeforeDuplicate);
+  let releaseInspection; let signalInspection;
+  const inspectionStarted=new Promise(resolve=>{signalInspection=resolve;});
+  const heldInspection=new Promise(resolve=>{releaseInspection=resolve;});
+  const staleInspection=process(callbackRace.id,{...provider,inspect:async instanceId=>{
+    const observed=await provider.inspect(instanceId);signalInspection();await heldInspection;return observed;
+  }});
+  await inspectionStarted;
+  try {
+    records.get(callbackRow.provider_instance_id).state='WITHDRAWN';
+    await hint(callbackRace.id);
+    assert.equal((await row(callbackRace.id)).lease_token,null,'hint fences the old inspection lease');
+    assert.equal((await row(callbackRace.id)).last_verified_at,null);
+  } finally {releaseInspection();}
+  assert.equal((await staleInspection).state,'PENDING','stale approved reply cannot overwrite a newer callback hint');
+  assert.equal((await process(callbackRace.id)).state,'WITHDRAWN','fresh authoritative query observes withdrawal');
+
+  const regressed=await fresh(); const regressionRow=await process(regressed.id);
+  records.get(regressionRow.provider_instance_id).state='APPROVED';
+  assert.equal((await process(regressed.id)).state,'APPROVED');
+  await hint(regressed.id);
+  records.get(regressionRow.provider_instance_id).state='PENDING';
+  assert.equal((await process(regressed.id)).state,'BLOCKED','hint does not erase historical approval regression protection');
+  assert.equal((await row(regressed.id)).last_error,'PROVIDER_STATE_REGRESSION');
+
   const concurrency=await fresh(); let releaseCreate; let signalStarted;
   const started=new Promise(resolve=>{signalStarted=resolve;});
   const waiting=new Promise(resolve=>{releaseCreate=resolve;});
@@ -232,5 +269,5 @@ try {
   assert.equal((await row(expiration.id)).creation_attempts,0);
   assert.equal((await db.query("SELECT count(*) FROM request_approval_events WHERE strpos(row_to_json(request_approval_events)::text,'provider-secret-sentinel')>0")).rows[0].count,'0');
   assert.equal((await db.query("SELECT count(*) FROM request_approvals WHERE strpos(row_to_json(request_approvals)::text,'provider-secret-sentinel')>0")).rows[0].count,'0');
-  console.log('OA lifecycle verified: immutable identity/policy snapshots, atomic intent, one create, lease recovery, callback hints, authoritative binding, withdrawal, cancellation, expiry and inactive-person blocking; real DingTalk remains gated');
+  console.log('OA lifecycle verified: immutable identity/policy snapshots, atomic intent, one create, lease recovery, callback fencing, authoritative binding, withdrawal, cancellation, expiry and inactive-person blocking; real DingTalk remains gated');
 } finally {await db.end();}

@@ -148,8 +148,11 @@ export async function queueVerifiedApprovalHint(client: PoolClient, input: { cor
   const inserted = await client.query(`INSERT INTO request_approval_hints(corp_id,event_id,approval_id) VALUES ($1,$2,$3)
     ON CONFLICT DO NOTHING RETURNING event_id`,[input.corpId,input.eventId,row.id]);
   if (!inserted.rowCount) return false;
-  await client.query('UPDATE request_approvals SET next_at=now() WHERE id=$1',[row.id]);
-  await event(client,row,'VERIFIED_CALLBACK_HINT',row.state);
+  // A newer hint fences in-flight observations and revokes approval evidence until reinspection.
+  const state = row.state === 'APPROVED' ? 'PENDING' : row.state;
+  await client.query(`UPDATE request_approvals SET next_at=now(),state=$2,last_verified_at=NULL,
+    lease_token=NULL,lease_until=NULL,updated_at=now() WHERE id=$1`,[row.id,state]);
+  await event(client,row,'VERIFIED_CALLBACK_HINT',state);
   return true;
 }
 
@@ -213,7 +216,10 @@ export async function processNextRequestApproval(db: Pool, provider: RequestAppr
       else if (!row.provider_instance_id) {state = row.attempts >= 10 ? 'BLOCKED' : 'CREATE_UNCERTAIN'; error = 'CREATE_UNRESOLVED';}
       else if (!observed) state = 'PENDING';
       else if (!matches(row,observed)) {state = 'BLOCKED'; error = 'PROVIDER_BINDING_MISMATCH';}
-      else if (row.state === 'APPROVED' && observed.state === 'PENDING') {state = 'BLOCKED'; error = 'PROVIDER_STATE_REGRESSION';}
+      else if (observed.state === 'PENDING' && (await client.query(`SELECT 1 FROM request_approval_events
+        WHERE approval_id=$1 AND action='APPROVAL_RECONCILED' AND to_state='APPROVED' LIMIT 1`,[row.id])).rowCount) {
+        state = 'BLOCKED'; error = 'PROVIDER_STATE_REGRESSION';
+      }
       else state = observed.state;
       await client.query(`UPDATE request_approvals SET state=$2,last_error=$3,last_verified_at=CASE WHEN $4 THEN now() ELSE NULL END,
         next_at=CASE WHEN $5 THEN now() ELSE now()+interval '30 seconds' END,updated_at=now() WHERE id=$1`,
