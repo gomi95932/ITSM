@@ -1,10 +1,12 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException, OnModuleDestroy, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
 import { createHash, randomUUID } from 'node:crypto';
-import { Pool, type PoolClient } from 'pg';
+import { type PoolClient } from 'pg';
 import { TICKET_ACTIONS, type CreateTicketInput, type TicketActionInput, type TicketReceipt, type TicketStatus } from '@itsm/contracts';
 import { transition } from './ticket-state.js';
+import { Database } from './database.service.js';
+import { AuthService, type AuthHeaders, type Identity } from './auth.service.js';
+import { SlaService } from './sla.service.js';
 
-type Identity = { id: string; groups: string[] };
 type TicketRow = {
   id: string; number: string; requester_id: string; owner_group_id: string;
   service_code: string; service_type: string; form_version: number; subject: string;
@@ -13,8 +15,8 @@ type TicketRow = {
 };
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const keys = new Set(['serviceCode', 'formVersion', 'subject', 'description', 'impact', 'urgency', 'fields']);
-const actionKeys = new Set(['action', 'expectedVersion', 'comment', 'reason', 'dueAt', 'vendorReference', 'vendorOwner', 'resolutionCategory', 'evidence']);
+const keys = new Set(['serviceCode', 'formVersion', 'subject', 'description', 'impact', 'urgency', 'fields', 'draftId']);
+const actionKeys = new Set(['action', 'expectedVersion', 'comment', 'reason', 'dueAt', 'vendorReference', 'vendorOwner', 'resolutionCategory', 'evidence', 'targetGroupId']);
 
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
@@ -31,6 +33,7 @@ function validateBody(body: unknown): asserts body is CreateTicketInput {
     || typeof b.description !== 'string' || !b.description.trim() || b.description.length > 10000
     || !['COMPANY', 'DEPARTMENT', 'INDIVIDUAL'].includes(String(b.impact))
     || !['HIGH', 'MEDIUM', 'LOW'].includes(String(b.urgency))
+    || (b.draftId !== undefined && (typeof b.draftId !== 'string' || !uuid.test(b.draftId)))
     || !b.fields || typeof b.fields !== 'object' || Array.isArray(b.fields) || JSON.stringify(b.fields).length > 16000)
     throw new BadRequestException({ code: 'INVALID_TICKET' });
 }
@@ -54,36 +57,13 @@ function priority(impact: string, urgency: string): string {
 }
 
 @Injectable()
-export class TicketsService implements OnModuleDestroy {
-  private readonly pool = new Pool({
-    host: process.env.DB_HOST ?? 'db', port: Number(process.env.DB_PORT ?? 5432),
-    database: process.env.DB_NAME ?? 'itsm', user: process.env.DB_USER ?? 'itsm',
-    password: process.env.DB_PASSWORD,
-  });
-
-  async onModuleDestroy(): Promise<void> { await this.pool.end(); }
-
-  async identity(devUser: string | undefined): Promise<Identity> {
-    if (process.env.NODE_ENV === 'production' || process.env.ENABLE_DEV_AUTH !== 'true')
-      throw new ServiceUnavailableException({ code: 'IDENTITY_PROVIDER_NOT_CONFIGURED' });
-    if (!devUser || !/^[a-zA-Z0-9-]{1,80}$/.test(devUser)) throw new UnauthorizedException();
-    const result = await this.pool.query('SELECT id FROM employees WHERE id = $1 AND active = true', [devUser]);
-    if (!result.rowCount) throw new UnauthorizedException();
-    const memberships = await this.pool.query<{ group_id: string }>('SELECT group_id FROM group_memberships WHERE employee_id = $1', [devUser]);
-    return { id: devUser, groups: memberships.rows.map(r => r.group_id) };
-  }
+export class TicketsService {
+  constructor(private readonly db: Database, private readonly auth: AuthService, private readonly sla: SlaService) {}
+  private get pool() { return this.db.pool; }
+  identity(headers: AuthHeaders, write = false) { return this.auth.identity(headers, write); }
 
   private async transaction<T>(fn: (client: PoolClient) => Promise<T>): Promise<T> {
-    const client = await this.pool.connect();
-    try {
-      await client.query('BEGIN');
-      const result = await fn(client);
-      await client.query('COMMIT');
-      return result;
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally { client.release(); }
+    return this.db.transaction(fn);
   }
 
   private async requireActive(client: PoolClient, actor: Identity): Promise<void> {
@@ -117,12 +97,22 @@ export class TicketsService implements OnModuleDestroy {
       await this.requireActive(client, actor);
       const previous = await this.claim(client, actor.id, 'create', key, body);
       if (previous) return previous as TicketReceipt;
-      const catalog = await client.query<{ type: string; form_version: number; group_id: string; required_fields: string[] }>(
-        'SELECT type, form_version, group_id, required_fields FROM service_catalog WHERE code=$1 AND published=true', [body.serviceCode]);
+      if (body.draftId) {
+        const draft = await client.query('SELECT id FROM voice_drafts WHERE id=$1 AND employee_id=$2 AND expires_at>now() AND ticket_id IS NULL FOR UPDATE',[body.draftId,actor.id]);
+        if (!draft.rowCount) throw new ConflictException({ code:'DRAFT_EXPIRED' });
+      }
+      const catalog = await client.query(
+        `SELECT * FROM service_catalog WHERE code=$1 AND published=true AND (visible_groups='[]'::jsonb OR EXISTS
+          (SELECT 1 FROM group_memberships WHERE employee_id=$2 AND visible_groups ? group_id)) FOR SHARE`, [body.serviceCode,actor.id]);
       if (!catalog.rowCount) throw new BadRequestException({ code: 'SERVICE_UNAVAILABLE' });
       const service = catalog.rows[0];
       if (body.formVersion !== service.form_version) throw new ConflictException({ code: 'FORM_VERSION_CONFLICT' });
-      if (service.required_fields.some(field => !body.fields[field])) throw new BadRequestException({ code: 'REQUIRED_FIELDS_MISSING' });
+      if ((service.required_fields as string[]).some(field => typeof body.fields[field] !== 'string' || !String(body.fields[field]).trim())) throw new BadRequestException({ code: 'REQUIRED_FIELDS_MISSING' });
+      const schema = service.field_schema as { key: string; options?: string[] }[];
+      if (Object.keys(body.fields).some(key => !schema.some(field => field.key === key)) || schema.some(field => {
+        const value = body.fields[field.key];
+        return value !== undefined && (typeof value !== 'string' || value.length > 500 || (field.options && !field.options.includes(value)));
+      })) throw new BadRequestException({ code: 'INVALID_SERVICE_FIELDS' });
       if (service.type !== 'INC') throw new ServiceUnavailableException({ code: 'REQUEST_APPROVAL_POLICY_NOT_CONFIGURED' });
       const numberResult = await client.query<{ n: string }>("SELECT nextval('ticket_number_seq')::text AS n");
       const number = `ITSM-${numberResult.rows[0].n.padStart(8, '0')}`;
@@ -130,6 +120,9 @@ export class TicketsService implements OnModuleDestroy {
         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'QUEUED') RETURNING *`,
         [number, actor.id, service.group_id, body.serviceCode, service.type, body.formVersion, body.subject.trim(), body.description.trim(), JSON.stringify(body.fields), body.impact, body.urgency, priority(body.impact, body.urgency)]);
       const ticket = created.rows[0];
+      if (body.draftId) await client.query('UPDATE voice_drafts SET ticket_id=$2 WHERE id=$1',[body.draftId,ticket.id]);
+      await client.query('UPDATE tickets SET catalog_snapshot=$2 WHERE id=$1', [ticket.id,JSON.stringify({ code: body.serviceCode, name: service.name, formVersion: service.form_version, fields: service.field_schema })]);
+      await this.sla.start(client,ticket.id,ticket.priority);
       await this.record(client, ticket, actor.id, 'SUBMIT_AND_ROUTE', null, { groupId: ticket.owner_group_id }, requestId);
       const response = this.receipt(ticket);
       await client.query('UPDATE api_idempotency SET response=$4 WHERE actor_id=$1 AND scope=$2 AND key=$3', [actor.id, 'create', key, JSON.stringify(response)]);
@@ -157,11 +150,14 @@ export class TicketsService implements OnModuleDestroy {
     const result = await this.pool.query<TicketRow>(`SELECT * FROM tickets WHERE ${mine ? 'requester_id=$1' : 'owner_group_id IN (SELECT group_id FROM group_memberships WHERE employee_id=$1)'}
       AND ($2::text IS NULL OR status=$2) ORDER BY created_at DESC, id DESC LIMIT $3 OFFSET $4`,
       [actor.id, status ?? null, size, (page - 1) * size]);
-    return { items: result.rows.map(row => this.publicTicket(row)), page, size };
+    const summary = await this.pool.query(`SELECT status,count(*)::integer AS count FROM tickets WHERE ${mine ? 'requester_id=$1' : 'owner_group_id IN (SELECT group_id FROM group_memberships WHERE employee_id=$1)'} GROUP BY status`,[actor.id]);
+    const counts = Object.fromEntries(summary.rows.map(row=>[row.status,row.count]));
+    const total = status ? counts[status] ?? 0 : summary.rows.reduce((sum,row)=>sum+row.count,0);
+    return { items: result.rows.map(row => this.publicTicket(row)), page, size, total, counts };
   }
 
   private publicTicket(row: TicketRow): object {
-    return { ...this.receipt(row), serviceCode: row.service_code, serviceType: row.service_type, formVersion: row.form_version,
+    return { ...this.receipt(row), requesterId: row.requester_id, serviceCode: row.service_code, serviceType: row.service_type, formVersion: row.form_version,
       subject: row.subject, description: row.description, fields: row.fields, impact: row.impact, urgency: row.urgency,
       priority: row.priority, createdAt: row.created_at, updatedAt: row.updated_at };
   }
@@ -173,7 +169,7 @@ export class TicketsService implements OnModuleDestroy {
       const events = await client.query('SELECT action, from_status AS "fromStatus", to_status AS "toStatus", detail, created_at AS "createdAt" FROM ticket_events WHERE ticket_id=$1 ORDER BY created_at,id', [id]);
       const membership = await client.query('SELECT 1 FROM group_memberships WHERE employee_id=$1 AND group_id=$2', [actor.id, ticket.owner_group_id]);
       const groupMember = !!membership.rowCount;
-      return { ...this.publicTicket(ticket), events: groupMember ? events.rows : events.rows.map(event => ({
+      return { ...this.publicTicket(ticket), sla: await this.sla.view(client,id), events: groupMember ? events.rows : events.rows.map(event => ({
         action: event.action, fromStatus: event.fromStatus, toStatus: event.toStatus,
         detail: { comment: event.detail?.comment, reason: event.detail?.reason }, createdAt: event.createdAt,
       })) };
@@ -192,10 +188,16 @@ export class TicketsService implements OnModuleDestroy {
       const role = ticket.requester_id === actor.id && ['ADD_INFO','CONFIRM','REOPEN','CANCEL'].includes(body.action)
         ? 'requester' : member.rowCount ? 'agent' : 'requester';
       const next = transition(ticket.status, role, body);
+      if (body.action === 'REASSIGN') {
+        const target = await client.query('SELECT id FROM support_groups WHERE id=$1', [body.targetGroupId]);
+        if (!target.rowCount) throw new BadRequestException({ code: 'INVALID_TARGET_GROUP' });
+      }
       const before = ticket.status;
-      const updated = await client.query<TicketRow>('UPDATE tickets SET status=$2,version=version+1,updated_at=now() WHERE id=$1 RETURNING *', [id, next]);
+      const updated = await client.query<TicketRow>('UPDATE tickets SET status=$2,owner_group_id=COALESCE($3,owner_group_id),version=version+1,updated_at=now() WHERE id=$1 RETURNING *', [id, next,body.action === 'REASSIGN' ? body.targetGroupId : null]);
+      await this.sla.action(client,id,body.action,ticket.priority);
       await this.record(client, updated.rows[0], actor.id, body.action, before,
-        { comment: body.comment, reason: body.reason, dueAt: body.dueAt, vendorReference: body.vendorReference, vendorOwner: body.vendorOwner, resolutionCategory: body.resolutionCategory, evidence: body.evidence }, requestId);
+        { comment: body.comment, reason: body.reason, dueAt: body.dueAt, vendorReference: body.vendorReference, vendorOwner: body.vendorOwner, resolutionCategory: body.resolutionCategory, evidence: body.evidence,
+          ...(body.action === 'REASSIGN' ? { oldGroupId: ticket.owner_group_id, targetGroupId: body.targetGroupId } : {}) }, requestId);
       const response = this.receipt(updated.rows[0]);
       await client.query('UPDATE api_idempotency SET response=$4 WHERE actor_id=$1 AND scope=$2 AND key=$3', [actor.id, `action:${id}`, key, JSON.stringify(response)]);
       return response;

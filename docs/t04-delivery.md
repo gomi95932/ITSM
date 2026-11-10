@@ -13,7 +13,18 @@
 
 ## 验证状态
 
-本机仅代码编辑与 Git 操作，未运行构建、应用、数据库或测试。`git diff --check` 通过。已推送现有 feature 分支并触发 GitHub Actions，但最终远程结果尚未确认；Safari 因 Mac 锁屏无法继续读取结果。不能据此标记 T04 验收完成。
+本机仅代码编辑与 Git 操作，未运行构建、应用、数据库或测试。`git diff --check` 通过。2026-11-10 已通过 Safari 核实以下 GitHub Actions 结果：
+
+- 已验证代码提交：`bb88d1792f6daf7672cdee3bef211a54b620a315`。
+- PR Application CI：https://github.com/gomi95932/ITSM/actions/runs/42737231074 。`build-test` 成功，耗时 1 分 28 秒。
+- push Application CI：https://github.com/gomi95932/ITSM/actions/runs/42737224365 。`build-test` 成功。
+- 依赖安装、构建、类型检查、单测、Compose 配置、隔离容器启动及 Web/API 路由检查通过。
+- 工单集成步骤明确输出 `Ticket API integration passed`，同一步的数据库计数断言通过：工单 2 条，事件、审计、outbox 各 5 条；包含同键 50 次并发提交用例。
+- PR 页面显示 3 项检查成功、4 项跳过。镜像发布仅对 main 的 push 启用，因此 feature 分支跳过发布符合预期，不代表镜像已经发布或服务器已经部署。
+
+CI 另有非阻断提示：checkout/setup-node v4 的 Action 运行时弃用，以及 ubuntu-latest 运行环境迁移提醒。后续维护应固定 runner 版本并评估 Action 升级；本轮没有修改这些配置。
+
+以上仅证明本轮核心切片的自动化用例通过，不代表 T04 全量验收或完整 ITSM 系统已完成，尚未完成项如下。
 
 ## 未完成与限制
 
@@ -29,7 +40,7 @@
 
 ## 下一步与门禁
 
-1. 读取并修复本次 CI 的编译、状态机、容器 API 与审计检查，全部通过后记录 run URL 和 commit SHA。
+1. 本轮 CI 验证已完成；后续代码变更仍须重新通过编译、状态机、容器 API 与审计检查，不可沿用旧提交结果。
 2. 引入正式身份适配器接口和开发 fake 的显式隔离、目录 schema/快照与可见性、迁移版本管理。
 3. 完成 T05 SLA，再做员工 H5 与 PC 工作台、Playwright 流程和移动布局验证。
 4. 在测试钉钉租户确认权限后开发免登/OA/消息适配；语音入口另行 PoC。

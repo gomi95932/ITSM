@@ -8,9 +8,9 @@ export function transition(status: TicketStatus, role: ActorRole, input: TicketA
   const agent = role === 'agent';
   const allowed: Partial<Record<TicketStatus, Partial<Record<string, TicketStatus>>>> = agent
     ? {
-        QUEUED: { ACCEPT: 'IN_PROGRESS' },
-        IN_PROGRESS: { REQUEST_INFO: 'WAITING_USER', WAIT_VENDOR: 'WAITING_VENDOR', RESOLVE: 'PENDING_CONFIRMATION' },
-        WAITING_VENDOR: { RESOLVE: 'PENDING_CONFIRMATION' },
+        QUEUED: { ACCEPT: 'IN_PROGRESS', REASSIGN: 'QUEUED' },
+        IN_PROGRESS: { REQUEST_INFO: 'WAITING_USER', WAIT_VENDOR: 'WAITING_VENDOR', RESOLVE: 'PENDING_CONFIRMATION', REASSIGN: 'IN_PROGRESS' },
+        WAITING_VENDOR: { RESOLVE: 'PENDING_CONFIRMATION', REASSIGN: 'WAITING_VENDOR' },
       }
     : {
         NEW: { CANCEL: 'CANCELLED' },
@@ -20,6 +20,8 @@ export function transition(status: TicketStatus, role: ActorRole, input: TicketA
       };
   const next = allowed[status]?.[action];
   if (!next) throw new ConflictException({ code: 'INVALID_TRANSITION' });
+  if (action === 'ACCEPT' && !input.comment?.trim()) throw new BadRequestException({ code: 'HUMAN_RESPONSE_REQUIRED' });
+  if (action === 'REASSIGN' && (!input.targetGroupId || !input.reason?.trim())) throw new BadRequestException({ code: 'REASSIGN_DETAILS_REQUIRED' });
   if (action === 'REQUEST_INFO' && (!input.comment?.trim() || !validFutureDate(input.dueAt)))
     throw new BadRequestException({ code: 'INFO_REQUEST_REQUIRES_QUESTION_AND_DUE_DATE' });
   if (action === 'WAIT_VENDOR' && (!input.vendorReference?.trim() || !input.comment?.trim()))

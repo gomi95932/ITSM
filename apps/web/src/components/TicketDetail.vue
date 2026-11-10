@@ -1,0 +1,47 @@
+<script setup lang="ts">
+import { computed,onMounted,ref,watch } from 'vue';
+import { ArrowLeft,Check,Clock3,LoaderCircle,RefreshCw } from 'lucide-vue-next';
+import type { SessionUser,TicketAction,TicketActionInput,TicketView } from '@itsm/contracts';
+import { api,errorText,ApiError } from '../api';
+import { actions,duration,formatDate,statuses } from '../labels';
+const props=defineProps<{id:string;user:SessionUser}>();
+const emit=defineEmits<{back:[];changed:[]}>();
+const ticket=ref<TicketView>(),loading=ref(false),busy=ref(false),error=ref(''),action=ref<TicketAction>(),comment=ref(''),reason=ref(''),dueAt=ref(''),vendorReference=ref(''),vendorOwner=ref(''),category=ref(''),evidence=ref(''),target=ref('');
+const groups=ref<{id:string;name:string}[]>([]),key=ref(crypto.randomUUID());
+const fieldLabels:Record<string,string>={system:'业务系统',module:'模块 / 页面',location:'所在地点',device:'设备编号'};
+watch([comment,reason,dueAt,vendorReference,vendorOwner,category,evidence,target],()=>{key.value=crypto.randomUUID();});
+const isAgent=computed(()=>ticket.value&&props.user.groups.includes(ticket.value.ownerGroupId));
+const mine=computed(()=>ticket.value?.requesterId===props.user.id);
+const available=computed<TicketAction[]>(()=>{
+  if(!ticket.value)return[];const state=ticket.value.status,result:TicketAction[]=[];
+  if(mine.value){if(['NEW','QUEUED'].includes(state))result.push('CANCEL');if(state==='WAITING_USER')result.push('ADD_INFO');if(state==='PENDING_CONFIRMATION')result.push('CONFIRM','REOPEN');}
+  if(isAgent.value){if(state==='QUEUED')result.push('ACCEPT');if(state==='IN_PROGRESS')result.push('REQUEST_INFO','WAIT_VENDOR','RESOLVE');if(state==='WAITING_VENDOR')result.push('RESOLVE');if(['QUEUED','IN_PROGRESS','WAITING_VENDOR'].includes(state))result.push('REASSIGN');}
+  return result;
+});
+const commands:Record<string,string>={ACCEPT:'接单并回复',REQUEST_INFO:'请求补充',ADD_INFO:'补充信息',WAIT_VENDOR:'等待厂商',RESOLVE:'提交解决方案',CONFIRM:'确认已解决',REOPEN:'仍未解决',CANCEL:'撤销报障',REASSIGN:'转派'};
+async function load(){loading.value=true;error.value='';try{ticket.value=await api<TicketView>(`/tickets/${props.id}`);if(props.user.groups.length)groups.value=(await api<{items:{id:string;name:string}[]}>('/support-groups')).items;}catch(e){error.value=errorText(e);}finally{loading.value=false;}}
+function choose(value:TicketAction){action.value=value;comment.value='';reason.value='';dueAt.value='';vendorReference.value='';vendorOwner.value='';category.value='';evidence.value='';target.value='';key.value=crypto.randomUUID();error.value='';}
+async function submit(){
+  if(!ticket.value||!action.value||busy.value)return;busy.value=true;error.value='';
+  const body:TicketActionInput={action:action.value,expectedVersion:ticket.value.version};
+  if(comment.value)body.comment=comment.value;if(reason.value)body.reason=reason.value;
+  if(dueAt.value)body.dueAt=new Date(dueAt.value).toISOString();
+  if(vendorReference.value)body.vendorReference=vendorReference.value;if(vendorOwner.value)body.vendorOwner=vendorOwner.value;
+  if(category.value)body.resolutionCategory=category.value;if(evidence.value)body.evidence=evidence.value;if(target.value)body.targetGroupId=target.value;
+  try{await api(`/tickets/${props.id}/actions`,{method:'POST',body,key:key.value});action.value=undefined;await load();emit('changed');}
+  catch(e){if(e instanceof ApiError&&e.status===409){await load();key.value=crypto.randomUUID();}error.value=errorText(e);}finally{busy.value=false;}
+}
+onMounted(load);
+</script>
+<template>
+  <section class="detail-page"><button class="text-button" @click="emit('back')"><ArrowLeft :size="17"/> 返回工单列表</button><div v-if="loading&&!ticket" class="empty-state"><LoaderCircle class="spin"/> 正在加载</div><p v-if="error" class="error-banner" role="alert">{{error}}</p>
+    <template v-if="ticket"><div class="page-title"><div><p class="eyebrow">{{ticket.number}}</p><h1>{{ticket.subject}}</h1></div><button class="icon-button" title="刷新" aria-label="刷新工单" :disabled="loading" @click="load"><RefreshCw :size="18" :class="{spin:loading}"/></button></div><div class="ticket-meta"><span class="status" :data-status="ticket.status">{{statuses[ticket.status]}}</span><span class="priority" :data-priority="ticket.priority">{{ticket.priority}}</span><span>{{formatDate(ticket.createdAt)}}</span><span>责任组：{{groups.find(g=>g.id===ticket?.ownerGroupId)?.name??ticket.ownerGroupId}}</span></div>
+      <div class="detail-grid"><div><section class="detail-section"><h2>报障详情</h2><p class="multiline">{{ticket.description}}</p><dl v-if="Object.keys(ticket.fields).length" class="fact-list"><template v-for="(value,name) in ticket.fields" :key="name"><dt>{{fieldLabels[String(name)]??name}}</dt><dd>{{value}}</dd></template></dl></section>
+        <section class="detail-section"><div class="section-heading"><h2>处理记录</h2><span class="muted">{{ticket.events?.length??0}} 条</span></div><ol class="timeline"><li v-for="(event,index) in ticket.events??[]" :key="index"><span class="timeline-dot"></span><div class="event-title"><strong>{{actions[event.action]??event.action}}</strong><time>{{formatDate(event.createdAt)}}</time></div><p v-if="event.detail.comment" class="multiline">{{event.detail.comment}}</p><p v-if="event.detail.reason" class="multiline">{{event.detail.reason}}</p><p v-if="event.detail.vendorReference" class="muted">厂商单号：{{event.detail.vendorReference}}</p><p v-if="event.detail.targetGroupId" class="muted">{{event.detail.oldGroupId}} → {{event.detail.targetGroupId}}</p></li></ol></section>
+      </div><aside><section class="detail-section sla-section"><h2><Clock3 :size="17"/> 服务时效</h2><div v-for="sla in ticket.sla??[]" :key="sla.cycle" class="sla-cycle"><div class="section-heading"><strong>第 {{sla.cycle}} 轮</strong><span :class="sla.breached?'danger-text':'muted'">{{sla.completed?'已停止':sla.paused?'等待补充，解决计时暂停':sla.breached?'已超时':'计时中'}}</span></div><p>首次响应 <strong>{{duration(sla.responseMinutes)}}</strong> / {{duration(sla.responseTarget)}}</p><p>解决耗时 <strong>{{duration(sla.resolutionMinutes)}}</strong> / {{duration(sla.resolutionTarget)}}</p><p v-if="!sla.responded&&!sla.completed" class="muted">等待人工回复送达</p></div><p v-if="!ticket.sla?.length" class="muted">此工单暂无 SLA 周期。</p><p class="caption">当前使用试点服务日历</p></section>
+        <section v-if="available.length" class="detail-section"><h2>处理操作</h2><div class="action-list"><button v-for="value in available" :key="value" class="secondary" :class="{selected:action===value}" @click="choose(value)">{{commands[value]}}</button></div>
+          <form v-if="action" class="action-form" @submit.prevent="submit"><label v-if="['ACCEPT','REQUEST_INFO','ADD_INFO','WAIT_VENDOR','RESOLVE'].includes(action)">{{action==='RESOLVE'?'解决说明':action==='REQUEST_INFO'?'需要补充的内容':'回复内容'}}<textarea v-model="comment" required maxlength="2000" rows="3"/></label><label v-if="['REOPEN','REASSIGN'].includes(action)">原因<textarea v-model="reason" required maxlength="2000" rows="3"/></label><label v-if="action==='REASSIGN'">目标支持组<select v-model="target" required><option value="">请选择</option><option v-for="group in groups.filter(g=>g.id!==ticket?.ownerGroupId)" :key="group.id" :value="group.id">{{group.name}}</option></select></label><label v-if="action==='REQUEST_INFO'">补充截止时间<input v-model="dueAt" required type="datetime-local"/></label><template v-if="action==='WAIT_VENDOR'"><label>厂商工单号<input v-model="vendorReference" required maxlength="200"/></label><label>跟进负责人<input v-model="vendorOwner" required maxlength="200"/></label></template><template v-if="action==='RESOLVE'"><label>解决分类<select v-model="category" required><option value="">请选择</option><option>配置调整</option><option>故障恢复</option><option>操作指导</option><option>厂商修复</option></select></label><label>验证依据<textarea v-model="evidence" required maxlength="2000" rows="2"/></label></template><div class="form-footer"><button type="button" class="text-button" :disabled="busy" @click="action=undefined">取消</button><button type="submit" class="primary" :disabled="busy"><LoaderCircle v-if="busy" :size="16" class="spin"/><Check v-else :size="16"/>{{commands[action]}}</button></div></form></section>
+      </aside></div>
+    </template>
+  </section>
+</template>

@@ -32,10 +32,10 @@ assert.equal((await request(`/${id}/actions`, 'employee-2', 'POST', { action: 'A
 assert.equal((await request(`/${id}/actions`, 'employee-1', 'POST', { action: 'ACCEPT', expectedVersion: 1 }, key())).status, 409);
 
 const acceptedKey = key();
-const accepted = await request(`/${id}/actions`, 'agent-1', 'POST', { action: 'ACCEPT', expectedVersion: 1 }, acceptedKey);
+const accepted = await request(`/${id}/actions`, 'agent-1', 'POST', { action: 'ACCEPT', expectedVersion: 1,comment:'正在排查' }, acceptedKey);
 assert.equal(accepted.status, 200);
 assert.equal(accepted.data.version, 2);
-assert.deepEqual((await request(`/${id}/actions`, 'agent-1', 'POST', { action: 'ACCEPT', expectedVersion: 1 }, acceptedKey)).data, accepted.data);
+assert.deepEqual((await request(`/${id}/actions`, 'agent-1', 'POST', { action: 'ACCEPT', expectedVersion: 1,comment:'正在排查' }, acceptedKey)).data, accepted.data);
 assert.equal((await request(`/${id}/actions`, 'agent-1', 'POST', { action: 'RESOLVE', expectedVersion: 1 }, key())).status, 409);
 const resolved = await request(`/${id}/actions`, 'agent-1', 'POST', { action: 'RESOLVE', expectedVersion: 2, comment: 'Fixed', resolutionCategory: 'FIX', evidence: 'Login verified' }, key());
 assert.equal(resolved.data.status, 'PENDING_CONFIRMATION');

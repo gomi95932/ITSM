@@ -7,6 +7,6 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "start": "node dist/main.js"
   },
-  "dependencies": { "bullmq": "^5.50.0", "ioredis": "^5.4.2" },
-  "devDependencies": { "@types/node": "^22.15.0", "typescript": "~5.9.3" }
+  "dependencies": { "@itsm/contracts": "0.1.0", "pg": "^8.23.1", "bullmq": "^5.50.0", "ioredis": "^5.4.2" },
+  "devDependencies": { "@types/node": "^22.15.0", "@types/pg": "^8.23.1", "typescript": "~5.9.3" }
 }

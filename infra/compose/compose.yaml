@@ -21,8 +21,16 @@ services:
       context: ../..
       dockerfile: apps/api/Dockerfile
     environment:
-      NODE_ENV: development
-      ENABLE_DEV_AUTH: "true"
+      NODE_ENV: ${ITSM_NODE_ENV:-development}
+      ENABLE_DEV_AUTH: ${ENABLE_DEV_AUTH:-true}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      DINGTALK_CORP_ID: ${DINGTALK_CORP_ID:-}
+      DINGTALK_APP_KEY: ${DINGTALK_APP_KEY:-}
+      DINGTALK_APP_SECRET: ${DINGTALK_APP_SECRET:-}
+      NOTIFICATION_MODE: ${NOTIFICATION_MODE:-fake}
+      ITSM_ASR_URL: ${ITSM_ASR_URL:-}
+      ITSM_ASR_TOKEN: ${ITSM_ASR_TOKEN:-}
+      ASR_DATA_APPROVED: ${ASR_DATA_APPROVED:-false}
       DB_HOST: db
       DB_NAME: itsm
       DB_USER: itsm
@@ -49,11 +57,29 @@ services:
       dockerfile: apps/worker/Dockerfile
     environment:
       REDIS_URL: redis://:${ITSM_REDIS_PASSWORD:?Set ITSM_REDIS_PASSWORD in the private env file}@redis:6379
+      NODE_ENV: ${ITSM_NODE_ENV:-development}
+      DB_HOST: db
+      DB_NAME: itsm
+      DB_USER: itsm
+      DB_PASSWORD: ${ITSM_DB_PASSWORD:?Set ITSM_DB_PASSWORD in the private env file}
+      NOTIFICATION_MODE: ${NOTIFICATION_MODE:-fake}
+      ENABLE_LIVE_NOTIFICATIONS: ${ENABLE_LIVE_NOTIFICATIONS:-false}
+      DINGTALK_CORP_ID: ${DINGTALK_CORP_ID:-}
+      DINGTALK_APP_KEY: ${DINGTALK_APP_KEY:-}
+      DINGTALK_APP_SECRET: ${DINGTALK_APP_SECRET:-}
+      DINGTALK_AGENT_ID: ${DINGTALK_AGENT_ID:-}
+      ITSM_PUBLIC_URL: ${ITSM_PUBLIC_URL:-}
+      AUTO_CLOSE_HOURS: ${AUTO_CLOSE_HOURS:-72}
     depends_on:
       redis:
         condition: service_healthy
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     networks:
       - itsm_backend
+      - itsm_egress
     restart: unless-stopped
 
   db:
@@ -83,7 +109,7 @@ services:
     volumes:
       - ../../db/migrations:/migrations:ro
       - ../../db/seeds:/seeds:ro
-    command: ["sh", "-ec", "psql -v ON_ERROR_STOP=1 -f /migrations/001_ticket_core.sql && psql -v ON_ERROR_STOP=1 -f /seeds/dev.sql"]
+    command: ["sh", "-ec", "psql -v ON_ERROR_STOP=1 -f /migrations/001_ticket_core.sql && psql -v ON_ERROR_STOP=1 -f /migrations/002_workspace.sql && psql -v ON_ERROR_STOP=1 -f /seeds/dev.sql"]
     depends_on:
       db:
         condition: service_healthy
@@ -109,6 +135,7 @@ services:
 
 networks:
   itsm_frontend:
+  itsm_egress:
   itsm_backend:
     internal: true
 

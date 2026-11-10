@@ -38,6 +38,18 @@ jobs:
             psql -U itsm -d itsm -tAc "SELECT count(*) FROM audit_logs" | grep -q "^5$"
             psql -U itsm -d itsm -tAc "SELECT count(*) FROM outbox_events" | grep -q "^5$"
           '
+      - name: Exercise workspace permissions, SLA and voice draft invariants
+        run: node tests/integration/workspace.mjs
+      - name: Install CI browser
+        run: npx playwright install --with-deps chromium
+      - name: Exercise desktop and mobile employee and agent flows
+        run: npx playwright test
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: workspace-browser-results
+          path: test-results/
+          retention-days: 14
       - name: Show containers on failure
         if: failure()
         run: docker compose --env-file infra/compose/.env.example -f infra/compose/compose.yaml ps -a
