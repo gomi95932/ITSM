@@ -86,6 +86,11 @@ export class TicketsService implements OnModuleDestroy {
     } finally { client.release(); }
   }
 
+  private async requireActive(client: PoolClient, actor: Identity): Promise<void> {
+    const active = await client.query('SELECT id FROM employees WHERE id=$1 AND active=true FOR SHARE', [actor.id]);
+    if (!active.rowCount) throw new UnauthorizedException();
+  }
+
   private async claim(client: PoolClient, actor: string, scope: string, key: string, body: unknown): Promise<unknown | undefined> {
     if (!/^[a-zA-Z0-9_-]{8,128}$/.test(key)) throw new BadRequestException({ code: 'IDEMPOTENCY_KEY_REQUIRED' });
     const hash = createHash('sha256').update(canonical(body)).digest('hex');
@@ -109,6 +114,7 @@ export class TicketsService implements OnModuleDestroy {
   async create(actor: Identity, body: unknown, key: string, requestId: string): Promise<TicketReceipt> {
     validateBody(body);
     return this.transaction(async client => {
+      await this.requireActive(client, actor);
       const previous = await this.claim(client, actor.id, 'create', key, body);
       if (previous) return previous as TicketReceipt;
       const catalog = await client.query<{ type: string; form_version: number; group_id: string; required_fields: string[] }>(
@@ -137,8 +143,9 @@ export class TicketsService implements OnModuleDestroy {
 
   private async accessible(client: PoolClient, actor: Identity, id: string, lock = false): Promise<TicketRow> {
     if (!uuid.test(id)) throw new NotFoundException();
-    const result = await client.query<TicketRow>(`SELECT * FROM tickets WHERE id=$1 AND (requester_id=$2 OR owner_group_id = ANY($3::text[])) ${lock ? 'FOR UPDATE' : ''}`,
-      [id, actor.id, actor.groups]);
+    const result = await client.query<TicketRow>(`SELECT * FROM tickets WHERE id=$1 AND (requester_id=$2 OR owner_group_id IN
+      (SELECT group_id FROM group_memberships WHERE employee_id=$2)) ${lock ? 'FOR UPDATE' : ''}`,
+      [id, actor.id]);
     if (!result.rowCount) throw new NotFoundException();
     return result.rows[0];
   }
@@ -147,9 +154,9 @@ export class TicketsService implements OnModuleDestroy {
     if (!Number.isInteger(page) || page < 1 || !Number.isInteger(size) || size < 1 || size > 100) throw new BadRequestException();
     if (status && !['NEW','QUEUED','IN_PROGRESS','WAITING_APPROVAL','WAITING_USER','WAITING_VENDOR','PENDING_CONFIRMATION','CLOSED','CANCELLED','REJECTED'].includes(status)) throw new BadRequestException();
     if (!mine && !actor.groups.length) throw new NotFoundException();
-    const result = await this.pool.query<TicketRow>(`SELECT * FROM tickets WHERE ${mine ? 'requester_id=$1' : 'owner_group_id = ANY($1::text[])'}
+    const result = await this.pool.query<TicketRow>(`SELECT * FROM tickets WHERE ${mine ? 'requester_id=$1' : 'owner_group_id IN (SELECT group_id FROM group_memberships WHERE employee_id=$1)'}
       AND ($2::text IS NULL OR status=$2) ORDER BY created_at DESC, id DESC LIMIT $3 OFFSET $4`,
-      [mine ? actor.id : actor.groups, status ?? null, size, (page - 1) * size]);
+      [actor.id, status ?? null, size, (page - 1) * size]);
     return { items: result.rows.map(row => this.publicTicket(row)), page, size };
   }
 
@@ -164,19 +171,26 @@ export class TicketsService implements OnModuleDestroy {
     try {
       const ticket = await this.accessible(client, actor, id);
       const events = await client.query('SELECT action, from_status AS "fromStatus", to_status AS "toStatus", detail, created_at AS "createdAt" FROM ticket_events WHERE ticket_id=$1 ORDER BY created_at,id', [id]);
-      return { ...this.publicTicket(ticket), events: events.rows };
+      const membership = await client.query('SELECT 1 FROM group_memberships WHERE employee_id=$1 AND group_id=$2', [actor.id, ticket.owner_group_id]);
+      const groupMember = !!membership.rowCount;
+      return { ...this.publicTicket(ticket), events: groupMember ? events.rows : events.rows.map(event => ({
+        action: event.action, fromStatus: event.fromStatus, toStatus: event.toStatus,
+        detail: { comment: event.detail?.comment, reason: event.detail?.reason }, createdAt: event.createdAt,
+      })) };
     } finally { client.release(); }
   }
 
   async action(actor: Identity, id: string, body: unknown, key: string, requestId: string): Promise<TicketReceipt> {
     validateAction(body);
     return this.transaction(async client => {
+      await this.requireActive(client, actor);
       const ticket = await this.accessible(client, actor, id, true);
       const previous = await this.claim(client, actor.id, `action:${id}`, key, body);
       if (previous) return previous as TicketReceipt;
       if (ticket.version !== body.expectedVersion) throw new ConflictException({ code: 'VERSION_CONFLICT' });
+      const member = await client.query('SELECT 1 FROM group_memberships WHERE employee_id=$1 AND group_id=$2', [actor.id, ticket.owner_group_id]);
       const role = ticket.requester_id === actor.id && ['ADD_INFO','CONFIRM','REOPEN','CANCEL'].includes(body.action)
-        ? 'requester' : actor.groups.includes(ticket.owner_group_id) ? 'agent' : 'requester';
+        ? 'requester' : member.rowCount ? 'agent' : 'requester';
       const next = transition(ticket.status, role, body);
       const before = ticket.status;
       const updated = await client.query<TicketRow>('UPDATE tickets SET status=$2,version=version+1,updated_at=now() WHERE id=$1 RETURNING *', [id, next]);

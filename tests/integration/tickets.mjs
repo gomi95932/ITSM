@@ -44,4 +44,5 @@ assert.equal(closed.data.status, 'CLOSED');
 assert.equal((await request(`/${id}/actions`, 'employee-1', 'POST', { action: 'REOPEN', expectedVersion: 4, reason: 'Again' }, key())).status, 409);
 const detail = await request(`/${id}`, 'employee-1');
 assert.equal(detail.data.events.length, 4);
+assert.equal(detail.data.events.some(event => 'evidence' in event.detail), false);
 console.log('Ticket API integration passed:', id);
