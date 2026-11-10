@@ -12,8 +12,6 @@ jobs:
   build-test:
     runs-on: ubuntu-latest
     timeout-minutes: 25
-    env:
-      ITSM_CI_ENV: ${{ runner.temp }}/itsm-ci.env
     outputs:
       postgres-image: ${{ steps.tested-data.outputs.postgres }}
       redis-image: ${{ steps.tested-data.outputs.redis }}
@@ -27,6 +25,8 @@ jobs:
       - run: npm run build
       - run: npm run typecheck
       - run: npm test
+      - name: Set disposable CI configuration path
+        run: echo "ITSM_CI_ENV=$RUNNER_TEMP/itsm-ci.env" >> "$GITHUB_ENV"
       - name: Create private disposable CI configuration
         run: node scripts/create-development-env.mjs "$ITSM_CI_ENV" --seed-development-fixtures
       - run: docker compose --env-file "$ITSM_CI_ENV" -f infra/compose/compose.yaml config --quiet
