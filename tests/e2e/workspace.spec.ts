@@ -14,7 +14,7 @@ test('explicit proxy grant, ordinary GEN intake, correction and revocation stay 
   await page.getByRole('combobox',{name:'开发身份'}).selectOption('agent-2');
   await page.getByRole('button',{name:'服务目录',exact:true}).click();
   await page.getByRole('button',{name:/其他 IT 事项/}).click();
-  await page.getByRole('combobox',{name:'申请人'}).selectOption({label:/演示员工一/});
+  await page.getByRole('combobox',{name:'申请人'}).selectOption({label:'演示员工一（已授权代报）'});
   await page.getByRole('textbox',{name:'问题标题'}).fill('E2E 代报分类待澄清');
   await page.getByRole('textbox',{name:'详细情况'}).fill('普通 IT 网络异常，请服务台定位。');
   await page.getByRole('combobox',{name:'影响范围'}).selectOption('INDIVIDUAL');
