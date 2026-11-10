@@ -33,10 +33,10 @@ jobs:
           node tests/integration/tickets.mjs
           docker compose --env-file infra/compose/.env.example -f infra/compose/compose.yaml exec -T db sh -ec '
             export PGPASSWORD="$POSTGRES_PASSWORD"
-            psql -U itsm -d itsm -tAc "SELECT count(*) FROM tickets" | grep -q "^1$"
-            psql -U itsm -d itsm -tAc "SELECT count(*) FROM ticket_events" | grep -q "^4$"
-            psql -U itsm -d itsm -tAc "SELECT count(*) FROM audit_logs" | grep -q "^4$"
-            psql -U itsm -d itsm -tAc "SELECT count(*) FROM outbox_events" | grep -q "^4$"
+            psql -U itsm -d itsm -tAc "SELECT count(*) FROM tickets" | grep -q "^2$"
+            psql -U itsm -d itsm -tAc "SELECT count(*) FROM ticket_events" | grep -q "^5$"
+            psql -U itsm -d itsm -tAc "SELECT count(*) FROM audit_logs" | grep -q "^5$"
+            psql -U itsm -d itsm -tAc "SELECT count(*) FROM outbox_events" | grep -q "^5$"
           '
       - name: Show containers on failure
         if: failure()

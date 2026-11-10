@@ -26,7 +26,7 @@ assert.equal((await request('', 'employee-1', 'POST', { ...body, formVersion: 99
 assert.equal((await request(`/${id}`, 'employee-2')).status, 404);
 assert.equal((await request(`/${id}`, 'agent-1')).status, 200);
 assert.equal((await request('', 'employee-2')).data.items.length, 0);
-assert.equal((await request('', 'agent-1?mine=false')).data.items.some(item => item.id === id), true);
+assert.equal((await request('?mine=false', 'agent-1')).data.items.some(item => item.id === id), true);
 assert.equal((await request('', 'unknown')).status, 401);
 assert.equal((await request(`/${id}/actions`, 'employee-2', 'POST', { action: 'ACCEPT', expectedVersion: 1 }, key())).status, 404);
 assert.equal((await request(`/${id}/actions`, 'employee-1', 'POST', { action: 'ACCEPT', expectedVersion: 1 }, key())).status, 409);
@@ -45,4 +45,9 @@ assert.equal((await request(`/${id}/actions`, 'employee-1', 'POST', { action: 'R
 const detail = await request(`/${id}`, 'employee-1');
 assert.equal(detail.data.events.length, 4);
 assert.equal(detail.data.events.some(event => 'evidence' in event.detail), false);
+const concurrentKey = key();
+const concurrent = await Promise.all(Array.from({ length: 50 }, () => request('', 'employee-1', 'POST', body, concurrentKey)));
+assert.equal(concurrent.every(result => result.status === 201), true);
+assert.equal(new Set(concurrent.map(result => result.data.id)).size, 1);
+assert.notEqual(concurrent[0].data.number, created.data.number);
 console.log('Ticket API integration passed:', id);

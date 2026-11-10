@@ -19,11 +19,12 @@ docs/                    仓库治理与部署步骤
 infra/compose/           独立开发测试 Compose（应用与数据服务）
 apps/                    web、api、worker
 packages/                contracts；后续 ui
-db/migrations/           后续数据库迁移
-tests/e2e/               后续端到端测试
+db/migrations/           工单核心初始化迁移
+db/seeds/                仅开发/CI 测试种子
+tests/integration/       CI 容器 API 集成测试
 ```
 
-目前 `apps/` 与 `packages/contracts` 已有 T01 骨架；数据库迁移、业务模块和 E2E 尚未交付。
+目前已有 T01 骨架和待 CI 验证的 T04 工单核心 API。前端业务页面、完整 SLA、审批和真实系统集成尚未交付；进度与限制见 `docs/t04-delivery.md`。
 
 ## 环境准备
 
