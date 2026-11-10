@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 const base='http://127.0.0.1:8088/api/v1';
 async function request(path,user='employee-1',method='GET',body){
-  const response=await fetch(base+path,{method,headers:{'Content-Type':'application/json','X-Dev-User':user,'Idempotency-Key':randomUUID()},body:body===undefined?undefined:JSON.stringify(body)});
+  const declared=body && (path==='/tickets'||path.endsWith('/actions')||path==='/voice/interpret') ? {contentClass:'GENERAL',...body}:body;
+  const response=await fetch(base+path,{method,headers:{'Content-Type':'application/json','X-Dev-User':user,'Idempotency-Key':randomUUID()},body:declared===undefined?undefined:JSON.stringify(declared)});
   return {status:response.status,data:await response.json()};
 }
 assert.equal((await request('/auth/config')).data.mode,'development');

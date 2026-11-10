@@ -10,6 +10,7 @@ test('employee and IT workbench complete a real ticket round trip',async({page})
   await page.getByRole('combobox',{name:'影响范围'}).selectOption('INDIVIDUAL');
   await page.getByRole('combobox',{name:'紧急程度'}).selectOption('MEDIUM');
   await page.getByRole('combobox',{name:'业务系统',exact:true}).selectOption('WMS');
+  await page.getByRole('checkbox',{name:'本次内容不含密码、密钥及安全事件证据'}).check();
   await page.getByRole('button',{name:'核对信息'}).click();await expect(page.getByRole('heading',{name:'确认报障信息'})).toBeVisible();
   await page.getByRole('button',{name:'确认提交'}).click();await expect(page.getByRole('heading',{name:'E2E WMS 登录异常'})).toBeVisible();
   const ticketHash=await page.evaluate(()=>location.hash);
@@ -19,17 +20,21 @@ test('employee and IT workbench complete a real ticket round trip',async({page})
   await page.getByRole('button',{name:/E2E WMS 登录异常/}).click();
   await page.getByRole('button',{name:'接单并回复',exact:true}).click();
   await page.getByRole('textbox',{name:'回复内容'}).fill('已接单，正在排查登录服务');
+  await page.getByRole('checkbox',{name:'本次内容不含密码、密钥及安全事件证据'}).check();
   await page.getByRole('button',{name:'接单并回复',exact:true}).last().click();
   await expect(page.getByRole('button',{name:'提交解决方案',exact:true})).toBeVisible();
   await page.getByRole('button',{name:'提交解决方案',exact:true}).click();
   await page.getByRole('textbox',{name:'解决说明'}).fill('已恢复登录服务');
   await page.getByRole('combobox',{name:'解决分类'}).selectOption({label:'故障恢复'});
   await page.getByRole('textbox',{name:'验证依据'}).fill('WMS 登录验证通过');
+  await page.getByRole('checkbox',{name:'本次内容不含密码、密钥及安全事件证据'}).check();
   await page.getByRole('button',{name:'提交解决方案',exact:true}).last().click();
   await expect(page.locator('.ticket-meta .status')).toHaveText('待确认');
   await page.getByRole('combobox',{name:'开发身份'}).selectOption('employee-1');
   await page.goto('/'+ticketHash);await expect(page.getByRole('heading',{name:'E2E WMS 登录异常'})).toBeVisible();
-  await page.getByRole('button',{name:'确认已解决',exact:true}).click();await page.getByRole('button',{name:'确认已解决',exact:true}).last().click();
+  await page.getByRole('button',{name:'确认已解决',exact:true}).click();
+  await page.getByRole('checkbox',{name:'本次内容不含密码、密钥及安全事件证据'}).check();
+  await page.getByRole('button',{name:'确认已解决',exact:true}).last().click();
   await expect(page.locator('.ticket-meta .status')).toHaveText('已关闭');
   await page.setViewportSize({width:390,height:844});await page.screenshot({path:'test-results/ticket-mobile.png',fullPage:true});
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
@@ -38,7 +43,26 @@ test('employee and IT workbench complete a real ticket round trip',async({page})
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
   await page.getByRole('button',{name:'提交报障',exact:true}).click();await page.getByRole('button',{name:'语音输入',exact:true}).click();
   await page.getByRole('textbox',{name:'问题描述',exact:true}).fill('ERP 报错无法打开采购订单');
+  await page.getByRole('dialog').getByRole('checkbox',{name:'本次内容不含密码、密钥及安全事件证据'}).check();
   await page.getByRole('button',{name:'整理为草稿'}).click();await expect(page.getByRole('textbox',{name:'问题标题'})).toHaveValue('ERP 报错无法打开采购订单');
   await page.screenshot({path:'test-results/intake-mobile.png',fullPage:true});
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+});
+
+test('security contact and rejected text remain usable on mobile without creating a draft',async({page})=>{
+  await page.setViewportSize({width:390,height:844});await page.goto('/');
+  await page.getByRole('button',{name:'提交报障',exact:true}).click();
+  await page.getByText('安全事件联络',{exact:true}).click();
+  await expect(page.getByText(/请通过公司现有安全应急电话/)).toBeVisible();
+  await page.getByRole('button',{name:'语音输入',exact:true}).click();
+  const dialog=page.getByRole('dialog');
+  await expect(dialog.getByRole('button',{name:'开始录音'})).toHaveCount(0);
+  await dialog.getByRole('textbox',{name:'问题描述',exact:true}).fill('疑似入侵，请协助排查');
+  await expect(dialog.getByRole('button',{name:'整理为草稿'})).toBeDisabled();
+  await dialog.getByRole('checkbox',{name:'本次内容不含密码、密钥及安全事件证据'}).check();
+  await dialog.getByRole('button',{name:'整理为草稿'}).click();
+  await expect(dialog.getByRole('alert')).toContainText('此内容不能提交到普通工单或语音草稿');
+  await expect(dialog).toBeVisible();
+  await page.screenshot({path:'test-results/security-intake-mobile.png',fullPage:true});
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
 });

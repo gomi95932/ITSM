@@ -6,6 +6,7 @@ import { transition } from './ticket-state.js';
 import { Database } from './database.service.js';
 import { AuthService, type AuthHeaders, type Identity } from './auth.service.js';
 import { SlaService } from './sla.service.js';
+import { IntakePolicyService } from './intake-policy.service.js';
 
 type TicketRow = {
   id: string; number: string; requester_id: string; owner_group_id: string;
@@ -15,8 +16,8 @@ type TicketRow = {
 };
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const keys = new Set(['serviceCode', 'formVersion', 'subject', 'description', 'impact', 'urgency', 'fields', 'draftId']);
-const actionKeys = new Set(['action', 'expectedVersion', 'comment', 'reason', 'dueAt', 'vendorReference', 'vendorOwner', 'resolutionCategory', 'evidence', 'targetGroupId']);
+const keys = new Set(['contentClass', 'serviceCode', 'formVersion', 'subject', 'description', 'impact', 'urgency', 'fields', 'draftId']);
+const actionKeys = new Set(['contentClass', 'action', 'expectedVersion', 'comment', 'reason', 'dueAt', 'vendorReference', 'vendorOwner', 'resolutionCategory', 'evidence', 'targetGroupId']);
 
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
@@ -58,7 +59,7 @@ function priority(impact: string, urgency: string): string {
 
 @Injectable()
 export class TicketsService {
-  constructor(private readonly db: Database, private readonly auth: AuthService, private readonly sla: SlaService) {}
+  constructor(private readonly db: Database, private readonly auth: AuthService, private readonly sla: SlaService, private readonly intake: IntakePolicyService) {}
   private get pool() { return this.db.pool; }
   identity(headers: AuthHeaders, write = false) { return this.auth.identity(headers, write); }
 
@@ -93,6 +94,7 @@ export class TicketsService {
 
   async create(actor: Identity, body: unknown, key: string, requestId: string): Promise<TicketReceipt> {
     validateBody(body);
+    await this.intake.requireGeneral(actor.id, body as unknown as Record<string, unknown>, 'ticket-create');
     return this.transaction(async client => {
       await this.requireActive(client, actor);
       const previous = await this.claim(client, actor.id, 'create', key, body);
@@ -178,6 +180,7 @@ export class TicketsService {
 
   async action(actor: Identity, id: string, body: unknown, key: string, requestId: string): Promise<TicketReceipt> {
     validateAction(body);
+    await this.intake.requireGeneral(actor.id, body as unknown as Record<string, unknown>, 'ticket-action');
     return this.transaction(async client => {
       await this.requireActive(client, actor);
       const ticket = await this.accessible(client, actor, id, true);

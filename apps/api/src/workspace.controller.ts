@@ -1,12 +1,17 @@
 import { BadRequestException, Body, Controller, Get, Headers, HttpCode, NotFoundException, Param, Post, ServiceUnavailableException } from '@nestjs/common';
 import { AuthService } from './auth.service.js';
 import { Database } from './database.service.js';
+import { IntakePolicyService } from './intake-policy.service.js';
 type H = Record<string,string | undefined>;
 const auth = (h: H) => ({ devUser: h['x-dev-user'], cookie: h.cookie, csrf: h['x-csrf-token'] });
 
 @Controller()
 export class WorkspaceController {
-  constructor(private readonly db: Database, private readonly identity: AuthService) {}
+  constructor(private readonly db: Database, private readonly identity: AuthService, private readonly intake: IntakePolicyService) {}
+  @Get('intake-policy') async intakePolicy(@Headers() h: H) {
+    await this.identity.identity(auth(h));
+    return this.intake.config();
+  }
   @Get('catalog') async catalog(@Headers() h: H) {
     const actor = await this.identity.identity(auth(h));
     const result = await this.db.pool.query(`SELECT * FROM service_catalog WHERE published=true AND (visible_groups='[]'::jsonb OR EXISTS
@@ -38,21 +43,12 @@ export class WorkspaceController {
   }
   @Get('voice/config') async voiceConfig(@Headers() h: H) {
     await this.identity.identity(auth(h));
-    return { recordingEnabled: process.env.ASR_DATA_APPROVED === 'true' && !!process.env.ITSM_ASR_URL, maxSeconds:30 };
+    return { recordingEnabled: false, maxSeconds:30, reason:'SECURITY_REVIEW_REQUIRED' };
   }
   @Post('voice/transcribe') @HttpCode(200) async transcribe(@Headers() h: H,@Body() body: unknown) {
     const actor = await this.identity.identity(auth(h),true); await this.rateLimit(actor.id);
-    if (process.env.ASR_DATA_APPROVED !== 'true' || !process.env.ITSM_ASR_URL) throw new ServiceUnavailableException({ code:'ASR_UNAVAILABLE' });
-    const b = body as Record<string,unknown>;
-    if (!b || Object.keys(b).some(k => !['audio','mimeType','consent'].includes(k)) || b.consent !== true || typeof b.audio !== 'string'
-      || b.audio.length > 2700000 || !/^[A-Za-z0-9+/]*={0,2}$/.test(b.audio) || !['audio/webm','audio/ogg','audio/mp4'].includes(String(b.mimeType))) throw new BadRequestException({ code:'INVALID_AUDIO' });
-    try {
-      const response = await fetch(process.env.ITSM_ASR_URL, { method:'POST',headers:{ 'Content-Type':'application/json',...(process.env.ITSM_ASR_TOKEN ? { Authorization:`Bearer ${process.env.ITSM_ASR_TOKEN}` } : {}) },
-        body:JSON.stringify({ audio:b.audio,mimeType:b.mimeType }),signal:AbortSignal.timeout(20000) });
-      const data = await response.json() as { text?:string };
-      if (!response.ok || typeof data.text !== 'string' || data.text.length > 4000 || !data.text.trim()) throw new Error('ASR_FAILED');
-      return { text:data.text };
-    } catch { throw new ServiceUnavailableException({ code:'ASR_UNAVAILABLE' }); }
+    // Raw audio cannot be screened before external transcription. Keep this ingress closed.
+    throw new ServiceUnavailableException({ code:'ASR_UNAVAILABLE' });
   }
   private async rateLimit(employee: string) {
     const result = await this.db.pool.query(`INSERT INTO intake_rate_limits(employee_id,bucket,count) VALUES ($1,date_trunc('minute',now()),1)
@@ -61,8 +57,9 @@ export class WorkspaceController {
   }
   @Post('voice/interpret') @HttpCode(200) async interpret(@Headers() h: H,@Body() body: unknown) {
     const actor = await this.identity.identity(auth(h),true); await this.rateLimit(actor.id);
-    const b = body as { text?:unknown };
-    if (!b || Object.keys(b).join(',') !== 'text' || typeof b.text !== 'string' || !b.text.trim() || b.text.length > 4000) throw new BadRequestException({ code:'INVALID_TRANSCRIPT' });
+    const b = body as Record<string,unknown>;
+    if (!b || typeof b !== 'object' || Array.isArray(b) || Object.keys(b).some(k => !['text','contentClass'].includes(k)) || typeof b.text !== 'string' || !b.text.trim() || b.text.length > 4000) throw new BadRequestException({ code:'INVALID_TRANSCRIPT' });
+    await this.intake.requireGeneral(actor.id, b, 'voice-interpret');
     // Local extraction never executes tools or sends transcripts to an external model.
     const text = b.text.trim(), system = /\b(ERP|WMS|MES|SRM)\b/i.exec(text)?.[1]?.toUpperCase();
     const requested = /申请|开通|授权|权限|批准/.test(text);

@@ -6,7 +6,7 @@ async function request(path, user, method = 'GET', body, key) {
   const response = await fetch(base + path, {
     method,
     headers: { 'content-type': 'application/json', 'x-dev-user': user, ...(key ? { 'idempotency-key': key } : {}) },
-    body: body === undefined ? undefined : JSON.stringify(body),
+    body: body === undefined ? undefined : JSON.stringify({ contentClass:'GENERAL', ...body }),
   });
   return { status: response.status, data: await response.json() };
 }

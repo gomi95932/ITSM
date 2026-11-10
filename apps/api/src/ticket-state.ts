@@ -3,7 +3,7 @@ import type { TicketActionInput, TicketStatus } from '@itsm/contracts';
 
 export type ActorRole = 'requester' | 'agent';
 
-export function transition(status: TicketStatus, role: ActorRole, input: TicketActionInput): TicketStatus {
+export function transition(status: TicketStatus, role: ActorRole, input: Omit<TicketActionInput, 'contentClass'>): TicketStatus {
   const { action } = input;
   const agent = role === 'agent';
   const allowed: Partial<Record<TicketStatus, Partial<Record<string, TicketStatus>>>> = agent

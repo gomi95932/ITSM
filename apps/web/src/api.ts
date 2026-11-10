@@ -22,6 +22,8 @@ export async function api<T>(path: string,options: { method?: string; body?: unk
   return data as T;
 }
 export const messages: Record<string,string> = {
+  CONTENT_DECLARATION_REQUIRED:'请确认本次内容不含密码、密钥及安全事件证据。',
+  SECURITY_CHANNEL_REQUIRED:'此内容不能提交到普通工单或语音草稿，请使用安全事件联络渠道；请勿粘贴密码、密钥或证据。',
   LOGIN_REQUIRED:'登录已失效，请重新进入应用。',EMPLOYEE_DISABLED:'账号已停用，请联系服务台。',CSRF_FAILED:'会话校验失败，请重新登录。',
   VERSION_CONFLICT:'工单已由其他人更新，已为你刷新，请确认后重试。',FORM_VERSION_CONFLICT:'服务表单已更新，请重新选择服务。',
   REQUEST_APPROVAL_POLICY_NOT_CONFIGURED:'该服务尚未开放审批，请联系服务台。',DRAFT_EXPIRED:'草稿已过期，请重新整理或直接填写表单。',

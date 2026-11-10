@@ -16,6 +16,7 @@ export type Urgency = 'HIGH' | 'MEDIUM' | 'LOW';
 export type Priority = 'P1' | 'P2' | 'P3' | 'P4';
 
 export interface CreateTicketInput {
+  contentClass: 'GENERAL';
   serviceCode: string;
   formVersion: number;
   subject: string;
@@ -27,6 +28,7 @@ export interface CreateTicketInput {
 }
 
 export interface TicketActionInput {
+  contentClass: 'GENERAL';
   action: TicketAction;
   expectedVersion: number;
   comment?: string;
