@@ -25,6 +25,15 @@
 - New Playwright flow covers requester/agent denial, pre-confirmation claim, independent supervisor downgrade and desktop/mobile screenshots and overflow checks.
 - Execution results must be appended after actual remote CI observation. Local Mac remains code-only; no app builds, tests, DB or containers run locally.
 
+## Verification Evidence
+
+- Feature commit: `29d33d995117cf7a056e8754a47a5cf98eac7c68`. Application CI #30/#31 failed compilation because `IntakeChannel` omitted `priority-review`; these runs are not passing evidence.
+- Fix and tested code: `5b9752467e6a8c580ef940b1806569761dfa9ed1`. Observed on GitHub: [push Application CI #32](https://github.com/gomi95932/ITSM/actions/runs/42765967916) succeeded with build-test 4m9s; [PR Application CI #33](https://github.com/gomi95932/ITSM/actions/runs/42765973234) succeeded with build-test 3m17s.
+- Remote checks passed: build, typecheck, unit tests, isolated ticket/workspace/intake checks, migrations and backup recovery, personal-ownership regression, the new priority-review integration suite, and desktop/mobile Playwright flows. The priority suite verified durable alerts before review, response before review, scoped independent reviewers, concurrent/idempotent review, frozen SLA, rerouting, overdue reminders and revocation.
+- Downloaded browser artifact: `/Users/robinzhu/Downloads/workspace-browser-results-4` (12 PNGs). Visually inspected `p1-review-desktop.png`, `p1-review-mobile.png` and `p1-reviewed-mobile.png`: review controls fit their sections; reviewed mobile retains the owner and original P1 SLA after downgrade; fake notification delivery remains visibly labelled. Existing mobile navigation text clipping and raw reviewer IDs remain UI follow-ups.
+- GitHub displayed artifact ID `13739259248` and digest `sha256:29690c62189f496945d5ae0d8ea99f15a83a3c4092c04ac11b94990752b7ea2c`; the digest was not independently recomputed locally.
+- No local application build, test, database or container was run. Notifications used fake mode, not real DingTalk delivery. Feature-branch image publishing and release-bundle jobs were skipped. PR remains unmerged; this candidate was not deployed to `10.10.81.125`. Evidence applies to code `5b97524`; subsequent documentation-only commits do not establish new runtime validation or business acceptance.
+
 ## Remaining Before Acceptance
 
 1. Business appoints actual reviewers, deputies, duty schedule, review threshold and escalation chain. No 7x24 coverage claim without staffing.
