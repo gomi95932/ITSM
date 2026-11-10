@@ -11,8 +11,8 @@ async function request(path,user=requester,body,key=randomUUID()){
 async function sql(query){
   return new Promise((resolve,reject)=>{
     const child=spawn('docker',['compose','--project-name','itsm-dev','--env-file',process.env.ITSM_CI_ENV,'-f','infra/compose/compose.yaml','exec','-T','db','sh','-ec','PGPASSWORD="$POSTGRES_PASSWORD" exec psql -v ON_ERROR_STOP=1 -U itsm -d itsm -Atc "$1"','sh',query],{stdio:['ignore','pipe','pipe']});
-    let text='';child.stdout.on('data',chunk=>{text+=chunk;});child.stderr.resume();child.on('error',reject);
-    child.on('close',code=>code===0?resolve(text.trim()):reject(new Error('TRIAGE_FIXTURE_SQL_FAILED')));
+    let text='',error='';child.stdout.on('data',chunk=>{text+=chunk;});child.stderr.on('data',chunk=>{error+=chunk;});child.on('error',reject);
+    child.on('close',code=>code===0?resolve(text.trim()):reject(new Error(`TRIAGE_FIXTURE_SQL_FAILED: ${error.slice(0,1000)}`)));
   });
 }
 const quote=value=>`'${String(value).replaceAll("'","''")}'`;
