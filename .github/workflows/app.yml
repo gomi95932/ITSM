@@ -28,6 +28,16 @@ jobs:
         run: |
           curl --fail --silent --show-error http://127.0.0.1:8088/ -o /dev/null
           curl --fail --silent --show-error http://127.0.0.1:8088/api/v1/health | grep -q '"status":"ok"'
+      - name: Exercise ticket API and database audit invariants
+        run: |
+          node tests/integration/tickets.mjs
+          docker compose --env-file infra/compose/.env.example -f infra/compose/compose.yaml exec -T db sh -ec '
+            export PGPASSWORD="$POSTGRES_PASSWORD"
+            psql -U itsm -d itsm -tAc "SELECT count(*) FROM tickets" | grep -q "^1$"
+            psql -U itsm -d itsm -tAc "SELECT count(*) FROM ticket_events" | grep -q "^4$"
+            psql -U itsm -d itsm -tAc "SELECT count(*) FROM audit_logs" | grep -q "^4$"
+            psql -U itsm -d itsm -tAc "SELECT count(*) FROM outbox_events" | grep -q "^4$"
+          '
       - name: Show containers on failure
         if: failure()
         run: docker compose --env-file infra/compose/.env.example -f infra/compose/compose.yaml ps -a

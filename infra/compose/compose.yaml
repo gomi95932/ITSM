@@ -20,9 +20,18 @@ services:
     build:
       context: ../..
       dockerfile: apps/api/Dockerfile
+    environment:
+      NODE_ENV: development
+      ENABLE_DEV_AUTH: "true"
+      DB_HOST: db
+      DB_NAME: itsm
+      DB_USER: itsm
+      DB_PASSWORD: ${ITSM_DB_PASSWORD:?Set ITSM_DB_PASSWORD in the private env file}
     depends_on:
       db:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     networks:
       - itsm_frontend
       - itsm_backend
@@ -63,6 +72,24 @@ services:
       timeout: 5s
       retries: 5
     restart: unless-stopped
+
+  migrate:
+    image: ${ITSM_POSTGRES_IMAGE:-postgres:16-alpine}
+    environment:
+      PGHOST: db
+      PGDATABASE: itsm
+      PGUSER: itsm
+      PGPASSWORD: ${ITSM_DB_PASSWORD:?Set ITSM_DB_PASSWORD in the private env file}
+    volumes:
+      - ../../db/migrations:/migrations:ro
+      - ../../db/seeds:/seeds:ro
+    command: ["sh", "-ec", "psql -v ON_ERROR_STOP=1 -f /migrations/001_ticket_core.sql && psql -v ON_ERROR_STOP=1 -f /seeds/dev.sql"]
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - itsm_backend
+    restart: "no"
 
   redis:
     image: ${ITSM_REDIS_IMAGE:-redis:7.4-alpine}

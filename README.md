@@ -1,6 +1,6 @@
 # ITSM
 
-公司内部 ITSM 系统的独立代码仓库。当前已具备可构建的 Vue/NestJS/Worker 骨架和健康检查，但业务工单尚未实现；不要将健康检查理解为工单功能可用。
+公司内部 ITSM 系统的独立代码仓库。T01 骨架与 T04 工单核心 API 正在开发中；其余流程及钉钉正式接入尚未完成。
 
 ## 工作边界
 
@@ -35,6 +35,8 @@ docker compose --env-file infra/compose/.env -f infra/compose/compose.yaml up -d
 docker compose --env-file infra/compose/.env -f infra/compose/compose.yaml ps
 ```
 
-这些命令启动数据库、Redis 和 T01 应用骨架；API `/api/v1/health` 仅检查进程，不检查数据库和业务可用性。安装 Docker、创建目录、迁移和备份须单独批准并验证。业务接入后要求版本化迁移、真实依赖就绪检查、镜像回退和恢复演练。详见 [开发环境运行手册](docs/development-deployment.md)。
+这份 Compose **仅适用于隔离开发/CI 环境**：`migrate` 执行 `db/migrations/001_ticket_core.sql` 并装载 `db/seeds/dev.sql` 的测试人员及 `INC-BIZ` 目录项。API 使用 `X-Dev-User: employee-1` / `agent-1` 模拟身份，仅在 `NODE_ENV` 非 production 且 `ENABLE_DEV_AUTH=true` 时启用；生产模式硬性拒绝。不能把测试数据或模拟身份带到正式环境。`/api/v1/health` 仅检查进程，不检查数据库和业务可用性。安装 Docker、创建目录、备份与部署须单独批准并验证。详见 [开发环境运行手册](docs/development-deployment.md)。
+
+开发测试 API：`POST /api/v1/tickets` 须带唯一 `Idempotency-Key`（8–128 位），正文参见蓝图第 7 章；`GET /api/v1/tickets?mine=true`、`GET /api/v1/tickets/{id}`；`POST /api/v1/tickets/{id}/actions` 同样须带幂等键及 `expectedVersion`。普通员工只看本人，支持人员按组可见；工单写入、状态事件、审计和待投递 outbox 在同一数据库事务。**outbox 尚未有真实投递器，OA/钉钉/SLA/附件/正式身份暂不可用。** GitHub CI 在隔离 Compose 中运行 `tests/integration/tickets.mjs` 并检查数据库记录数。本机不运行服务和测试数据库。
 
 GitHub 分支、PR、镜像发布和开发机部署规则见 [docs/github-cicd.md](docs/github-cicd.md)。
