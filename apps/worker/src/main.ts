@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { writeFile } from 'node:fs/promises';
 import { Pool, type PoolClient } from 'pg';
-import { serviceMinutes } from '@itsm/contracts';
+import { P1_REVIEW_REMINDER_MINUTES, serviceMinutes } from '@itsm/contracts';
 
 const db = new Pool({ host:process.env.DB_HOST ?? 'db',database:process.env.DB_NAME ?? 'itsm',user:process.env.DB_USER ?? 'itsm',password:process.env.DB_PASSWORD,
   connectionTimeoutMillis:5000,statement_timeout:30000 });
@@ -36,12 +36,14 @@ async function provider(path:string,body?:object):Promise<any> {
 
 async function expand() {
   await transaction(async client => {
-    const result = await client.query('SELECT id,ticket_id FROM outbox_events WHERE expanded_at IS NULL ORDER BY created_at LIMIT 20 FOR UPDATE SKIP LOCKED');
+    const result = await client.query("SELECT id,ticket_id,kind FROM outbox_events WHERE expanded_at IS NULL ORDER BY (kind='P1_ALERT') DESC,created_at LIMIT 20 FOR UPDATE SKIP LOCKED");
     for (const event of result.rows) {
       await client.query(`INSERT INTO notification_deliveries(outbox_id,employee_id)
         SELECT $1,e.id FROM employees e JOIN tickets t ON t.id=$2 WHERE e.active AND (e.id=t.requester_id OR
           (e.id=t.pending_assignee_id AND EXISTS (SELECT 1 FROM group_memberships m WHERE m.employee_id=e.id AND m.group_id=t.pending_group_id)) OR EXISTS
-          (SELECT 1 FROM group_memberships m WHERE m.employee_id=e.id AND m.group_id=t.owner_group_id)) ON CONFLICT DO NOTHING`,[event.id,event.ticket_id]);
+          (SELECT 1 FROM group_memberships m WHERE m.employee_id=e.id AND m.group_id=t.owner_group_id) OR
+          ($3='P1_ALERT' AND EXISTS(SELECT 1 FROM priority_reviewers r WHERE r.employee_id=e.id AND r.group_id=t.owner_group_id)))
+        ON CONFLICT DO NOTHING`,[event.id,event.ticket_id,event.kind]);
       await client.query("UPDATE outbox_events SET expanded_at=now(),state='EXPANDED' WHERE id=$1",[event.id]);
     }
   });
@@ -52,10 +54,11 @@ async function deliver() {
   await transaction(async client => {
     const result = await client.query(`SELECT d.*,t.id AS ticket_id,t.number,t.requester_id,t.owner_group_id,t.pending_assignee_id,t.pending_group_id,e.action,e.detail,e.to_status,e.id AS event_id
       FROM notification_deliveries d JOIN outbox_events o ON o.id=d.outbox_id JOIN ticket_events e ON e.id=o.event_id JOIN tickets t ON t.id=o.ticket_id
-      WHERE d.state IN ('PENDING','SENDING') AND d.next_at<=now() ORDER BY d.next_at,d.id LIMIT 1 FOR UPDATE OF d SKIP LOCKED`);
+      WHERE d.state IN ('PENDING','SENDING') AND d.next_at<=now() ORDER BY (o.kind='P1_ALERT') DESC,d.next_at,d.id LIMIT 1 FOR UPDATE OF d SKIP LOCKED`);
     const row = result.rows[0]; if (!row) return;
     const recipient = await client.query(`SELECT e.active,l.ding_user_id,EXISTS(SELECT 1 FROM group_memberships WHERE employee_id=e.id AND
-      (group_id=$3 OR (e.id=$4 AND group_id=$5))) AS member
+      (group_id=$3 OR (e.id=$4 AND group_id=$5))) OR EXISTS
+      (SELECT 1 FROM priority_reviewers r WHERE r.employee_id=e.id AND r.group_id=$3) AS member
       FROM employees e LEFT JOIN identity_links l ON l.employee_id=e.id AND l.corp_id=$2 WHERE e.id=$1`,[row.employee_id,process.env.DINGTALK_CORP_ID ?? '',row.owner_group_id,row.pending_assignee_id,row.pending_group_id]);
     const user = recipient.rows[0];
     if (!user?.active || (row.employee_id !== row.requester_id && !user.member)) {
@@ -80,7 +83,8 @@ async function deliver() {
         base.hash = `/tickets/${row.ticket_id}`;
         const reply = ['ACCEPT','ACCEPT_HANDOVER','REQUEST_INFO','RESOLVE'].includes(row.action) ? String(row.detail.comment ?? '').slice(0,500) : '';
         const data = await provider('asyncsend_v2',{ agent_id:process.env.DINGTALK_AGENT_ID,userid_list:user.ding_user_id,to_all_user:false,
-          msg:{ msgtype:'link',link:{ title:`IT 服务台 · ${row.number}`,text:`${row.to_status}${reply ? `\n${reply}` : ''}`,messageUrl:base.toString(),picUrl:'' } } });
+          msg:{ msgtype:'link',link:{ title:`${row.action.startsWith('P1_') ? 'P1 候选 · ' : 'IT 服务台 · '}${row.number}`,
+            text:row.action.startsWith('P1_') ? `${row.action==='P1_REVIEW_OVERDUE' ? '主管确认逾期，请立即跟进。' : '请立即响应，主管确认中。'}工单 ${row.number}` : `${row.to_status}${reply ? `\n${reply}` : ''}`,messageUrl:base.toString(),picUrl:'' } } });
         if (data.task_id === undefined) throw new Error('TASK_NOT_RETURNED');
         await client.query("UPDATE notification_deliveries SET state='SENDING',provider_task_id=$2,attempts=0,next_at=now()+interval '5 seconds',updated_at=now() WHERE id=$1",[row.id,String(data.task_id)]);
       }
@@ -98,7 +102,26 @@ async function record(client:PoolClient,row:any,action:string,detail:object,from
   await client.query('INSERT INTO ticket_events(id,ticket_id,actor_id,action,from_status,to_status,detail,request_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)',[event,row.id,'system:scheduler',action,from,to,JSON.stringify(detail),request]);
   const ownership=(value:any)=>({ ownerGroupId:value.owner_group_id,assigneeId:value.assignee_id,pendingGroupId:value.pending_group_id,pendingAssigneeId:value.pending_assignee_id });
   await client.query('INSERT INTO audit_logs(ticket_id,event_id,actor_id,request_id,action,before_value,after_value) VALUES ($1,$2,$3,$4,$5,$6,$7)',[row.id,event,'system:scheduler',request,action,JSON.stringify({ status:from,...(previous ? ownership(previous) : {}) }),JSON.stringify({ status:to,version:row.version,...ownership(row) })]);
-  await client.query('INSERT INTO outbox_events(ticket_id,event_id,kind,payload) VALUES ($1,$2,$3,$4)',[row.id,event,'TICKET_CHANGED',JSON.stringify({ ticketId:row.id,eventId:event })]);
+  await client.query('INSERT INTO outbox_events(ticket_id,event_id,kind,payload) VALUES ($1,$2,$3,$4)',[row.id,event,action.startsWith('P1_') ? 'P1_ALERT' : 'TICKET_CHANGED',JSON.stringify({ ticketId:row.id,eventId:event })]);
+}
+
+async function priorityReviewTimers() {
+  await transaction(async client=>{
+    const rows=await client.query(`SELECT t.*,now() AS clock FROM tickets t WHERE priority_review_state='PENDING'
+      AND status NOT IN ('CLOSED','CANCELLED','REJECTED') AND (NOT EXISTS
+        (SELECT 1 FROM priority_review_signals WHERE ticket_id=t.id AND kind='CANDIDATE') OR
+        (priority_candidate_at<=now()-($1 * interval '1 minute') AND NOT EXISTS
+          (SELECT 1 FROM priority_review_signals WHERE ticket_id=t.id AND kind='OVERDUE')))
+      ORDER BY priority_candidate_at,t.id LIMIT 100 FOR UPDATE OF t SKIP LOCKED`,[P1_REVIEW_REMINDER_MINUTES]);
+    for (const row of rows.rows) {
+      const candidate=await client.query("INSERT INTO priority_review_signals(ticket_id,kind) VALUES ($1,'CANDIDATE') ON CONFLICT DO NOTHING RETURNING kind",[row.id]);
+      if (candidate.rowCount) await record(client,row,'P1_CANDIDATE',{ priority:'P1',reviewState:'PENDING',responseStarted:true },row.status,row.status);
+      if (row.clock.getTime()-row.priority_candidate_at.getTime()>=P1_REVIEW_REMINDER_MINUTES*60000) {
+        const overdue=await client.query("INSERT INTO priority_review_signals(ticket_id,kind) VALUES ($1,'OVERDUE') ON CONFLICT DO NOTHING RETURNING kind",[row.id]);
+        if (overdue.rowCount) await record(client,row,'P1_REVIEW_OVERDUE',{ reason:'PRIORITY_CONFIRMATION_OVERDUE',minutes:P1_REVIEW_REMINDER_MINUTES },row.status,row.status);
+      }
+    }
+  });
 }
 
 async function recoverOwnership() {
@@ -128,7 +151,7 @@ async function recoverOwnership() {
 
 async function timers() {
   await transaction(async client => {
-    const result = await client.query(`SELECT t.*,s.cycle,s.calendar_snapshot,s.started_at,s.responded_at,s.completed_at,s.paused_at,s.paused_minutes,s.response_target,s.resolution_target,now() AS clock
+    const result = await client.query(`SELECT t.*,s.cycle,s.priority AS sla_priority,s.calendar_snapshot,s.started_at,s.responded_at,s.completed_at,s.paused_at,s.paused_minutes,s.response_target,s.resolution_target,now() AS clock
       FROM tickets t JOIN sla_cycles s ON s.ticket_id=t.id AND s.cycle=(SELECT max(cycle) FROM sla_cycles WHERE ticket_id=t.id)
       WHERE t.status NOT IN ('CLOSED','CANCELLED','REJECTED') ORDER BY t.sla_checked_at NULLS FIRST,t.id LIMIT 100 FOR UPDATE OF t SKIP LOCKED`);
     for (const row of result.rows) {
@@ -140,9 +163,9 @@ async function timers() {
         continue;
       }
       const end = row.completed_at ?? row.clock;
-      const response = serviceMinutes(row.started_at,row.responded_at ?? end,row.calendar_snapshot,row.priority === 'P1');
-      const resolution = serviceMinutes(row.started_at,end,row.calendar_snapshot,row.priority === 'P1')-row.paused_minutes
-        -(row.paused_at ? serviceMinutes(row.paused_at,end,row.calendar_snapshot,row.priority === 'P1') : 0);
+      const response = serviceMinutes(row.started_at,row.responded_at ?? end,row.calendar_snapshot,row.sla_priority === 'P1');
+      const resolution = serviceMinutes(row.started_at,end,row.calendar_snapshot,row.sla_priority === 'P1')-row.paused_minutes
+        -(row.paused_at ? serviceMinutes(row.paused_at,end,row.calendar_snapshot,row.sla_priority === 'P1') : 0);
       for (const kind of [response > row.response_target ? 'RESPONSE_BREACH' : '',resolution > row.resolution_target ? 'RESOLUTION_BREACH' : ''].filter(Boolean)) {
         const signal = await client.query('INSERT INTO sla_signals(ticket_id,cycle,kind) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING RETURNING kind',[row.id,row.cycle,kind]);
         if (signal.rowCount) await record(client,row,'SLA_BREACH',{ cycle:row.cycle,kind },row.status,row.status);
@@ -157,7 +180,7 @@ async function timers() {
 let ticks = 0;
 async function tick() {
   try {
-    if (ticks++ % 15 === 0) { await recoverOwnership(); await timers(); }
+    if (ticks++ % 15 === 0) { await recoverOwnership(); await priorityReviewTimers(); await timers(); }
     await expand();
     for (let i=0;i<10 && !stopped;i++) await deliver();
     await writeFile('/tmp/itsm-worker-heartbeat', String(Date.now()), { mode:0o600 });

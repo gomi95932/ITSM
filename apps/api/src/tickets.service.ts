@@ -1,7 +1,7 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
 import { createHash, randomUUID } from 'node:crypto';
 import { type PoolClient } from 'pg';
-import { TICKET_ACTIONS, type CreateTicketInput, type TicketActionInput, type TicketReceipt, type TicketStatus } from '@itsm/contracts';
+import { P1_REVIEW_REMINDER_MINUTES, TICKET_ACTIONS, type CreateTicketInput, type PriorityReviewInput, type PriorityReviewState, type TicketActionInput, type TicketReceipt, type TicketStatus } from '@itsm/contracts';
 import { transition } from './ticket-state.js';
 import { Database } from './database.service.js';
 import { AuthService, type AuthHeaders, type Identity } from './auth.service.js';
@@ -16,6 +16,8 @@ type TicketRow = {
   priority: string; status: TicketStatus; version: number; created_at: Date; updated_at: Date;
   assignee_id: string | null; pending_group_id: string | null; pending_assignee_id: string | null;
   assignee_name?: string | null; pending_assignee_name?: string | null;
+  priority_review_state: PriorityReviewState; priority_candidate_at: Date | null;
+  priority_reviewed_at: Date | null; priority_reviewed_by: string | null; priority_review_reason: string | null;
 };
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -24,6 +26,7 @@ const actionKeys = new Set(['contentClass', 'action', 'expectedVersion', 'commen
 const names = `(SELECT display_name FROM employees WHERE id=t.assignee_id) AS assignee_name,
   (SELECT display_name FROM employees WHERE id=t.pending_assignee_id) AS pending_assignee_name`;
 const workAccess = `(owner_group_id IN (SELECT group_id FROM group_memberships WHERE employee_id=$1)
+  OR owner_group_id IN (SELECT group_id FROM priority_reviewers WHERE employee_id=$1)
   OR (pending_assignee_id=$1 AND pending_group_id IN (SELECT group_id FROM group_memberships WHERE employee_id=$1)))`;
 
 function canonical(value: unknown): string {
@@ -94,9 +97,9 @@ export class TicketsService {
     await client.query('INSERT INTO ticket_events(id,ticket_id,actor_id,action,from_status,to_status,detail,request_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)',
       [eventId, ticket.id, actor, action, before, ticket.status, JSON.stringify(detail), requestId]);
     await client.query('INSERT INTO audit_logs(ticket_id,event_id,actor_id,request_id,action,before_value,after_value) VALUES ($1,$2,$3,$4,$5,$6,$7)',
-      [ticket.id, eventId, actor, requestId, action, before ? JSON.stringify({ status: before, ...(previous ? this.receipt(previous) : {}) }) : null, JSON.stringify(this.receipt(ticket))]);
+      [ticket.id, eventId, actor, requestId, action, before ? JSON.stringify({ status: before, ...(previous ? this.auditValue(previous) : {}) }) : null, JSON.stringify(this.auditValue(ticket))]);
     await client.query('INSERT INTO outbox_events(ticket_id,event_id,kind,payload) VALUES ($1,$2,$3,$4)',
-      [ticket.id, eventId, 'TICKET_CHANGED', JSON.stringify({ ticketId: ticket.id, eventId })]);
+      [ticket.id, eventId, action.startsWith('P1_') ? 'P1_ALERT' : 'TICKET_CHANGED', JSON.stringify({ ticketId: ticket.id, eventId })]);
   }
 
   async create(actor: Identity, body: unknown, key: string, requestId: string): Promise<TicketReceipt> {
@@ -125,14 +128,18 @@ export class TicketsService {
       if (service.type !== 'INC') throw new ServiceUnavailableException({ code: 'REQUEST_APPROVAL_POLICY_NOT_CONFIGURED' });
       const numberResult = await client.query<{ n: string }>("SELECT nextval('ticket_number_seq')::text AS n");
       const number = `ITSM-${numberResult.rows[0].n.padStart(8, '0')}`;
-      const created = await client.query<TicketRow>(`INSERT INTO tickets(number,requester_id,owner_group_id,service_code,service_type,form_version,subject,description,fields,impact,urgency,priority,status)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'QUEUED') RETURNING *`,
+      const created = await client.query<TicketRow>(`INSERT INTO tickets(number,requester_id,owner_group_id,service_code,service_type,form_version,subject,description,fields,impact,urgency,priority,status,priority_review_state,priority_candidate_at)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'QUEUED',CASE WHEN $12='P1' THEN 'PENDING' ELSE 'NOT_REQUIRED' END,CASE WHEN $12='P1' THEN now() ELSE NULL END) RETURNING *`,
         [number, actor.id, service.group_id, body.serviceCode, service.type, body.formVersion, body.subject.trim(), body.description.trim(), JSON.stringify(body.fields), body.impact, body.urgency, priority(body.impact, body.urgency)]);
       const ticket = created.rows[0];
       if (body.draftId) await client.query('UPDATE voice_drafts SET ticket_id=$2 WHERE id=$1',[body.draftId,ticket.id]);
       await client.query('UPDATE tickets SET catalog_snapshot=$2 WHERE id=$1', [ticket.id,JSON.stringify({ code: body.serviceCode, name: service.name, formVersion: service.form_version, fields: service.field_schema })]);
       await this.sla.start(client,ticket.id,ticket.priority);
       await this.record(client, ticket, actor.id, 'SUBMIT_AND_ROUTE', null, { groupId: ticket.owner_group_id }, requestId);
+      if (ticket.priority_review_state === 'PENDING') {
+        await client.query("INSERT INTO priority_review_signals(ticket_id,kind) VALUES ($1,'CANDIDATE')",[ticket.id]);
+        await this.record(client,ticket,actor.id,'P1_CANDIDATE',ticket.status,{ priority:'P1',reviewState:'PENDING',responseStarted:true },requestId,ticket);
+      }
       const response = this.receipt(ticket);
       await client.query('UPDATE api_idempotency SET response=$4 WHERE actor_id=$1 AND scope=$2 AND key=$3', [actor.id, 'create', key, JSON.stringify(response)]);
       return response;
@@ -146,11 +153,18 @@ export class TicketsService {
       ...(row.pending_assignee_name !== undefined ? { pendingAssigneeName: row.pending_assignee_name } : {}) };
   }
 
+  private auditValue(row: TicketRow): object {
+    return { ...this.receipt(row),priority:row.priority,priorityReviewState:row.priority_review_state,
+      priorityCandidateAt:row.priority_candidate_at,priorityReviewedAt:row.priority_reviewed_at,
+      priorityReviewedBy:row.priority_reviewed_by,priorityReviewReason:row.priority_review_reason };
+  }
+
   private async accessible(client: PoolClient, actor: Identity, id: string, lock = false): Promise<TicketRow> {
     if (!uuid.test(id)) throw new NotFoundException();
     const result = await client.query<TicketRow>(`SELECT t.*,${names} FROM tickets t WHERE id=$1 AND (requester_id=$2 OR owner_group_id IN
       (SELECT group_id FROM group_memberships WHERE employee_id=$2) OR (pending_assignee_id=$2 AND pending_group_id IN
-      (SELECT group_id FROM group_memberships WHERE employee_id=$2))) ${lock ? 'FOR UPDATE OF t' : ''}`,
+      (SELECT group_id FROM group_memberships WHERE employee_id=$2)) OR owner_group_id IN
+      (SELECT group_id FROM priority_reviewers WHERE employee_id=$2)) ${lock ? 'FOR UPDATE OF t' : ''}`,
       [id, actor.id]);
     if (!result.rowCount) throw new NotFoundException();
     return result.rows[0];
@@ -159,7 +173,7 @@ export class TicketsService {
   async list(actor: Identity, mine: boolean, status: string | undefined, page: number, size: number): Promise<object> {
     if (!Number.isInteger(page) || page < 1 || !Number.isInteger(size) || size < 1 || size > 100) throw new BadRequestException();
     if (status && !['NEW','QUEUED','IN_PROGRESS','WAITING_APPROVAL','WAITING_USER','WAITING_VENDOR','PENDING_CONFIRMATION','CLOSED','CANCELLED','REJECTED'].includes(status)) throw new BadRequestException();
-    if (!mine && !actor.groups.length) throw new NotFoundException();
+    if (!mine && !actor.groups.length && !actor.priorityReviewGroups?.length) throw new NotFoundException();
     const result = await this.pool.query<TicketRow>(`SELECT t.*,${names} FROM tickets t WHERE ${mine ? 'requester_id=$1' : workAccess}
       AND ($2::text IS NULL OR status=$2) ORDER BY created_at DESC, id DESC LIMIT $3 OFFSET $4`,
       [actor.id, status ?? null, size, (page - 1) * size]);
@@ -172,7 +186,9 @@ export class TicketsService {
   private publicTicket(row: TicketRow): object {
     return { ...this.receipt(row), requesterId: row.requester_id, serviceCode: row.service_code, serviceType: row.service_type, formVersion: row.form_version,
       subject: row.subject, description: row.description, fields: row.fields, impact: row.impact, urgency: row.urgency,
-      priority: row.priority, createdAt: row.created_at, updatedAt: row.updated_at };
+      priority: row.priority, priorityReviewState:row.priority_review_state,priorityCandidateAt:row.priority_candidate_at,
+      priorityReviewedAt:row.priority_reviewed_at,priorityReviewedBy:row.priority_reviewed_by,priorityReviewReason:row.priority_review_reason,
+      createdAt: row.created_at, updatedAt: row.updated_at };
   }
 
   async get(actor: Identity, id: string): Promise<object> {
@@ -181,12 +197,52 @@ export class TicketsService {
       const ticket = await this.accessible(client, actor, id);
       const events = await client.query('SELECT action, from_status AS "fromStatus", to_status AS "toStatus", detail, created_at AS "createdAt" FROM ticket_events WHERE ticket_id=$1 ORDER BY created_at,id', [id]);
       const membership = await client.query('SELECT 1 FROM group_memberships WHERE employee_id=$1 AND group_id=$2', [actor.id, ticket.owner_group_id]);
-      const groupMember = !!membership.rowCount || ticket.pending_assignee_id === actor.id;
-      return { ...this.publicTicket(ticket), sla: await this.sla.view(client,id), events: groupMember ? events.rows : events.rows.map(event => ({
+      const reviewer = await client.query('SELECT 1 FROM priority_reviewers WHERE employee_id=$1 AND group_id=$2',[actor.id,ticket.owner_group_id]);
+      const groupMember = !!membership.rowCount || ticket.pending_assignee_id === actor.id || !!reviewer.rowCount;
+      const alerts = groupMember && ticket.priority_candidate_at ? await client.query(`SELECT d.state,count(*)::integer AS count
+        FROM notification_deliveries d JOIN outbox_events o ON o.id=d.outbox_id WHERE o.ticket_id=$1 AND o.kind='P1_ALERT' GROUP BY d.state`,[id]) : null;
+      const available = groupMember && ticket.priority_candidate_at ? await client.query(`SELECT 1 FROM priority_reviewers r
+        JOIN employees e ON e.id=r.employee_id WHERE r.group_id=$1 AND e.active AND e.id<>$2 LIMIT 1`,[ticket.owner_group_id,ticket.requester_id]) : null;
+      return { ...this.publicTicket(ticket),canReviewPriority:!!reviewer.rowCount && actor.id!==ticket.requester_id
+          && ticket.priority_review_state==='PENDING' && !['CLOSED','CANCELLED','REJECTED'].includes(ticket.status),
+        ...(alerts ? { priorityAlert:{ reviewersAvailable:!!available?.rowCount,
+          overdue:ticket.priority_review_state==='PENDING' && !!ticket.priority_candidate_at && Date.now()-ticket.priority_candidate_at.getTime()>=P1_REVIEW_REMINDER_MINUTES*60000,
+          notificationMode:process.env.NOTIFICATION_MODE ?? 'disabled',deliveries:Object.fromEntries(alerts.rows.map(r=>[r.state,r.count])) } } : {}),
+        sla: await this.sla.view(client,id), events: groupMember ? events.rows : events.rows.map(event => ({
         action: event.action, fromStatus: event.fromStatus, toStatus: event.toStatus,
         detail: { comment: event.detail?.comment, reason: event.detail?.reason }, createdAt: event.createdAt,
       })) };
     } finally { client.release(); }
+  }
+
+  async reviewPriority(actor: Identity,id: string,body: unknown,key: string,requestId: string): Promise<TicketReceipt> {
+    const input=body as PriorityReviewInput;
+    if (!input || typeof input!=='object' || Array.isArray(input)
+      || Object.keys(input).some(k=>!['contentClass','expectedVersion','priority','reason'].includes(k))
+      || !Number.isInteger(input.expectedVersion) || input.expectedVersion<1
+      || !['P1','P2','P3','P4'].includes(input.priority) || typeof input.reason!=='string' || !input.reason.trim() || input.reason.length>2000)
+      throw new BadRequestException({ code:'INVALID_PRIORITY_REVIEW' });
+    await this.intake.requireGeneral(actor.id,input as unknown as Record<string,unknown>,'priority-review');
+    return this.transaction(async client=>{
+      await this.requireActive(client,actor);
+      const ticket=await this.accessible(client,actor,id,true);
+      const reviewer=await client.query('SELECT 1 FROM priority_reviewers WHERE employee_id=$1 AND group_id=$2 FOR SHARE',[actor.id,ticket.owner_group_id]);
+      if (!reviewer.rowCount || actor.id===ticket.requester_id) throw new ForbiddenException({ code:'PRIORITY_REVIEWER_REQUIRED' });
+      const previous=await this.claim(client,actor.id,`priority-review:${id}`,key,input);
+      if (previous) return previous as TicketReceipt;
+      if (ticket.version!==input.expectedVersion) throw new ConflictException({ code:'VERSION_CONFLICT' });
+      if (ticket.priority_review_state!=='PENDING' || ['CLOSED','CANCELLED','REJECTED'].includes(ticket.status))
+        throw new ConflictException({ code:'PRIORITY_REVIEW_NOT_PENDING' });
+      // The active SLA snapshot remains unchanged, including its original P1 clock and breach history.
+      const updated=await client.query<TicketRow>(`UPDATE tickets SET priority=$2,priority_review_state=$3,priority_reviewed_by=$4,
+        priority_reviewed_at=now(),priority_review_reason=$5,version=version+1 WHERE id=$1 RETURNING *`,
+        [id,input.priority,input.priority==='P1' ? 'CONFIRMED' : 'ADJUSTED',actor.id,input.reason.trim()]);
+      await this.record(client,updated.rows[0],actor.id,'PRIORITY_REVIEWED',ticket.status,
+        { reason:input.reason.trim(),oldPriority:ticket.priority,priority:input.priority,activeSlaPolicy:'PRESERVE_SNAPSHOT' },requestId,ticket);
+      const response=this.receipt(updated.rows[0]);
+      await client.query('UPDATE api_idempotency SET response=$4 WHERE actor_id=$1 AND scope=$2 AND key=$3',[actor.id,`priority-review:${id}`,key,JSON.stringify(response)]);
+      return response;
+    });
   }
 
   async action(actor: Identity, id: string, body: unknown, key: string, requestId: string): Promise<TicketReceipt> {
@@ -229,6 +285,8 @@ export class TicketsService {
         { comment: body.comment, reason: body.reason, dueAt: body.dueAt, vendorReference: body.vendorReference, vendorOwner: body.vendorOwner, resolutionCategory: body.resolutionCategory, evidence: body.evidence,
           ...(body.action === 'REASSIGN' || body.action.endsWith('_HANDOVER') ? { oldGroupId: ticket.owner_group_id, oldAssigneeId: ticket.assignee_id,
             targetGroupId: body.targetGroupId ?? ticket.pending_group_id, targetAssigneeId: body.targetAssigneeId ?? ticket.pending_assignee_id } : {}) }, requestId, ticket);
+      if (body.action==='ACCEPT_HANDOVER' && group!==ticket.owner_group_id && ticket.priority_review_state==='PENDING')
+        await this.record(client,updated.rows[0],actor.id,'P1_REVIEW_ROUTED',next,{ oldGroupId:ticket.owner_group_id,targetGroupId:group },requestId,ticket);
       const response = this.receipt(updated.rows[0]);
       await client.query('UPDATE api_idempotency SET response=$4 WHERE actor_id=$1 AND scope=$2 AND key=$3', [actor.id, `action:${id}`, key, JSON.stringify(response)]);
       return response;

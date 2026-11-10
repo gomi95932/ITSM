@@ -14,6 +14,11 @@ export type TicketType = 'INC' | 'REQ';
 export type Impact = 'COMPANY' | 'DEPARTMENT' | 'INDIVIDUAL';
 export type Urgency = 'HIGH' | 'MEDIUM' | 'LOW';
 export type Priority = 'P1' | 'P2' | 'P3' | 'P4';
+export type PriorityReviewState = 'NOT_REQUIRED' | 'PENDING' | 'CONFIRMED' | 'ADJUSTED';
+export const P1_REVIEW_REMINDER_MINUTES = 5;
+export interface PriorityReviewInput {
+  contentClass: 'GENERAL'; expectedVersion: number; priority: Priority; reason: string;
+}
 
 export interface CreateTicketInput {
   contentClass: 'GENERAL';
@@ -44,13 +49,20 @@ export interface TicketActionInput {
 
 export interface CatalogField { key: string; label: string; required: boolean; options?: string[] }
 export interface CatalogItem { code: string; name: string; description: string; type: TicketType; formVersion: number; fields: CatalogField[]; available: boolean }
-export interface SessionUser { id: string; name: string; groups: string[]; csrfToken?: string }
+export interface SessionUser { id: string; name: string; groups: string[]; priorityReviewGroups?: string[]; csrfToken?: string }
 export interface TicketView extends TicketReceipt {
   serviceCode: string; serviceType: TicketType; subject: string; description: string;
   priority: Priority; impact: Impact; urgency: Urgency; fields: Record<string, unknown>;
   createdAt: string; updatedAt: string; requesterId: string;
+  priorityReviewState: PriorityReviewState;
+  priorityCandidateAt: string | null;
+  priorityReviewedAt: string | null;
+  priorityReviewedBy: string | null;
+  priorityReviewReason: string | null;
+  canReviewPriority?: boolean;
+  priorityAlert?: { reviewersAvailable: boolean; overdue: boolean; notificationMode: string; deliveries: Record<string, number> };
   events?: { action: string; fromStatus: string | null; toStatus: string; detail: Record<string, string>; createdAt: string }[];
-  sla?: { cycle: number; responseTarget: number; resolutionTarget: number; responseMinutes: number; resolutionMinutes: number; responded: boolean; completed: boolean; paused: boolean; breached: boolean }[];
+  sla?: { cycle: number; priority: Priority; responseTarget: number; resolutionTarget: number; responseMinutes: number; resolutionMinutes: number; responded: boolean; completed: boolean; paused: boolean; breached: boolean }[];
 }
 
 export interface TicketReceipt {

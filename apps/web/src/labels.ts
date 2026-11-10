@@ -1,4 +1,5 @@
 export const statuses: Record<string,string> = { NEW:'待分派',QUEUED:'待接单',IN_PROGRESS:'处理中',WAITING_APPROVAL:'待审批',WAITING_USER:'待补充',WAITING_VENDOR:'待厂商',PENDING_CONFIRMATION:'待确认',CLOSED:'已关闭',CANCELLED:'已撤销',REJECTED:'已拒绝' };
+export const priorityActions: Record<string,string> = { P1_CANDIDATE:'候选 P1 已发起通知',P1_REVIEW_OVERDUE:'P1 主管确认逾期提醒',P1_REVIEW_ROUTED:'P1 确认责任已转交',PRIORITY_REVIEWED:'主管已确认优先级' };
 export const actions: Record<string,string> = { SUBMIT_AND_ROUTE:'已提交并分派',ACCEPT:'已接单',REQUEST_INFO:'请求补充信息',ADD_INFO:'已补充信息',WAIT_VENDOR:'等待厂商处理',RESOLVE:'已提交解决方案',CONFIRM:'已确认解决',REOPEN:'已重新打开',CANCEL:'已撤销',REASSIGN:'已发起交接',ACCEPT_HANDOVER:'已确认接收',DECLINE_HANDOVER:'已退回交接',CANCEL_HANDOVER:'已撤回交接',OWNERSHIP_RECOVERED:'责任分配已恢复',AUTO_CLOSE:'已自动关闭',SLA_BREACH:'服务时效预警' };
 export function formatDate(date: string) { return new Intl.DateTimeFormat('zh-CN',{ month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false,timeZone:'Asia/Shanghai' }).format(new Date(date)); }
 export function duration(value: number) { const minutes=Math.round(value); return minutes < 60 ? `${minutes} 分钟` : `${Math.floor(minutes/60)} 小时 ${minutes%60} 分`; }

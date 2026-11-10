@@ -1,16 +1,20 @@
 <script setup lang="ts">
 import { computed,onMounted,ref,watch } from 'vue';
 import { ArrowLeft,Check,Clock3,LoaderCircle,RefreshCw } from 'lucide-vue-next';
-import type { SessionUser,TicketAction,TicketActionInput,TicketView } from '@itsm/contracts';
+import type { Priority,SessionUser,TicketAction,TicketActionInput,TicketView } from '@itsm/contracts';
 import { api,errorText,ApiError } from '../api';
-import { actions,duration,formatDate,statuses } from '../labels';
+import { actions as ticketActions,priorityActions,duration,formatDate,statuses } from '../labels';
 import ContentBoundary from './ContentBoundary.vue';
 const props=defineProps<{id:string;user:SessionUser}>();
+const actions={...ticketActions,...priorityActions};
 const emit=defineEmits<{back:[];changed:[]}>();
 const ticket=ref<TicketView>(),loading=ref(false),busy=ref(false),error=ref(''),action=ref<TicketAction>(),comment=ref(''),reason=ref(''),dueAt=ref(''),vendorReference=ref(''),vendorOwner=ref(''),category=ref(''),evidence=ref(''),target=ref('');
 const groups=ref<{id:string;name:string}[]>([]),key=ref(crypto.randomUUID());
 const members=ref<{id:string;name:string}[]>([]),targetPerson=ref(''),membersLoading=ref(false);
 const contentSafe=ref(false);
+const reviewPriority=ref<Priority>('P1'),reviewReason=ref(''),reviewSafe=ref(false),reviewKey=ref(crypto.randomUUID());
+const reviewLabels:Record<string,string>={NOT_REQUIRED:'无需主管确认',PENDING:'候选 · 待主管确认',CONFIRMED:'主管已确认',ADJUSTED:'主管已调整'};
+watch([reviewPriority,reviewReason],()=>{reviewKey.value=crypto.randomUUID();reviewSafe.value=false;});
 const fieldLabels:Record<string,string>={system:'业务系统',module:'模块 / 页面',location:'所在地点',device:'设备编号'};
 watch([comment,reason,dueAt,vendorReference,vendorOwner,category,evidence,target,targetPerson],()=>{key.value=crypto.randomUUID();contentSafe.value=false;});
 watch(target,async value=>{
@@ -48,11 +52,38 @@ async function submit(){
   try{await api(`/tickets/${props.id}/actions`,{method:'POST',body,key:key.value});action.value=undefined;await load();emit('changed');}
   catch(e){if(e instanceof ApiError&&e.status===409){await load();key.value=crypto.randomUUID();}error.value=errorText(e);}finally{busy.value=false;}
 }
+async function submitPriorityReview(){
+  if(!ticket.value||!ticket.value.canReviewPriority||!reviewSafe.value||!reviewReason.value.trim()||busy.value)return;
+  busy.value=true;error.value='';
+  try{await api(`/tickets/${props.id}/priority-review`,{method:'POST',key:reviewKey.value,body:{contentClass:'GENERAL',expectedVersion:ticket.value.version,priority:reviewPriority.value,reason:reviewReason.value}});
+    reviewReason.value='';reviewSafe.value=false;reviewKey.value=crypto.randomUUID();await load();emit('changed');}
+  catch(e){if(e instanceof ApiError&&e.status===409){await load();reviewKey.value=crypto.randomUUID();}error.value=errorText(e);}finally{busy.value=false;}
+}
 onMounted(load);
 </script>
 <template>
   <section class="detail-page"><button class="text-button" @click="emit('back')"><ArrowLeft :size="17"/> 返回工单列表</button><div v-if="loading&&!ticket" class="empty-state"><LoaderCircle class="spin"/> 正在加载</div><p v-if="error" class="error-banner" role="alert">{{error}}</p>
     <template v-if="ticket"><div class="page-title"><div><p class="eyebrow">{{ticket.number}}</p><h1>{{ticket.subject}}</h1></div><button class="icon-button" title="刷新" aria-label="刷新工单" :disabled="loading" @click="load"><RefreshCw :size="18" :class="{spin:loading}"/></button></div><div class="ticket-meta"><span class="status" :data-status="ticket.status">{{statuses[ticket.status]}}</span><span class="priority" :data-priority="ticket.priority">{{ticket.priority}}</span><span>{{formatDate(ticket.createdAt)}}</span><span>责任组：{{groups.find(g=>g.id===ticket?.ownerGroupId)?.name??ticket.ownerGroupId}}</span><span>处理人：{{ticket.assigneeName??ticket.assigneeId??'组内待认领'}}</span><span v-if="ticket.pendingAssigneeId" class="amber-text">待交接：{{ticket.pendingAssigneeName??ticket.pendingAssigneeId}}</span></div>
+      <section v-if="ticket.priorityReviewState!=='NOT_REQUIRED'" class="detail-section priority-review" aria-label="P1 优先级确认">
+        <div class="section-heading"><h2>P1 优先级确认</h2><span class="status">{{reviewLabels[ticket.priorityReviewState]}}</span></div>
+        <p v-if="ticket.priorityReviewedAt" class="muted">{{formatDate(ticket.priorityReviewedAt)}} · {{ticket.priorityReviewedBy}} · 当前 {{ticket.priority}}</p>
+        <p v-if="ticket.priorityReviewReason" class="multiline">{{ticket.priorityReviewReason}}</p>
+        <p v-if="ticket.sla?.length" class="muted">本轮 SLA：{{ticket.sla[ticket.sla.length-1]?.priority}} · 起算时间及目标不变</p>
+        <template v-if="ticket.priorityAlert">
+          <p v-if="!ticket.priorityAlert.reviewersAvailable" class="danger-text" role="status">当前责任组没有可用的独立确认人</p>
+          <p v-if="ticket.priorityAlert.overdue" class="danger-text" role="status">主管确认已逾期</p>
+          <p v-if="ticket.priorityAlert.notificationMode==='disabled'" class="danger-text">P1 通知发送未启用</p>
+          <p v-else-if="ticket.priorityAlert.notificationMode==='fake'" class="amber-text">P1 通知：开发模拟，非真实送达</p>
+          <p v-if="ticket.priorityAlert.deliveries.DEAD" class="danger-text">{{ticket.priorityAlert.deliveries.DEAD}} 条 P1 通知发送失败</p>
+          <p v-if="ticket.priorityAlert.deliveries.PENDING||ticket.priorityAlert.deliveries.SENDING" class="muted">P1 通知发送中</p>
+          <p v-if="ticket.priorityAlert.deliveries.DELIVERED" class="muted">平台已确认发送 {{ticket.priorityAlert.deliveries.DELIVERED}} 条 P1 通知</p>
+        </template>
+        <form v-if="ticket.canReviewPriority" class="action-form" @submit.prevent="submitPriorityReview">
+          <label>确认优先级<select v-model="reviewPriority" required><option>P1</option><option>P2</option><option>P3</option><option>P4</option></select></label>
+          <label>确认依据<textarea v-model="reviewReason" required maxlength="2000" rows="2"/></label>
+          <ContentBoundary v-model="reviewSafe"/><div class="form-footer"><button type="submit" class="primary" :disabled="busy||!reviewSafe||!reviewReason.trim()"><Check :size="16"/>提交优先级确认</button></div>
+        </form>
+      </section>
       <div class="detail-grid"><div><section class="detail-section"><h2>报障详情</h2><p class="multiline">{{ticket.description}}</p><dl v-if="Object.keys(ticket.fields).length" class="fact-list"><template v-for="(value,name) in ticket.fields" :key="name"><dt>{{fieldLabels[String(name)]??name}}</dt><dd>{{value}}</dd></template></dl></section>
         <section class="detail-section"><div class="section-heading"><h2>处理记录</h2><span class="muted">{{ticket.events?.length??0}} 条</span></div><ol class="timeline"><li v-for="(event,index) in ticket.events??[]" :key="index"><span class="timeline-dot"></span><div class="event-title"><strong>{{actions[event.action]??event.action}}</strong><time>{{formatDate(event.createdAt)}}</time></div><p v-if="event.detail.comment" class="multiline">{{event.detail.comment}}</p><p v-if="event.detail.reason" class="multiline">{{event.detail.reason}}</p><p v-if="event.detail.vendorReference" class="muted">厂商单号：{{event.detail.vendorReference}}</p><p v-if="event.detail.targetGroupId" class="muted">{{event.detail.oldGroupId}} → {{event.detail.targetGroupId}}</p></li></ol></section>
       </div><aside><section class="detail-section sla-section"><h2><Clock3 :size="17"/> 服务时效</h2><div v-for="sla in ticket.sla??[]" :key="sla.cycle" class="sla-cycle"><div class="section-heading"><strong>第 {{sla.cycle}} 轮</strong><span :class="sla.breached?'danger-text':'muted'">{{sla.completed?'已停止':sla.paused?'等待补充，解决计时暂停':sla.breached?'已超时':'计时中'}}</span></div><p>首次响应 <strong>{{duration(sla.responseMinutes)}}</strong> / {{duration(sla.responseTarget)}}</p><p>解决耗时 <strong>{{duration(sla.resolutionMinutes)}}</strong> / {{duration(sla.resolutionTarget)}}</p><p v-if="!sla.responded&&!sla.completed" class="muted">等待人工回复送达</p></div><p v-if="!ticket.sla?.length" class="muted">此工单暂无 SLA 周期。</p><p class="caption">当前使用试点服务日历</p></section>

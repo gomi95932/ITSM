@@ -67,6 +67,8 @@ jobs:
         run: node tests/integration/migrations.mjs
       - name: Verify personal ownership, handover and disabled-person recovery
         run: node tests/integration/ownership.mjs
+      - name: Verify immediate P1 alerts and scoped supervisor confirmation
+        run: node tests/integration/priority-review.mjs
       - name: Install CI browser
         run: npx playwright install --with-deps chromium
       - name: Exercise desktop and mobile employee and agent flows

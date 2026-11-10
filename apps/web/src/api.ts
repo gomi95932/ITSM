@@ -22,6 +22,8 @@ export async function api<T>(path: string,options: { method?: string; body?: unk
   return data as T;
 }
 export const messages: Record<string,string> = {
+  PRIORITY_REVIEWER_REQUIRED:'仅当前责任组的授权主管可确认，且不能确认本人提交的工单。',
+  PRIORITY_REVIEW_NOT_PENDING:'当前工单不再等待优先级确认，请刷新。',INVALID_PRIORITY_REVIEW:'请选择优先级并填写确认依据。',
   OWNER_GROUP_REQUIRED:'仅当前责任组可执行此操作。',PERSONAL_OWNER_REQUIRED:'仅当前处理人可执行此操作，请先完成交接。',
   TICKET_ALREADY_ASSIGNED:'工单已有处理人，请刷新工单。',HANDOVER_PENDING:'工单正在交接，请先处理现有交接。',
   HANDOVER_TARGET_REQUIRED:'仅指定接收人可确认或退回交接。',HANDOVER_NOT_PENDING:'当前没有待处理的交接。',

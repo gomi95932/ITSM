@@ -4,6 +4,8 @@ INSERT INTO employees(id, display_name) VALUES
 ON CONFLICT (id) DO NOTHING;
 INSERT INTO support_groups(id, name) VALUES ('service-desk', 'IT 服务台'),('applications','应用支持组') ON CONFLICT (id) DO NOTHING;
 INSERT INTO group_memberships(employee_id, group_id) VALUES ('agent-1', 'service-desk'),('agent-2','applications'),('agent-3','service-desk') ON CONFLICT DO NOTHING;
+-- Demo-only role. Production appointments must be reviewed explicitly.
+INSERT INTO priority_reviewers(employee_id,group_id) VALUES ('agent-3','service-desk'),('agent-2','applications') ON CONFLICT DO NOTHING;
 INSERT INTO service_catalog(code, type, form_version, published, group_id, required_fields)
 VALUES ('INC-BIZ', 'INC', 1, true, 'service-desk', '[]'::jsonb)
 ON CONFLICT (code) DO NOTHING;
