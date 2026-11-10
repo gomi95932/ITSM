@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed,onMounted,ref,watch } from 'vue';
-import { ArrowLeft,Check,Clock3,LoaderCircle,RefreshCw } from 'lucide-vue-next';
-import type { Priority,SessionUser,TicketAction,TicketActionInput,TicketView } from '@itsm/contracts';
+import { ArrowLeft,Check,Clock3,LoaderCircle,RefreshCw,Tags } from 'lucide-vue-next';
+import type { CatalogItem,Priority,SessionUser,TicketAction,TicketActionInput,TicketView } from '@itsm/contracts';
 import { api,errorText,ApiError } from '../api';
 import { actions as ticketActions,priorityActions,duration,formatDate,statuses } from '../labels';
 import ContentBoundary from './ContentBoundary.vue';
@@ -12,6 +12,10 @@ const ticket=ref<TicketView>(),loading=ref(false),busy=ref(false),error=ref(''),
 const groups=ref<{id:string;name:string}[]>([]),key=ref(crypto.randomUUID());
 const members=ref<{id:string;name:string}[]>([]),targetPerson=ref(''),membersLoading=ref(false);
 const contentSafe=ref(false);
+const catalog=ref<CatalogItem[]>([]),correcting=ref(false),classificationCode=ref(''),classificationReason=ref(''),classificationFields=ref<Record<string,string>>({}),classificationSafe=ref(false),classificationKey=ref(crypto.randomUUID());
+const classificationService=computed(()=>catalog.value.find(item=>item.code===classificationCode.value));
+watch(classificationCode,()=>{classificationFields.value={};});
+watch([classificationCode,classificationReason,classificationFields],()=>{classificationSafe.value=false;classificationKey.value=crypto.randomUUID();},{deep:true});
 const reviewPriority=ref<Priority>('P1'),reviewReason=ref(''),reviewSafe=ref(false),reviewKey=ref(crypto.randomUUID());
 const reviewLabels:Record<string,string>={NOT_REQUIRED:'无需主管确认',PENDING:'候选 · 待主管确认',CONFIRMED:'主管已确认',ADJUSTED:'主管已调整'};
 watch([reviewPriority,reviewReason],()=>{reviewKey.value=crypto.randomUUID();reviewSafe.value=false;});
@@ -29,6 +33,7 @@ const mine=computed(()=>ticket.value?.requesterId===props.user.id);
 const available=computed<TicketAction[]>(()=>{
   if(!ticket.value)return[];const state=ticket.value.status,result:TicketAction[]=[];
   if(mine.value){if(['NEW','QUEUED'].includes(state))result.push('CANCEL');if(state==='WAITING_USER')result.push('ADD_INFO');if(state==='PENDING_CONFIRMATION')result.push('CONFIRM','REOPEN');}
+  if(!mine.value&&ticket.value.canAddInfo&&state==='WAITING_USER')result.push('ADD_INFO');
   const active=['QUEUED','IN_PROGRESS','WAITING_USER','WAITING_VENDOR','PENDING_CONFIRMATION'].includes(state);
   if(active&&ticket.value.pendingAssigneeId===props.user.id)result.push('ACCEPT_HANDOVER','DECLINE_HANDOVER');
   if(isAgent.value&&active){
@@ -40,8 +45,14 @@ const available=computed<TicketAction[]>(()=>{
   return result;
 });
 const commands:Record<string,string>={ACCEPT:'接单并回复',REQUEST_INFO:'请求补充',ADD_INFO:'补充信息',WAIT_VENDOR:'等待厂商',RESOLVE:'提交解决方案',CONFIRM:'确认已解决',REOPEN:'仍未解决',CANCEL:'撤销报障',REASSIGN:'发起交接',ACCEPT_HANDOVER:'确认接收',DECLINE_HANDOVER:'退回交接',CANCEL_HANDOVER:'撤回交接'};
-async function load(){loading.value=true;error.value='';try{ticket.value=await api<TicketView>(`/tickets/${props.id}`);if(props.user.groups.length)groups.value=(await api<{items:{id:string;name:string}[]}>('/support-groups')).items;}catch(e){error.value=errorText(e);}finally{loading.value=false;}}
-function choose(value:TicketAction){action.value=value;comment.value='';reason.value='';dueAt.value='';vendorReference.value='';vendorOwner.value='';category.value='';evidence.value='';target.value='';targetPerson.value='';contentSafe.value=false;key.value=crypto.randomUUID();error.value='';}
+async function load(){loading.value=true;error.value='';try{ticket.value=await api<TicketView>(`/tickets/${props.id}`);catalog.value=(await api<{items:CatalogItem[]}>('/catalog')).items;if(props.user.groups.length)groups.value=(await api<{items:{id:string;name:string}[]}>('/support-groups')).items;}catch(e){error.value=errorText(e);}finally{loading.value=false;}}
+function choose(value:TicketAction){correcting.value=false;action.value=value;comment.value='';reason.value='';dueAt.value='';vendorReference.value='';vendorOwner.value='';category.value='';evidence.value='';target.value='';targetPerson.value='';contentSafe.value=false;key.value=crypto.randomUUID();error.value='';}
+async function submitClassification(){
+  if(!ticket.value||!classificationService.value||!classificationSafe.value||busy.value)return;busy.value=true;error.value='';
+  try{await api(`/tickets/${props.id}/classification`,{method:'POST',key:classificationKey.value,body:{contentClass:'GENERAL',expectedVersion:ticket.value.version,serviceCode:classificationCode.value,formVersion:classificationService.value.formVersion,fields:classificationFields.value,reason:classificationReason.value}});
+    correcting.value=false;classificationCode.value='';classificationReason.value='';await load();emit('changed');}
+  catch(e){if(e instanceof ApiError&&e.status===409){await load();classificationKey.value=crypto.randomUUID();}error.value=errorText(e);}finally{busy.value=false;}
+}
 async function submit(){
   if(!ticket.value||!action.value||busy.value||!contentSafe.value)return;busy.value=true;error.value='';
   const body:TicketActionInput={contentClass:'GENERAL',action:action.value,expectedVersion:ticket.value.version};
@@ -82,6 +93,13 @@ onMounted(load);
           <label>确认优先级<select v-model="reviewPriority" required><option>P1</option><option>P2</option><option>P3</option><option>P4</option></select></label>
           <label>确认依据<textarea v-model="reviewReason" required maxlength="2000" rows="2"/></label>
           <ContentBoundary v-model="reviewSafe"/><div class="form-footer"><button type="submit" class="primary" :disabled="busy||!reviewSafe||!reviewReason.trim()"><Check :size="16"/>提交优先级确认</button></div>
+        </form>
+      </section>
+      <section class="detail-section" aria-label="工单分类"><div class="section-heading"><div><h2>工单分类</h2><p>{{catalog.find(item=>item.code===ticket?.serviceCode)?.name??ticket.serviceCode}}</p><p v-if="ticket.originalServiceCode!==ticket.serviceCode" class="muted">原分类：{{catalog.find(item=>item.code===ticket?.originalServiceCode)?.name??ticket.originalServiceCode}}</p></div><button v-if="ticket.canCorrectClassification" class="secondary" :disabled="busy" @click="correcting=!correcting;action=undefined"><Tags :size="16"/>分类纠偏</button></div>
+        <form v-if="correcting&&ticket.canCorrectClassification" class="action-form" @submit.prevent="submitClassification">
+          <label>调整为<select v-model="classificationCode" required><option value="">请选择</option><option v-for="item in catalog.filter(item=>item.available&&item.code!==ticket?.serviceCode)" :key="item.code" :value="item.code">{{item.name}}</option></select></label>
+          <label v-for="field in classificationService?.fields??[]" :key="field.key">{{field.label}}<select v-if="field.options" v-model="classificationFields[field.key]" :required="field.required"><option value="">请选择</option><option v-for="option in field.options" :key="option">{{option}}</option></select><input v-else v-model="classificationFields[field.key]" :required="field.required" maxlength="500"/></label>
+          <label>纠偏原因<textarea v-model="classificationReason" required maxlength="2000" rows="2"/></label><ContentBoundary v-model="classificationSafe"/><div class="form-footer"><button class="primary" type="submit" :disabled="busy||!classificationSafe||!classificationCode||!classificationReason.trim()"><Check :size="16"/>保存分类</button></div>
         </form>
       </section>
       <div class="detail-grid"><div><section class="detail-section"><h2>报障详情</h2><p class="multiline">{{ticket.description}}</p><dl v-if="Object.keys(ticket.fields).length" class="fact-list"><template v-for="(value,name) in ticket.fields" :key="name"><dt>{{fieldLabels[String(name)]??name}}</dt><dd>{{value}}</dd></template></dl></section>

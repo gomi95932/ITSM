@@ -23,6 +23,14 @@ export async function api<T>(path: string,options: { method?: string; body?: unk
 }
 export const messages: Record<string,string> = {
   PRIORITY_REVIEWER_REQUIRED:'仅当前责任组的授权主管可确认，且不能确认本人提交的工单。',
+  DELEGATION_REQUIRED:'代报授权已撤销、到期或人员不可用，请由本人重新提交。',
+  TICKET_ACTION_NOT_AUTHORIZED:'当前身份无权执行此操作；代报授权不包含审批、确认交付、撤销或重开。',
+  INVALID_DELEGATION:'请核对受托人、有效期并确认授权范围。',DELEGATE_UNAVAILABLE:'受托人当前不可用，请选择在职支持人员。',
+  DELEGATION_CONFLICT_OR_EXPIRY:'授权信息冲突或有效期不正确，请刷新后重试（最长 7 天）。',
+  CLASSIFICATION_OWNER_REQUIRED:'仅当前处理人或未接单队列的责任组可纠偏。',
+  CLASSIFICATION_NOT_ALLOWED:'当前状态或待交接期间不能更改分类。',CLASSIFICATION_UNCHANGED:'请选择不同的服务分类。',
+  CLASSIFICATION_HANDOVER_REQUIRED:'新分类属于其他支持组，请先完成双向交接，再由接收人纠偏。',
+  INVALID_CLASSIFICATION:'请核对分类、必填字段和纠偏原因。',
   PRIORITY_REVIEW_NOT_PENDING:'当前工单不再等待优先级确认，请刷新。',INVALID_PRIORITY_REVIEW:'请选择优先级并填写确认依据。',
   OWNER_GROUP_REQUIRED:'仅当前责任组可执行此操作。',PERSONAL_OWNER_REQUIRED:'仅当前处理人可执行此操作，请先完成交接。',
   TICKET_ALREADY_ASSIGNED:'工单已有处理人，请刷新工单。',HANDOVER_PENDING:'工单正在交接，请先处理现有交接。',

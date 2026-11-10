@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed,nextTick,onBeforeUnmount,ref,watch } from 'vue';
+import { computed,nextTick,onBeforeUnmount,onMounted,ref,watch } from 'vue';
 import { ArrowLeft,ArrowRight,Check,LoaderCircle,Mic,Square,X } from 'lucide-vue-next';
-import type { CatalogItem,CreateTicketInput,Impact,TicketReceipt,Urgency } from '@itsm/contracts';
+import type { CatalogItem,CreateTicketInput,DelegationView,Impact,TicketReceipt,Urgency } from '@itsm/contracts';
 import { api,errorText } from '../api';
 import ContentBoundary from './ContentBoundary.vue';
 
@@ -12,7 +12,9 @@ const impact=ref<Impact | ''>(''),urgency=ref<Urgency | ''>(''),error=ref(''),bu
 const service=computed(()=>props.catalog.find(item=>item.code===serviceCode.value));
 const requestKey=ref(crypto.randomUUID());
 const contentSafe=ref(false),voiceSafe=ref(false);
-watch([serviceCode,subject,description,impact,urgency,fields],()=>{ requestKey.value=crypto.randomUUID(); review.value=false; contentSafe.value=false; },{ deep:true });
+const delegationId=ref(''),delegations=ref<DelegationView[]>([]);
+onMounted(async()=>{try{const list=await api<{items:DelegationView[]}>('/delegations');delegations.value=list.items.filter(item=>item.active&&item.delegateId!==item.requesterId);const me=await api<{id:string}>('/auth/me');delegations.value=delegations.value.filter(item=>item.delegateId===me.id);}catch(e){error.value=errorText(e);}});
+watch([serviceCode,subject,description,impact,urgency,fields,delegationId],()=>{ requestKey.value=crypto.randomUUID(); review.value=false; contentSafe.value=false; },{ deep:true });
 watch(serviceCode,()=>{ fields.value={}; });
 const voiceOpen=ref(false),transcript=ref(''),recording=ref(false),voiceBusy=ref(false),consent=ref(false),canRecord=ref(false),voiceError=ref('');
 watch(transcript,()=>{voiceSafe.value=false;});
@@ -74,7 +76,7 @@ async function submit() {
   if(!review.value || !contentSafe.value || busy.value || !service.value || !impact.value || !urgency.value)return;
   busy.value=true;error.value='';
   const allowed=Object.fromEntries(Object.entries(fields.value).filter(([key])=>service.value!.fields.some(field=>field.key===key)));
-  const body:CreateTicketInput={contentClass:'GENERAL',serviceCode:serviceCode.value,formVersion:service.value.formVersion,subject:subject.value,description:description.value,impact:impact.value,urgency:urgency.value,fields:allowed,...(draftId.value?{draftId:draftId.value}:{})};
+  const body:CreateTicketInput={contentClass:'GENERAL',serviceCode:serviceCode.value,formVersion:service.value.formVersion,subject:subject.value,description:description.value,impact:impact.value,urgency:urgency.value,fields:allowed,...(draftId.value?{draftId:draftId.value}:{}),...(delegationId.value?{delegationId:delegationId.value}:{})};
   try{const result=await api<TicketReceipt>('/tickets',{method:'POST',body,key:requestKey.value});emit('created',result.id);}
   catch(e){error.value=errorText(e);}finally{busy.value=false;}
 }
@@ -84,7 +86,9 @@ async function submit() {
   <section class="request-page">
     <button class="text-button" @click="emit('close')"><ArrowLeft :size="17"/> 返回</button>
     <div class="page-title"><div><p class="eyebrow">IT 服务台</p><h1>提交报障</h1></div><button class="icon-button" title="语音输入" aria-label="语音输入" @click="openVoice"><Mic :size="20"/></button></div>
+    <p v-if="review&&delegationId" class="muted">申请人：{{delegations.find(item=>item.id===delegationId)?.requesterName}}（授权代报）</p>
     <form v-if="!review" class="request-form" @submit.prevent="check">
+      <label v-if="delegations.length">申请人<select v-model="delegationId" aria-label="申请人"><option value="">本人</option><option v-for="item in delegations" :key="item.id" :value="item.id">{{item.requesterName}}（已授权代报）</option></select></label>
       <label>服务类型 <span class="required">*</span><select v-model="serviceCode" required aria-label="服务类型"><option value="" disabled>请选择</option><option v-for="item in catalog.filter(item=>item.available)" :key="item.code" :value="item.code">{{ item.name }}</option></select></label>
       <label>问题标题 <span class="required">*</span><input v-model="subject" required maxlength="200" placeholder="例如：WMS 登录后无法打开出库页面"/></label>
       <label>详细情况 <span class="required">*</span><textarea v-model="description" required maxlength="10000" rows="5" placeholder="遇到了什么问题？从什么时候开始？"/></label>

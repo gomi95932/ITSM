@@ -1,7 +1,7 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
 import { createHash, randomUUID } from 'node:crypto';
 import { type PoolClient } from 'pg';
-import { P1_REVIEW_REMINDER_MINUTES, TICKET_ACTIONS, type CreateTicketInput, type PriorityReviewInput, type PriorityReviewState, type TicketActionInput, type TicketReceipt, type TicketStatus } from '@itsm/contracts';
+import { P1_REVIEW_REMINDER_MINUTES, TICKET_ACTIONS, type ClassificationInput, type CreateTicketInput, type PriorityReviewInput, type PriorityReviewState, type TicketActionInput, type TicketReceipt, type TicketStatus } from '@itsm/contracts';
 import { transition } from './ticket-state.js';
 import { Database } from './database.service.js';
 import { AuthService, type AuthHeaders, type Identity } from './auth.service.js';
@@ -18,16 +18,21 @@ type TicketRow = {
   assignee_name?: string | null; pending_assignee_name?: string | null;
   priority_review_state: PriorityReviewState; priority_candidate_at: Date | null;
   priority_reviewed_at: Date | null; priority_reviewed_by: string | null; priority_review_reason: string | null;
+  submitted_by_id: string; delegation_id: string | null; original_catalog_snapshot: Record<string,unknown>;
 };
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const keys = new Set(['contentClass', 'serviceCode', 'formVersion', 'subject', 'description', 'impact', 'urgency', 'fields', 'draftId']);
+const keys = new Set(['contentClass', 'serviceCode', 'formVersion', 'subject', 'description', 'impact', 'urgency', 'fields', 'draftId', 'delegationId']);
 const actionKeys = new Set(['contentClass', 'action', 'expectedVersion', 'comment', 'reason', 'dueAt', 'vendorReference', 'vendorOwner', 'resolutionCategory', 'evidence', 'targetGroupId', 'targetAssigneeId']);
 const names = `(SELECT display_name FROM employees WHERE id=t.assignee_id) AS assignee_name,
   (SELECT display_name FROM employees WHERE id=t.pending_assignee_id) AS pending_assignee_name`;
 const workAccess = `(owner_group_id IN (SELECT group_id FROM group_memberships WHERE employee_id=$1)
   OR owner_group_id IN (SELECT group_id FROM priority_reviewers WHERE employee_id=$1)
   OR (pending_assignee_id=$1 AND pending_group_id IN (SELECT group_id FROM group_memberships WHERE employee_id=$1)))`;
+const delegatedAccess=(actor:string)=>`EXISTS(SELECT 1 FROM ticket_delegations d JOIN employees r ON r.id=d.requester_id
+  WHERE d.id=t.delegation_id AND d.requester_id=t.requester_id AND d.delegate_id=${actor} AND r.active
+    AND d.revoked_at IS NULL AND d.expires_at>now()
+    AND EXISTS(SELECT 1 FROM group_memberships m WHERE m.employee_id=d.delegate_id))`;
 
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
@@ -45,6 +50,7 @@ function validateBody(body: unknown): asserts body is CreateTicketInput {
     || !['COMPANY', 'DEPARTMENT', 'INDIVIDUAL'].includes(String(b.impact))
     || !['HIGH', 'MEDIUM', 'LOW'].includes(String(b.urgency))
     || (b.draftId !== undefined && (typeof b.draftId !== 'string' || !uuid.test(b.draftId)))
+    || (b.delegationId !== undefined && (typeof b.delegationId !== 'string' || !uuid.test(b.delegationId)))
     || !b.fields || typeof b.fields !== 'object' || Array.isArray(b.fields) || JSON.stringify(b.fields).length > 16000)
     throw new BadRequestException({ code: 'INVALID_TICKET' });
 }
@@ -82,6 +88,31 @@ export class TicketsService {
     if (!active.rowCount) throw new UnauthorizedException();
   }
 
+  private async delegation(client:PoolClient,actor:string,id:string,required=true):Promise<string | undefined> {
+    const grant=await client.query(`SELECT d.requester_id FROM ticket_delegations d JOIN employees r ON r.id=d.requester_id
+      JOIN group_memberships m ON m.employee_id=d.delegate_id
+      WHERE d.id=$1 AND d.delegate_id=$2 AND r.active AND d.revoked_at IS NULL AND d.expires_at>now() FOR SHARE OF d,r,m`,[id,actor]);
+    if(!grant.rowCount&&required)throw new ForbiddenException({code:'DELEGATION_REQUIRED'});
+    return grant.rows[0]?.requester_id;
+  }
+
+  private async catalogFor(client:PoolClient,actor:string,requester:string,code:string,version:number,fields:Record<string,unknown>) {
+    const catalog=await client.query(`SELECT * FROM service_catalog WHERE code=$1 AND published AND
+      (visible_groups='[]'::jsonb OR (EXISTS(SELECT 1 FROM group_memberships WHERE employee_id=$2 AND visible_groups ? group_id)
+        AND EXISTS(SELECT 1 FROM group_memberships WHERE employee_id=$3 AND visible_groups ? group_id))) FOR SHARE`,[code,actor,requester]);
+    if(!catalog.rowCount)throw new BadRequestException({code:'SERVICE_UNAVAILABLE'});
+    const service=catalog.rows[0];
+    if(version!==service.form_version)throw new ConflictException({code:'FORM_VERSION_CONFLICT'});
+    if((service.required_fields as string[]).some(field=>typeof fields[field]!=='string'||!String(fields[field]).trim()))
+      throw new BadRequestException({code:'REQUIRED_FIELDS_MISSING'});
+    const schema=service.field_schema as {key:string;options?:string[]}[];
+    if(Object.keys(fields).some(key=>!schema.some(field=>field.key===key))||schema.some(field=>{
+      const value=fields[field.key];return value!==undefined&&(typeof value!=='string'||value.length>500||(field.options&&!field.options.includes(value)));
+    }))throw new BadRequestException({code:'INVALID_SERVICE_FIELDS'});
+    if(!['INC','GEN'].includes(service.type))throw new ServiceUnavailableException({code:'REQUEST_APPROVAL_POLICY_NOT_CONFIGURED'});
+    return service;
+  }
+
   private async claim(client: PoolClient, actor: string, scope: string, key: string, body: unknown): Promise<unknown | undefined> {
     if (!/^[a-zA-Z0-9_-]{8,128}$/.test(key)) throw new BadRequestException({ code: 'IDEMPOTENCY_KEY_REQUIRED' });
     const hash = createHash('sha256').update(canonical(body)).digest('hex');
@@ -107,35 +138,24 @@ export class TicketsService {
     await this.intake.requireGeneral(actor.id, body as unknown as Record<string, unknown>, 'ticket-create');
     return this.transaction(async client => {
       await this.requireActive(client, actor);
+      const requester=body.delegationId ? (await this.delegation(client,actor.id,body.delegationId))! : actor.id;
       const previous = await this.claim(client, actor.id, 'create', key, body);
       if (previous) return previous as TicketReceipt;
       if (body.draftId) {
         const draft = await client.query('SELECT id FROM voice_drafts WHERE id=$1 AND employee_id=$2 AND expires_at>now() AND ticket_id IS NULL FOR UPDATE',[body.draftId,actor.id]);
         if (!draft.rowCount) throw new ConflictException({ code:'DRAFT_EXPIRED' });
       }
-      const catalog = await client.query(
-        `SELECT * FROM service_catalog WHERE code=$1 AND published=true AND (visible_groups='[]'::jsonb OR EXISTS
-          (SELECT 1 FROM group_memberships WHERE employee_id=$2 AND visible_groups ? group_id)) FOR SHARE`, [body.serviceCode,actor.id]);
-      if (!catalog.rowCount) throw new BadRequestException({ code: 'SERVICE_UNAVAILABLE' });
-      const service = catalog.rows[0];
-      if (body.formVersion !== service.form_version) throw new ConflictException({ code: 'FORM_VERSION_CONFLICT' });
-      if ((service.required_fields as string[]).some(field => typeof body.fields[field] !== 'string' || !String(body.fields[field]).trim())) throw new BadRequestException({ code: 'REQUIRED_FIELDS_MISSING' });
-      const schema = service.field_schema as { key: string; options?: string[] }[];
-      if (Object.keys(body.fields).some(key => !schema.some(field => field.key === key)) || schema.some(field => {
-        const value = body.fields[field.key];
-        return value !== undefined && (typeof value !== 'string' || value.length > 500 || (field.options && !field.options.includes(value)));
-      })) throw new BadRequestException({ code: 'INVALID_SERVICE_FIELDS' });
-      if (service.type !== 'INC') throw new ServiceUnavailableException({ code: 'REQUEST_APPROVAL_POLICY_NOT_CONFIGURED' });
+      const service=await this.catalogFor(client,actor.id,requester,body.serviceCode,body.formVersion,body.fields);
       const numberResult = await client.query<{ n: string }>("SELECT nextval('ticket_number_seq')::text AS n");
       const number = `ITSM-${numberResult.rows[0].n.padStart(8, '0')}`;
-      const created = await client.query<TicketRow>(`INSERT INTO tickets(number,requester_id,owner_group_id,service_code,service_type,form_version,subject,description,fields,impact,urgency,priority,status,priority_review_state,priority_candidate_at)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'QUEUED',CASE WHEN $12='P1' THEN 'PENDING' ELSE 'NOT_REQUIRED' END,CASE WHEN $12='P1' THEN now() ELSE NULL END) RETURNING *`,
-        [number, actor.id, service.group_id, body.serviceCode, service.type, body.formVersion, body.subject.trim(), body.description.trim(), JSON.stringify(body.fields), body.impact, body.urgency, priority(body.impact, body.urgency)]);
+      const created = await client.query<TicketRow>(`INSERT INTO tickets(number,requester_id,owner_group_id,service_code,service_type,form_version,subject,description,fields,impact,urgency,priority,status,priority_review_state,priority_candidate_at,submitted_by_id,delegation_id)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'QUEUED',CASE WHEN $12='P1' THEN 'PENDING' ELSE 'NOT_REQUIRED' END,CASE WHEN $12='P1' THEN now() ELSE NULL END,$13,$14) RETURNING *`,
+        [number, requester, service.group_id, body.serviceCode, service.type, body.formVersion, body.subject.trim(), body.description.trim(), JSON.stringify(body.fields), body.impact, body.urgency, priority(body.impact, body.urgency),actor.id,body.delegationId??null]);
       const ticket = created.rows[0];
       if (body.draftId) await client.query('UPDATE voice_drafts SET ticket_id=$2 WHERE id=$1',[body.draftId,ticket.id]);
-      await client.query('UPDATE tickets SET catalog_snapshot=$2 WHERE id=$1', [ticket.id,JSON.stringify({ code: body.serviceCode, name: service.name, formVersion: service.form_version, fields: service.field_schema })]);
+      await client.query('UPDATE tickets SET catalog_snapshot=$2,original_catalog_snapshot=$2,original_fields=fields WHERE id=$1', [ticket.id,JSON.stringify({ code: body.serviceCode, name: service.name, formVersion: service.form_version, fields: service.field_schema })]);
       await this.sla.start(client,ticket.id,ticket.priority);
-      await this.record(client, ticket, actor.id, 'SUBMIT_AND_ROUTE', null, { groupId: ticket.owner_group_id }, requestId);
+      await this.record(client, ticket, actor.id, 'SUBMIT_AND_ROUTE', null, { groupId: ticket.owner_group_id,requesterId:requester,submittedById:actor.id,delegationId:body.delegationId??null,serviceCode:body.serviceCode }, requestId);
       if (ticket.priority_review_state === 'PENDING') {
         await client.query("INSERT INTO priority_review_signals(ticket_id,kind) VALUES ($1,'CANDIDATE')",[ticket.id]);
         await this.record(client,ticket,actor.id,'P1_CANDIDATE',ticket.status,{ priority:'P1',reviewState:'PENDING',responseStarted:true },requestId,ticket);
@@ -155,6 +175,8 @@ export class TicketsService {
 
   private auditValue(row: TicketRow): object {
     return { ...this.receipt(row),priority:row.priority,priorityReviewState:row.priority_review_state,
+      serviceCode:row.service_code,serviceType:row.service_type,formVersion:row.form_version,
+      requesterId:row.requester_id,submittedById:row.submitted_by_id,delegationId:row.delegation_id,
       priorityCandidateAt:row.priority_candidate_at,priorityReviewedAt:row.priority_reviewed_at,
       priorityReviewedBy:row.priority_reviewed_by,priorityReviewReason:row.priority_review_reason };
   }
@@ -164,7 +186,7 @@ export class TicketsService {
     const result = await client.query<TicketRow>(`SELECT t.*,${names} FROM tickets t WHERE id=$1 AND (requester_id=$2 OR owner_group_id IN
       (SELECT group_id FROM group_memberships WHERE employee_id=$2) OR (pending_assignee_id=$2 AND pending_group_id IN
       (SELECT group_id FROM group_memberships WHERE employee_id=$2)) OR owner_group_id IN
-      (SELECT group_id FROM priority_reviewers WHERE employee_id=$2)) ${lock ? 'FOR UPDATE OF t' : ''}`,
+      (SELECT group_id FROM priority_reviewers WHERE employee_id=$2) OR ${delegatedAccess('$2')}) ${lock ? 'FOR UPDATE OF t' : ''}`,
       [id, actor.id]);
     if (!result.rowCount) throw new NotFoundException();
     return result.rows[0];
@@ -174,10 +196,11 @@ export class TicketsService {
     if (!Number.isInteger(page) || page < 1 || !Number.isInteger(size) || size < 1 || size > 100) throw new BadRequestException();
     if (status && !['NEW','QUEUED','IN_PROGRESS','WAITING_APPROVAL','WAITING_USER','WAITING_VENDOR','PENDING_CONFIRMATION','CLOSED','CANCELLED','REJECTED'].includes(status)) throw new BadRequestException();
     if (!mine && !actor.groups.length && !actor.priorityReviewGroups?.length) throw new NotFoundException();
-    const result = await this.pool.query<TicketRow>(`SELECT t.*,${names} FROM tickets t WHERE ${mine ? 'requester_id=$1' : workAccess}
+    const mineAccess=`(requester_id=$1 OR ${delegatedAccess('$1')})`;
+    const result = await this.pool.query<TicketRow>(`SELECT t.*,${names} FROM tickets t WHERE ${mine ? mineAccess : workAccess}
       AND ($2::text IS NULL OR status=$2) ORDER BY created_at DESC, id DESC LIMIT $3 OFFSET $4`,
       [actor.id, status ?? null, size, (page - 1) * size]);
-    const summary = await this.pool.query(`SELECT status,count(*)::integer AS count FROM tickets WHERE ${mine ? 'requester_id=$1' : workAccess} GROUP BY status`,[actor.id]);
+    const summary = await this.pool.query(`SELECT status,count(*)::integer AS count FROM tickets t WHERE ${mine ? mineAccess : workAccess} GROUP BY status`,[actor.id]);
     const counts = Object.fromEntries(summary.rows.map(row=>[row.status,row.count]));
     const total = status ? counts[status] ?? 0 : summary.rows.reduce((sum,row)=>sum+row.count,0);
     return { items: result.rows.map(row => this.publicTicket(row)), page, size, total, counts };
@@ -185,6 +208,7 @@ export class TicketsService {
 
   private publicTicket(row: TicketRow): object {
     return { ...this.receipt(row), requesterId: row.requester_id, serviceCode: row.service_code, serviceType: row.service_type, formVersion: row.form_version,
+      submittedById:row.submitted_by_id,originalServiceCode:row.original_catalog_snapshot?.code??row.service_code,
       subject: row.subject, description: row.description, fields: row.fields, impact: row.impact, urgency: row.urgency,
       priority: row.priority, priorityReviewState:row.priority_review_state,priorityCandidateAt:row.priority_candidate_at,
       priorityReviewedAt:row.priority_reviewed_at,priorityReviewedBy:row.priority_reviewed_by,priorityReviewReason:row.priority_review_reason,
@@ -202,8 +226,12 @@ export class TicketsService {
       const alerts = groupMember && ticket.priority_candidate_at ? await client.query(`SELECT d.state,count(*)::integer AS count
         FROM notification_deliveries d JOIN outbox_events o ON o.id=d.outbox_id WHERE o.ticket_id=$1 AND o.kind='P1_ALERT' GROUP BY d.state`,[id]) : null;
       const available = groupMember && ticket.priority_candidate_at ? await client.query(`SELECT 1 FROM priority_reviewers r
-        JOIN employees e ON e.id=r.employee_id WHERE r.group_id=$1 AND e.active AND e.id<>$2 LIMIT 1`,[ticket.owner_group_id,ticket.requester_id]) : null;
-      return { ...this.publicTicket(ticket),canReviewPriority:!!reviewer.rowCount && actor.id!==ticket.requester_id
+        JOIN employees e ON e.id=r.employee_id WHERE r.group_id=$1 AND e.active AND e.id<>$2 AND e.id<>$3 LIMIT 1`,[ticket.owner_group_id,ticket.requester_id,ticket.submitted_by_id]) : null;
+      const delegated=!!ticket.delegation_id && await this.delegation(client,actor.id,ticket.delegation_id,false)===ticket.requester_id;
+      return { ...this.publicTicket(ticket),canAddInfo:actor.id===ticket.requester_id||delegated,
+        canCorrectClassification:!!membership.rowCount && ['QUEUED','IN_PROGRESS','WAITING_USER','WAITING_VENDOR'].includes(ticket.status)
+          && !ticket.pending_assignee_id && (ticket.assignee_id===actor.id||(!ticket.assignee_id&&ticket.status==='QUEUED')),
+        canReviewPriority:!!reviewer.rowCount && actor.id!==ticket.requester_id && actor.id!==ticket.submitted_by_id
           && ticket.priority_review_state==='PENDING' && !['CLOSED','CANCELLED','REJECTED'].includes(ticket.status),
         ...(alerts ? { priorityAlert:{ reviewersAvailable:!!available?.rowCount,
           overdue:ticket.priority_review_state==='PENDING' && !!ticket.priority_candidate_at && Date.now()-ticket.priority_candidate_at.getTime()>=P1_REVIEW_REMINDER_MINUTES*60000,
@@ -227,7 +255,7 @@ export class TicketsService {
       await this.requireActive(client,actor);
       const ticket=await this.accessible(client,actor,id,true);
       const reviewer=await client.query('SELECT 1 FROM priority_reviewers WHERE employee_id=$1 AND group_id=$2 FOR SHARE',[actor.id,ticket.owner_group_id]);
-      if (!reviewer.rowCount || actor.id===ticket.requester_id) throw new ForbiddenException({ code:'PRIORITY_REVIEWER_REQUIRED' });
+      if (!reviewer.rowCount || actor.id===ticket.requester_id || actor.id===ticket.submitted_by_id) throw new ForbiddenException({ code:'PRIORITY_REVIEWER_REQUIRED' });
       const previous=await this.claim(client,actor.id,`priority-review:${id}`,key,input);
       if (previous) return previous as TicketReceipt;
       if (ticket.version!==input.expectedVersion) throw new ConflictException({ code:'VERSION_CONFLICT' });
@@ -245,20 +273,61 @@ export class TicketsService {
     });
   }
 
+  async classify(actor:Identity,id:string,body:unknown,key:string,requestId:string):Promise<TicketReceipt> {
+    const input=body as ClassificationInput;
+    if(!input||typeof input!=='object'||Array.isArray(input)
+      ||Object.keys(input).some(k=>!['contentClass','expectedVersion','serviceCode','formVersion','fields','reason'].includes(k))
+      ||!Number.isInteger(input.expectedVersion)||input.expectedVersion<1||typeof input.serviceCode!=='string'||!/^[A-Z0-9-]{3,40}$/.test(input.serviceCode)
+      ||!Number.isInteger(input.formVersion)||typeof input.reason!=='string'||!input.reason.trim()||input.reason.length>2000
+      ||!input.fields||typeof input.fields!=='object'||Array.isArray(input.fields)||JSON.stringify(input.fields).length>16000)
+      throw new BadRequestException({code:'INVALID_CLASSIFICATION'});
+    await this.intake.requireGeneral(actor.id,input as unknown as Record<string,unknown>,'classification');
+    return this.transaction(async client=>{
+      await this.requireActive(client,actor);
+      const ticket=await this.accessible(client,actor,id,true);
+      const member=await client.query('SELECT 1 FROM group_memberships WHERE employee_id=$1 AND group_id=$2 FOR SHARE',[actor.id,ticket.owner_group_id]);
+      if(!member.rowCount||!(ticket.assignee_id===actor.id||(!ticket.assignee_id&&ticket.status==='QUEUED')))
+        throw new ForbiddenException({code:'CLASSIFICATION_OWNER_REQUIRED'});
+      const previous=await this.claim(client,actor.id,`classification:${id}`,key,input);
+      if(previous)return previous as TicketReceipt;
+      if(ticket.version!==input.expectedVersion)throw new ConflictException({code:'VERSION_CONFLICT'});
+      if(!['QUEUED','IN_PROGRESS','WAITING_USER','WAITING_VENDOR'].includes(ticket.status)||ticket.pending_assignee_id)
+        throw new ConflictException({code:'CLASSIFICATION_NOT_ALLOWED'});
+      const service=await this.catalogFor(client,actor.id,ticket.requester_id,input.serviceCode,input.formVersion,input.fields);
+      if(service.group_id!==ticket.owner_group_id)throw new ConflictException({code:'CLASSIFICATION_HANDOVER_REQUIRED'});
+      if(input.serviceCode===ticket.service_code)throw new ConflictException({code:'CLASSIFICATION_UNCHANGED'});
+      const snapshot={code:service.code,name:service.name,formVersion:service.form_version,fields:service.field_schema};
+      // A correction never transfers ownership, restarts SLA or overwrites the original classification.
+      const updated=await client.query<TicketRow>(`UPDATE tickets SET service_code=$2,service_type=$3,form_version=$4,fields=$5,
+        catalog_snapshot=$6,version=version+1 WHERE id=$1 RETURNING *`,[id,service.code,service.type,service.form_version,JSON.stringify(input.fields),JSON.stringify(snapshot)]);
+      await this.record(client,updated.rows[0],actor.id,'CLASSIFICATION_CORRECTED',ticket.status,
+        {reason:input.reason.trim(),oldServiceCode:ticket.service_code,serviceCode:service.code,oldFields:ticket.fields,fields:input.fields},requestId,ticket);
+      const response=this.receipt(updated.rows[0]);
+      await client.query('UPDATE api_idempotency SET response=$4 WHERE actor_id=$1 AND scope=$2 AND key=$3',[actor.id,`classification:${id}`,key,JSON.stringify(response)]);
+      return response;
+    });
+  }
+
   async action(actor: Identity, id: string, body: unknown, key: string, requestId: string): Promise<TicketReceipt> {
     validateAction(body);
     await this.intake.requireGeneral(actor.id, body as unknown as Record<string, unknown>, 'ticket-action');
     return this.transaction(async client => {
       await this.requireActive(client, actor);
       const ticket = await this.accessible(client, actor, id, true);
+      const member = await client.query('SELECT 1 FROM group_memberships WHERE employee_id=$1 AND group_id=$2 FOR SHARE', [actor.id, ticket.owner_group_id]);
+      const delegatedInfo=body.action==='ADD_INFO' && !!ticket.delegation_id
+        && await this.delegation(client,actor.id,ticket.delegation_id,false)===ticket.requester_id;
+      if(['ADD_INFO','CONFIRM','REOPEN','CANCEL'].includes(body.action) && ticket.requester_id!==actor.id && !delegatedInfo)
+        throw new ForbiddenException({code:'TICKET_ACTION_NOT_AUTHORIZED'});
       const previous = await this.claim(client, actor.id, `action:${id}`, key, body);
       if (previous) return previous as TicketReceipt;
       if (ticket.version !== body.expectedVersion) throw new ConflictException({ code: 'VERSION_CONFLICT' });
-      const member = await client.query('SELECT 1 FROM group_memberships WHERE employee_id=$1 AND group_id=$2 FOR SHARE', [actor.id, ticket.owner_group_id]);
       const denial = ownershipDenial(ticket, actor.id, !!member.rowCount, body.action);
       if (denial) throw new ConflictException({ code: denial });
-      const role = ticket.requester_id === actor.id && ['ADD_INFO','CONFIRM','REOPEN','CANCEL'].includes(body.action)
-        ? 'requester' : member.rowCount || ticket.pending_assignee_id === actor.id ? 'agent' : 'requester';
+      if(ticket.requester_id!==actor.id && !delegatedInfo && !member.rowCount && ticket.pending_assignee_id!==actor.id)
+        throw new ForbiddenException({code:'TICKET_ACTION_NOT_AUTHORIZED'});
+      const role = (ticket.requester_id === actor.id && ['ADD_INFO','CONFIRM','REOPEN','CANCEL'].includes(body.action)) || delegatedInfo
+        ? 'requester' : 'agent';
       const next = transition(ticket.status, role, body);
       let group = ticket.owner_group_id, assignee = ticket.assignee_id;
       let pendingGroup = ticket.pending_group_id, pendingAssignee = ticket.pending_assignee_id;
