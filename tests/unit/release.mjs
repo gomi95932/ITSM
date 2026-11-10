@@ -4,7 +4,27 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { createHash } from 'node:crypto';
-import { schemaFingerprint, validateConfig, validateRelease } from '../../scripts/release.mjs';
+import { schemaFingerprint, validateConfig, validateRelease, validateRuntimeContainer } from '../../scripts/release.mjs';
+
+test('runtime verification requires approved image, project, service and healthy state',() => {
+  const image=`sha256:${'c'.repeat(64)}`;
+  const container=() => ({Image:image,Config:{Labels:{'com.docker.compose.project':'itsm-dev',
+    'com.docker.compose.service':'api','com.docker.compose.oneoff':'False'}},State:{Running:true,Health:{Status:'healthy'}}});
+  assert.doesNotThrow(() => validateRuntimeContainer(container(),image,'api'));
+  assert.throws(() => validateRuntimeContainer(container(),`sha256:${'d'.repeat(64)}`,'api'),/IMAGE_MISMATCH/);
+  assert.throws(() => validateRuntimeContainer(container(),'itsm-api:latest','api'),/IMAGE_MISMATCH/);
+  assert.throws(() => validateRuntimeContainer(container(),image,'worker'),/SCOPE_MISMATCH/);
+  const foreign=container(); foreign.Config.Labels['com.docker.compose.project']='other';
+  assert.throws(() => validateRuntimeContainer(foreign,image,'api'),/SCOPE_MISMATCH/);
+  const oneoff=container(); oneoff.Config.Labels['com.docker.compose.oneoff']='True';
+  assert.throws(() => validateRuntimeContainer(oneoff,image,'api'),/SCOPE_MISMATCH/);
+  const stopped=container(); stopped.State.Running=false;
+  assert.throws(() => validateRuntimeContainer(stopped,image,'api'),/NOT_HEALTHY/);
+  const unhealthy=container(); unhealthy.State.Health.Status='unhealthy';
+  assert.throws(() => validateRuntimeContainer(unhealthy,image,'api'),/NOT_HEALTHY/);
+  const noHealth=container(); delete noHealth.State.Health;
+  assert.throws(() => validateRuntimeContainer(noHealth,image,'api'),/NOT_HEALTHY/);
+});
 
 const config=() => ({name:'itsm-dev',services:{web:{ports:[{host_ip:'127.0.0.1',published:'8088'}]},db:{environment:{POSTGRES_PASSWORD:'a'.repeat(64)}},redis:{environment:{ITSM_REDIS_PASSWORD:'b'.repeat(64)}},api:{},worker:{},migrate:{environment:{NODE_ENV:'development',ITSM_SEED_DEV_DATA:'false'}}}});
 test('release validation requires private isolated development services',() => {

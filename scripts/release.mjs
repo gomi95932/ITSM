@@ -22,6 +22,18 @@ export function validateConfig(config) {
   return Number(ports[0].published);
 }
 
+export function validateRuntimeContainer(container, expectedImage, service) {
+  if (!/^sha256:[a-f0-9]{64}$/.test(expectedImage ?? '') || container.Image !== expectedImage)
+    throw new Error('RUNNING_IMAGE_MISMATCH');
+  const labels=container.Config?.Labels;
+  if (labels?.['com.docker.compose.project'] !== 'itsm-dev'
+    || labels?.['com.docker.compose.service'] !== service
+    || labels?.['com.docker.compose.oneoff']?.toLowerCase() !== 'false')
+    throw new Error('RUNNING_CONTAINER_SCOPE_MISMATCH');
+  if (container.State?.Running !== true || container.State?.Health?.Status !== 'healthy')
+    throw new Error('RUNNING_CONTAINER_NOT_HEALTHY');
+}
+
 export async function validateRelease(directory, expected) {
   if (!/^[a-f0-9]{40}$/.test(expected ?? '')) throw new Error('FULL_COMMIT_SHA_REQUIRED');
   const base=await realpath(directory);
@@ -59,6 +71,17 @@ function run(command, args, options = {}) {
     child.once('error', () => { clearTimeout(timer); fail(new Error('RELEASE_TOOL_UNAVAILABLE')); });
     child.once('close', code => { clearTimeout(timer); clearTimeout(killTimer); code === 0 ? done(output.trim()) : fail(new Error('RELEASE_TOOL_FAILED')); });
   });
+}
+
+export async function verifyRuntimeImages(images, containerIdFor) {
+  for (const [service,imageName] of Object.entries({db:'postgres',redis:'redis',api:'api',worker:'worker',web:'web'})) {
+    const id=await containerIdFor(service);
+    if (!/^[a-f0-9]{12,64}$/.test(id)) throw new Error('SINGLE_RUNNING_CONTAINER_REQUIRED');
+    const expectedImage=await run('docker',['image','inspect',images[imageName],'--format','{{.Id}}']);
+    const inspected=JSON.parse(await run('docker',['container','inspect',id]));
+    if (!Array.isArray(inspected) || inspected.length !== 1) throw new Error('SINGLE_RUNNING_CONTAINER_REQUIRED');
+    validateRuntimeContainer(inspected[0],expectedImage,service);
+  }
 }
 
 async function atomicJson(path, value) {
@@ -129,6 +152,7 @@ export async function main(argv) {
       const web=await fetch(base,{signal:AbortSignal.timeout(10000)});
       if (!web.ok || !(await web.text()).includes('id="app"')) throw new Error('WEB_SMOKE_FAILED');
     };
+    const verifyRuntime=images => verifyRuntimeImages(images,service => compose(['ps','--status','running','-q',service]));
     if (command === 'check') { console.log('Docker, private configuration and loopback isolation checks passed'); return; }
     if (command === 'backup') { backupPath=await backup(); console.log(`Backup verified: ${backupPath}`); return; }
     if (command === 'restore-check') {
@@ -160,6 +184,9 @@ export async function main(argv) {
       pinned.ITSM_REDIS_IMAGE=existing.images.redis;
       phase='rollback'; await compose(['pull','api','web','worker']);
       await compose(['up','-d','--no-build','--no-deps','--wait','--wait-timeout','180','api','worker','web']);
+      phase='rollback-runtime-images';
+      await verifyRuntime({...previousManifest.images,postgres:existing.images.postgres,redis:existing.images.redis});
+      phase='rollback-smoke';
       await smoke();
       await atomicJson(previousPath,existing);
       await atomicJson(currentPath,{...previous,images:{...previous.images,postgres:existing.images.postgres,redis:existing.images.redis},digests:{...previous.digests,postgres:existing.digests.postgres,redis:existing.digests.redis},verifiedAt:new Date().toISOString()});
@@ -183,6 +210,7 @@ export async function main(argv) {
     if (!running) { phase='backup'; backupPath=await backup(); }
     phase='migrate'; await compose(['run','--rm','--no-deps','migrate']);
     phase='start'; await compose(['up','-d','--no-build','--no-deps','--wait','--wait-timeout','180','api','worker','web']);
+    phase='runtime-images'; await verifyRuntime(manifest.images);
     phase='smoke'; await smoke();
     const images={...manifest.images};
     const digests={};

@@ -37,6 +37,8 @@ jobs:
         run: |
           echo "postgres=$(docker image inspect postgres:16-alpine --format '{{index .RepoDigests 0}}')" >> "$GITHUB_OUTPUT"
           echo "redis=$(docker image inspect redis:7.4-alpine --format '{{index .RepoDigests 0}}')" >> "$GITHUB_OUTPUT"
+      - name: Verify running container images and deployment isolation
+        run: node tests/integration/runtime-images.mjs
       - name: Check web and API routes
         run: |
           curl --fail --silent --show-error http://127.0.0.1:8088/ -o /dev/null
