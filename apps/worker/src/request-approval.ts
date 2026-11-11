@@ -15,8 +15,13 @@ type Approval = { id: string; ticket_id: string; corp_id: string; snapshot: Appr
 export type ApprovalObservation = {
   instanceId: string; corpId: string; templateId: string; applicantDingUserId: string;
   approverDingUserIds: string[]; state: 'PENDING' | 'APPROVED' | 'REJECTED' | 'WITHDRAWN';
+  requestBinding: {
+    reference: string; serviceCode: string; formVersion: number; requestedValidityDays: number;
+    request: ApprovalSnapshot['request'];
+  };
 };
 // A real adapter must establish these bindings from authoritative provider data.
+// Never fill requestBinding from the local ledger when the remote form omits it.
 // Reference lookup is optional: an absent result never authorizes another create call.
 export type RequestApprovalProvider = {
   create(input: { reference: string; corpId: string; snapshot: ApprovalSnapshot }, signal: AbortSignal): Promise<{ instanceId: string }>;
@@ -170,6 +175,8 @@ function matches(row: Approval, observed: ApprovalObservation): boolean {
     && observed.templateId === row.snapshot.templateId && observed.applicantDingUserId === row.snapshot.applicant.dingUserId
     && Array.isArray(observed.approverDingUserIds)
     && canonical(observed.approverDingUserIds) === canonical(row.snapshot.approvers.map(item => item.dingUserId))
+    && canonical(observed.requestBinding) === canonical({reference:row.id,serviceCode:row.snapshot.serviceCode,
+      formVersion:row.snapshot.formVersion,requestedValidityDays:row.snapshot.requestedValidityDays,request:row.snapshot.request})
     && ['PENDING','APPROVED','REJECTED','WITHDRAWN'].includes(observed.state);
 }
 

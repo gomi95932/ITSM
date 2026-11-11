@@ -49,7 +49,9 @@ const provider={
     creates++;
     const instanceId=`CI-INSTANCE-${input.reference}`;
     records.set(instanceId,{instanceId,corpId:input.corpId,templateId:input.snapshot.templateId,
-      applicantDingUserId:input.snapshot.applicant.dingUserId,approverDingUserIds:input.snapshot.approvers.map(p=>p.dingUserId),state:'PENDING'});
+      applicantDingUserId:input.snapshot.applicant.dingUserId,approverDingUserIds:input.snapshot.approvers.map(p=>p.dingUserId),state:'PENDING',
+      requestBinding:{reference:input.reference,serviceCode:input.snapshot.serviceCode,formVersion:input.snapshot.formVersion,
+        requestedValidityDays:input.snapshot.requestedValidityDays,request:structuredClone(input.snapshot.request)}});
     references.set(input.reference,instanceId);
     return {instanceId};
   },
@@ -128,12 +130,28 @@ try {
   for (const change of [
     observation=>{observation.corpId='other';},observation=>{observation.templateId='other';},
     observation=>{observation.applicantDingUserId='other';},observation=>{observation.approverDingUserIds.reverse();},
+    observation=>{observation.requestBinding.reference=randomUUID();},
+    observation=>{observation.requestBinding.serviceCode='REQ-OTHER';},
+    observation=>{observation.requestBinding.formVersion++;},
+    observation=>{observation.requestBinding.requestedValidityDays++;},
+    observation=>{observation.requestBinding.request.subject='Different request';},
+    observation=>{observation.requestBinding.request.description='Different scope';},
+    observation=>{observation.requestBinding.request.fields={role:'administrator'};},
+    observation=>{delete observation.requestBinding;},
   ]) {
     const fixture=await fresh(); const current=await processApproval(fixture.id);
     const observation=records.get(current.provider_instance_id); observation.state='APPROVED'; change(observation);
     assert.equal((await processApproval(fixture.id)).state,'BLOCKED');
     assert.equal((await row(fixture.id)).last_error,'PROVIDER_BINDING_MISMATCH');
+    assert.equal((await row(fixture.id)).last_verified_at,null,'mismatched remote scope cannot retain approval evidence');
   }
+
+  const tamperedAfterApproval=await fresh(); const tamperedRow=await processApproval(tamperedAfterApproval.id);
+  records.get(tamperedRow.provider_instance_id).state='APPROVED';
+  assert.equal((await processApproval(tamperedAfterApproval.id)).state,'APPROVED');
+  records.get(tamperedRow.provider_instance_id).requestBinding.request.fields={scope:'changed-remotely'};
+  assert.equal((await processApproval(tamperedAfterApproval.id)).state,'BLOCKED','remote scope changes invalidate prior approval');
+  assert.equal((await row(tamperedAfterApproval.id)).last_verified_at,null);
 
   const unavailableAfterApproval=await fresh(); const unavailableRow=await processApproval(unavailableAfterApproval.id);
   records.get(unavailableRow.provider_instance_id).state='APPROVED';
