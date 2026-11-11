@@ -13,10 +13,10 @@ export class HealthController {
   async ready(): Promise<HealthResponse> {
     try {
       const result = await this.db.pool.query(`SELECT
-        (SELECT count(*) FROM schema_migrations WHERE name IN ('001_ticket_core.sql','002_workspace.sql','003_ticket_ownership.sql','004_p1_review.sql','005_intake_triage.sql','006_request_catalog.sql','007_request_approval.sql','008_request_fulfillment.sql')) AS migrations,
+        (SELECT count(*) FROM schema_migrations WHERE name IN ('001_ticket_core.sql','002_workspace.sql','003_ticket_ownership.sql','004_p1_review.sql','005_intake_triage.sql','006_request_catalog.sql','007_request_approval.sql','008_request_fulfillment.sql','009_request_fulfillment_review.sql')) AS migrations,
         (SELECT count(*) FROM (SELECT id FROM tickets LIMIT 0) t) AS tickets,
         (SELECT count(*) FROM (SELECT ticket_id FROM sla_cycles LIMIT 0) s) AS sla`);
-      if (Number(result.rows[0]?.migrations) !== 8) throw new Error('SCHEMA_NOT_MIGRATED');
+      if (Number(result.rows[0]?.migrations) !== 9) throw new Error('SCHEMA_NOT_MIGRATED');
       return { status: 'ok', service: 'itsm-api' };
     } catch { throw new ServiceUnavailableException({ code: 'API_NOT_READY' }); }
   }

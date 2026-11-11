@@ -8,7 +8,7 @@ test('API health response identifies the service', () => {
 });
 
 test('readiness checks the database and required schema without returning errors or credentials',async () => {
-  const ready=new HealthController({pool:{query:async () => ({rows:[{migrations:'8'}]})}} as unknown as Database);
+  const ready=new HealthController({pool:{query:async () => ({rows:[{migrations:'9'}]})}} as unknown as Database);
   assert.deepEqual(await ready.ready(),{status:'ok',service:'itsm-api'});
   const broken=new HealthController({pool:{query:async () => { throw new Error('private database failure'); }}} as unknown as Database);
   await assert.rejects(broken.ready(),error => error instanceof Error && !error.message.includes('private'));
