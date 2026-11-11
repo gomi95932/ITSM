@@ -5,6 +5,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test dist/*.test.js",
     "start": "node dist/main.js"
   },
   "dependencies": { "@itsm/contracts": "0.1.0", "pg": "^8.23.1", "bullmq": "^5.50.0", "ioredis": "^5.4.2" },

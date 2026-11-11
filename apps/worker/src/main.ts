@@ -4,6 +4,7 @@ import { Pool, type PoolClient } from 'pg';
 import { P1_REVIEW_REMINDER_MINUTES, serviceMinutes } from '@itsm/contracts';
 import { maintainRequestApprovals } from './request-approval.js';
 import { maintainRequestFulfillments } from './request-fulfillment.js';
+import { shouldAutoClose } from './auto-close.js';
 
 const db = new Pool({ host:process.env.DB_HOST ?? 'db',database:process.env.DB_NAME ?? 'itsm',user:process.env.DB_USER ?? 'itsm',password:process.env.DB_PASSWORD,
   connectionTimeoutMillis:5000,statement_timeout:30000 });
@@ -159,7 +160,7 @@ async function timers() {
     for (const row of result.rows) {
       await client.query('UPDATE tickets SET sla_checked_at=now() WHERE id=$1',[row.id]);
       const closeHours = Number(process.env.AUTO_CLOSE_HOURS ?? 72);
-      if (row.status === 'PENDING_CONFIRMATION' && closeHours > 0 && row.clock.getTime()-row.updated_at.getTime() >= closeHours*3600000) {
+      if (shouldAutoClose(row.status,row.completed_at,row.clock,closeHours)) {
         const updated = await client.query("UPDATE tickets SET status='CLOSED',pending_group_id=NULL,pending_assignee_id=NULL,version=version+1,updated_at=now() WHERE id=$1 RETURNING *",[row.id]);
         await record(client,updated.rows[0],'AUTO_CLOSE',{ reason:`待确认超过 ${closeHours} 小时自动关闭` },row.status,'CLOSED',row);
         continue;
