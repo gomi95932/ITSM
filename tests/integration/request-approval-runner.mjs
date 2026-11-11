@@ -357,6 +357,15 @@ try {
   await maintainRequestFulfillments(db);
   assert.equal((await db.query('SELECT state FROM request_fulfillments WHERE id=$1',[cancelledTask])).rows[0].state,'REVOKE_DUE');
   await recordRequestRevocation(db,cancelledAfterGrant.id,employee('verifier'),'CHG-105');
+  const healthy=await fresh(); const healthyRow=await processApproval(healthy.id);
+  records.get(healthyRow.provider_instance_id).state='APPROVED';
+  await processApproval(healthy.id);
+  const healthyTask=await prepareRequestFulfillment(db,provider,healthy.id,employee('verifier'));
+  await db.query("UPDATE request_fulfillments SET updated_at=now()-interval '1 day' WHERE id=$1",[healthyTask]);
+  await maintainRequestFulfillments(db);
+  const checked=(await db.query('SELECT state,updated_at FROM request_fulfillments WHERE id=$1',[healthyTask])).rows[0];
+  assert.equal(checked.state,'READY');
+  assert.ok(checked.updated_at > new Date(Date.now()-60_000),'healthy task advances beyond the oldest batch');
   assert.equal((await db.query("SELECT count(*) FROM request_approval_events WHERE strpos(row_to_json(request_approval_events)::text,'provider-secret-sentinel')>0")).rows[0].count,'0');
   assert.equal((await db.query("SELECT count(*) FROM request_approvals WHERE strpos(row_to_json(request_approvals)::text,'provider-secret-sentinel')>0")).rows[0].count,'0');
   console.log('OA and manual fulfillment core verified: immutable snapshots, callback fencing, operator scope, fresh approval, delivery evidence and revocation obligations; real DingTalk and REQ routes remain gated');

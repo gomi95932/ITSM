@@ -88,7 +88,11 @@ export async function maintainRequestFulfillments(db:Pool):Promise<void> {
     const reason=block || (approval.state !== 'APPROVED' || !approval.last_verified_at ? 'APPROVAL_NO_LONGER_VERIFIED' : null)
       || (task.state === 'READY' && task.ready_until <= approval.clock ? 'DELIVERY_WINDOW_EXPIRED' : null)
       || (task.state === 'DELIVERED' && task.access_expires_at! <= approval.clock ? 'ACCESS_TERM_EXPIRED' : null);
-    if (!reason) return;
+    if (!reason) {
+      // Advance healthy rows so later tasks are not starved by the 100-row batch limit.
+      await client.query('UPDATE request_fulfillments SET updated_at=now() WHERE id=$1',[task.id]);
+      return;
+    }
     const state=task.state === 'READY' ? 'BLOCKED' : 'REVOKE_DUE';
     await client.query('UPDATE request_fulfillments SET state=$2,reason_code=$3,updated_at=now() WHERE id=$1',[task.id,state,reason]);
     await event(client,task,state === 'BLOCKED' ? 'TASK_BLOCKED' : 'REVOCATION_REQUIRED',state,null,null,reason);
