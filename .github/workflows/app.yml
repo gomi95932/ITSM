@@ -87,6 +87,8 @@ jobs:
         run: node tests/integration/request-catalog.mjs
       - name: Verify durable OA and controlled manual fulfillment without enabling live service requests
         run: node tests/integration/request-approval.mjs
+      - name: Verify service report boundaries and lifecycle metrics
+        run: node tests/integration/reports.mjs
       - uses: actions/upload-artifact@v4
         if: always()
         with:
