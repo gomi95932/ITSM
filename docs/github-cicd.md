@@ -2,29 +2,30 @@
 
 ## 现状与目标
 
-仓库目前没有 ITSM 应用代码。现有 `Bootstrap checks` 仅检查提交内容及 Compose 配置，不包含编译、应用测试、镜像发布或部署。`10.10.81.125` 尚未安装 Docker，不要将这份规范当成已完成的部署记录。
+仓库已有应用代码、锁文件和 `Application CI`。本次补齐发布框架，结果需以对应提交的实际 Actions 运行核实。`10.10.81.125` 的 Docker/Compose 有历史安装记录，但完整部署、恢复和真实接口联调尚未验收。不要将本文件当成部署完成记录。
 
-目标链路：本机开发 -> 功能分支 PR -> GitHub 托管 Runner 构建/测试 -> 合并 `main` -> 构建带提交 SHA 的镜像并发布至私有 GHCR -> 经批准部署到开发测试机 -> 健康检查、记录版本和回退点。测试机只拉镜像和运行容器，不编辑业务代码。
+目标链路：本机只编辑/提交代码 -> 功能分支 PR -> GitHub 托管 Runner 构建/测试 -> 合并 `main` -> 构建带提交 SHA 的镜像并发布至私有 GHCR -> 经批准部署到开发测试机 -> 健康检查、记录版本和回退点。开发测试机可在必要时构建测试镜像，但不编辑业务代码；本机不运行应用或测试数据库。
 
 ## GitHub 仓库设置（需仓库管理员操作）
 
 1. 保持仓库私有；开启 2FA，按最小权限邀请成员，不向 CI 提供个人长期令牌。
-2. 为 `main` 设置 ruleset：必须经 PR、至少一人审阅、要求 `Bootstrap checks / repository-config` 成功、禁止强制推送和删除。待应用测试接入后，将对应检查加为必过项。
+2. 为 `main` 设置 ruleset：必须经 PR、至少一人审阅、要求 `Bootstrap checks / repository-config` 与 `Application CI / build-test` 成功、禁止强制推送和删除。首次启用前核对 GitHub 实际显示的检查名。
 3. 为部署建立 `development` Environment；仅在真实部署工作流就绪后启用审批规则。不要把普通 PR 的代码放在有部署权限的 Runner 上执行。
 4. GHCR 镜像需由具有 `packages: write` 的专用工作流发布，使用 `GITHUB_TOKEN`；镜像以提交 SHA 标记，不用可变的 `latest` 作为回退依据。
 5. 保护仓库 Secrets/Environment Secrets；不把数据库密码、钉钉密钥、SSH 私钥、真实数据写入仓库或 Actions 日志。私有包拉取权限要单独验证。
 
-## 后续流水线门禁（应用代码进入仓库时实现）
+## 流水线门禁与待补工作
 
-- PR：依赖锁文件安装、格式/类型检查、单元测试、API 契约测试、迁移验证、构建；有 E2E 时增加模拟集成测试。
-- `main`：仅在所有检查通过后构建前后端及 worker 镜像，推送 GHCR；记录镜像 digest、源提交和迁移版本。
-- 部署：首次先人工执行。确认 Docker 安装、网络可达、独立目录、备份与回退演练后，再选择受限的自动化方式。开发机不开放 Docker TCP API；若使用 SSH，必须经受控网络和专用最小权限账号。不要把可执行任意 PR 的自托管 Runner 放在承载现有服务的主机上。
+- PR：依赖锁文件安装、构建、类型检查、单测、随机私密 CI env、Compose 校验、API/权限/SLA/语音草稿集成、迁移账本/原子回滚、备份恢复以及桌面/移动浏览器旅程。当前测试不覆盖尚未开发的 REQ/OA、知识等能力，不能用既有绿灯宣称首期全部完成。
+- `main`：测试通过后发布 web/api/worker 及 PostgreSQL/Redis 五个 SHA 镜像。数据镜像使用 CI 真正测试过的 digest，不重新选取上游可变标签。三个应用镜像仍在发布 job 重新构建；后续需要验证最终发布镜像与同版本源码测试结果及运行行为一致。
+- `release-bundle`：依赖测试及全部镜像发布成功，收集五个不可变 digest，生成包含文件哈希、迁移指纹及 runId 的发布清单和压缩包。artifact 保留 30 天；长期发布包及备份需受控异机归档。SHA256 是完整性校验，不代替来源核验和审批。
+- 部署：人工批准后在内网运行同版本 `scripts/release.mjs`，步骤见 [发布手册](release-runbook.md)。目前没有声称 GitHub 托管 Runner 可直连内网，也未启用内网自动部署 job。确认网络、目录、备份和回退后再扩展受控 CD。不要把任意 PR 自托管 Runner 放在现有服务主机。
 - 部署前备份数据库；升级迁移需注明向前兼容性。启动后检查 API/队列/数据库健康、关键用例及日志；失败时停止发布并按回退手册处理，不能假设数据库迁移可逆。
 
 ## 开发机隔离原则
 
-Compose 项目名为 `itsm-dev`，数据库和 Redis 仅在独立内部网络中访问，使用独立命名卷；没有宿主机端口映射。不要执行 `docker compose down -v`、全局 `docker system prune` 或修改宿主机已有 PostgreSQL、Redis、OpenClaw。将来增加应用容器时单独确认 HTTP 端口、磁盘、备份目标与访问控制。
+Compose 项目名为 `itsm-dev`，数据库和 Redis 仅在独立内部网络中访问，使用独立命名卷；没有宿主机端口映射。Web 仅绑定 `127.0.0.1:8088`，须经 SSH 隧道访问。不要执行 `docker compose down -v`、全局 `docker system prune` 或修改宿主机已有 PostgreSQL、Redis、OpenClaw。启动前单独确认 HTTP 端口、磁盘、备份目标与访问控制。
 
 ## 下一项开发任务
 
-按蓝图 T01 建立 `apps/web`、`apps/api`、`apps/worker`、`packages/contracts` 的可运行 monorepo，加入锁文件和真实测试后升级 CI。随后按 T04 交付工单状态机与事件日志。钉钉、GLPI、OA 仅在接口权限和字段经验证后接入，先使用 fake adapter。
+先核实当前提交 CI、main 镜像/发布包和服务器授权接入，完成真实部署、员工/工程师操作、备份恢复及兼容回退验证；未完成项明确保留。业务能力按 [实施基线](implementation-baseline.md) 顺序推进：安全入口与个人责任、P1 确认优先于 REQ/OA 和 INC 收尾；监控/CI 第二期，完整 SEC 第三期。

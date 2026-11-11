@@ -1,0 +1,11 @@
+.delegations-panel{max-width:960px}
+.delegation-list{list-style:none;margin:0;padding:0}
+.delegation-list li{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:16px 0;border-bottom:1px solid #dfe5e8}
+.delegation-list p{font-size:12px;margin-top:6px;overflow-wrap:anywhere}
+.delegation-list li>div{min-width:0}
+.delegation-list strong{overflow-wrap:anywhere}
+@media(max-width:760px){
+  .app-shell .sidebar nav{flex-wrap:wrap;overflow:visible}
+  .app-shell .sidebar nav button{flex:0 0 auto}
+  .delegation-list li{align-items:flex-start;flex-wrap:wrap}
+}

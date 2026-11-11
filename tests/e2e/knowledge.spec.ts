@@ -1,0 +1,36 @@
+import { test,expect } from '@playwright/test';
+
+test('knowledge moves from author to independent reviewer and employee reading',async({page})=>{
+  const title=`E2E 设备巡检知识 ${Date.now()}`;
+  const due=new Date();due.setDate(due.getDate()+30);
+  await page.setViewportSize({width:1440,height:900});await page.goto('/');
+  await page.getByRole('combobox',{name:'开发身份'}).selectOption('agent-1');
+  await page.getByRole('button',{name:'知识库',exact:true}).click();
+  await page.getByRole('button',{name:'内容管理'}).click();
+  await page.getByRole('button',{name:'新建知识'}).click();
+  await page.getByRole('textbox',{name:'标题'}).fill(title);
+  await page.getByRole('textbox',{name:'正文'}).fill('先检查设备网络，再核对工作站状态。');
+  await page.getByLabel('复核日期').fill(due.toISOString().slice(0,10));
+  await page.getByRole('button',{name:'保存草稿'}).click();
+  await expect(page.getByRole('button',{name:'提交审校'})).toBeVisible();
+  await page.getByRole('button',{name:'提交审校'}).click();
+  await page.getByRole('combobox',{name:'开发身份'}).selectOption('agent-3');
+  await page.getByRole('button',{name:'知识库',exact:true}).click();
+  await page.getByRole('button',{name:'内容管理'}).click();
+  await page.getByRole('button',{name:title}).click();
+  await expect(page.getByRole('button',{name:'审校通过'})).toBeVisible();
+  await page.getByRole('button',{name:'审校通过'}).click();
+  await page.getByRole('combobox',{name:'开发身份'}).selectOption('agent-1');
+  await page.getByRole('button',{name:'知识库',exact:true}).click();
+  await page.getByRole('button',{name:'内容管理'}).click();
+  await page.getByRole('button',{name:title}).click();
+  await page.getByRole('button',{name:'发布',exact:true}).click();
+  await page.getByRole('combobox',{name:'开发身份'}).selectOption('employee-1');
+  await page.getByRole('button',{name:'知识库',exact:true}).click();
+  await page.getByRole('button',{name:title}).click();
+  await expect(page.getByText('先检查设备网络，再核对工作站状态。')).toBeVisible();
+  await page.screenshot({path:'test-results/knowledge-desktop.png',fullPage:true});
+  await page.setViewportSize({width:390,height:844});
+  await page.screenshot({path:'test-results/knowledge-mobile.png',fullPage:true});
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+});

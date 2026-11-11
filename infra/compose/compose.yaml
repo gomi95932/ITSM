@@ -1,8 +1,99 @@
 name: itsm-dev
 
 services:
+  web:
+    image: ${ITSM_WEB_IMAGE:-${ITSM_IMAGE_PREFIX:-local/itsm}-web:${ITSM_IMAGE_TAG:-dev}}
+    build:
+      context: ../..
+      dockerfile: apps/web/Dockerfile
+    ports:
+      - "127.0.0.1:${ITSM_WEB_PORT:-8088}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - itsm_frontend
+    restart: unless-stopped
+
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/api/v1/health/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+  api:
+    image: ${ITSM_API_IMAGE:-${ITSM_IMAGE_PREFIX:-local/itsm}-api:${ITSM_IMAGE_TAG:-dev}}
+    build:
+      context: ../..
+      dockerfile: apps/api/Dockerfile
+    environment:
+      NODE_ENV: ${ITSM_NODE_ENV:-development}
+      ENABLE_DEV_AUTH: ${ENABLE_DEV_AUTH:-true}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      DINGTALK_CORP_ID: ${DINGTALK_CORP_ID:-}
+      DINGTALK_APP_KEY: ${DINGTALK_APP_KEY:-}
+      DINGTALK_APP_SECRET: ${DINGTALK_APP_SECRET:-}
+      NOTIFICATION_MODE: ${NOTIFICATION_MODE:-fake}
+      ITSM_SECURITY_CONTACT: ${ITSM_SECURITY_CONTACT:-}
+      DB_HOST: db
+      DB_NAME: itsm
+      DB_USER: itsm
+      DB_PASSWORD: ${ITSM_DB_PASSWORD:?Set ITSM_DB_PASSWORD in the private env file}
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    networks:
+      - itsm_frontend
+      - itsm_backend
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:3000/api/v1/health/ready', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  worker:
+    image: ${ITSM_WORKER_IMAGE:-${ITSM_IMAGE_PREFIX:-local/itsm}-worker:${ITSM_IMAGE_TAG:-dev}}
+    build:
+      context: ../..
+      dockerfile: apps/worker/Dockerfile
+    environment:
+      REDIS_URL: redis://:${ITSM_REDIS_PASSWORD:?Set ITSM_REDIS_PASSWORD in the private env file}@redis:6379
+      NODE_ENV: ${ITSM_NODE_ENV:-development}
+      DB_HOST: db
+      DB_NAME: itsm
+      DB_USER: itsm
+      DB_PASSWORD: ${ITSM_DB_PASSWORD:?Set ITSM_DB_PASSWORD in the private env file}
+      NOTIFICATION_MODE: ${NOTIFICATION_MODE:-fake}
+      ENABLE_LIVE_NOTIFICATIONS: ${ENABLE_LIVE_NOTIFICATIONS:-false}
+      DINGTALK_CORP_ID: ${DINGTALK_CORP_ID:-}
+      DINGTALK_APP_KEY: ${DINGTALK_APP_KEY:-}
+      DINGTALK_APP_SECRET: ${DINGTALK_APP_SECRET:-}
+      DINGTALK_AGENT_ID: ${DINGTALK_AGENT_ID:-}
+      ITSM_PUBLIC_URL: ${ITSM_PUBLIC_URL:-}
+      AUTO_CLOSE_HOURS: ${AUTO_CLOSE_HOURS:-72}
+    depends_on:
+      redis:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    networks:
+      - itsm_backend
+      - itsm_egress
+    healthcheck:
+      test: ["CMD", "node", "-e", "const n=Number(require('fs').readFileSync('/tmp/itsm-worker-heartbeat','utf8')); process.exit(Number.isFinite(n) && Date.now()-n>=0 && Date.now()-n<90000 ? 0 : 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+    restart: unless-stopped
+
   db:
-    image: postgres:16-alpine
+    image: ${ITSM_POSTGRES_IMAGE:-postgres:16-alpine}
     environment:
       POSTGRES_DB: itsm
       POSTGRES_USER: itsm
@@ -18,8 +109,28 @@ services:
       retries: 5
     restart: unless-stopped
 
+  migrate:
+    image: ${ITSM_API_IMAGE:-${ITSM_IMAGE_PREFIX:-local/itsm}-api:${ITSM_IMAGE_TAG:-dev}}
+    build:
+      context: ../..
+      dockerfile: apps/api/Dockerfile
+    environment:
+      NODE_ENV: ${ITSM_NODE_ENV:-development}
+      DB_HOST: db
+      DB_NAME: itsm
+      DB_USER: itsm
+      DB_PASSWORD: ${ITSM_DB_PASSWORD:?Set ITSM_DB_PASSWORD in the private env file}
+      ITSM_SEED_DEV_DATA: ${ITSM_SEED_DEV_DATA:-false}
+    command: ["node", "scripts/migrate.mjs"]
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - itsm_backend
+    restart: "no"
+
   redis:
-    image: redis:7.4-alpine
+    image: ${ITSM_REDIS_IMAGE:-redis:7.4-alpine}
     environment:
       ITSM_REDIS_PASSWORD: ${ITSM_REDIS_PASSWORD:?Set ITSM_REDIS_PASSWORD in the private env file}
     command: ["sh", "-c", "exec redis-server --appendonly yes --requirepass \"$$ITSM_REDIS_PASSWORD\""]
@@ -35,6 +146,8 @@ services:
     restart: unless-stopped
 
 networks:
+  itsm_frontend:
+  itsm_egress:
   itsm_backend:
     internal: true
 

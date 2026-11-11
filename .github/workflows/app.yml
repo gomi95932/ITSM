@@ -1,0 +1,213 @@
+name: Application CI
+
+on:
+  pull_request:
+  push:
+    branches: [main, feat/t01-runtime-ci]
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    outputs:
+      postgres-image: ${{ steps.tested-data.outputs.postgres }}
+      redis-image: ${{ steps.tested-data.outputs.redis }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm run typecheck
+      - run: npm test
+      - name: Set disposable CI configuration path
+        run: echo "ITSM_CI_ENV=$RUNNER_TEMP/itsm-ci.env" >> "$GITHUB_ENV"
+      - name: Create private disposable CI configuration
+        run: node scripts/create-development-env.mjs "$ITSM_CI_ENV" --seed-development-fixtures
+      - run: docker compose --env-file "$ITSM_CI_ENV" -f infra/compose/compose.yaml config --quiet
+      - name: Build and start isolated test stack
+        run: docker compose --env-file "$ITSM_CI_ENV" -f infra/compose/compose.yaml up -d --build --wait --wait-timeout 180
+      - name: Record data images actually tested
+        id: tested-data
+        run: |
+          echo "postgres=$(docker image inspect postgres:16-alpine --format '{{index .RepoDigests 0}}')" >> "$GITHUB_OUTPUT"
+          echo "redis=$(docker image inspect redis:7.4-alpine --format '{{index .RepoDigests 0}}')" >> "$GITHUB_OUTPUT"
+      - name: Verify running container images and deployment isolation
+        run: node tests/integration/runtime-images.mjs
+      - name: Check web and API routes
+        run: |
+          curl --fail --silent --show-error http://127.0.0.1:8088/ -o /dev/null
+          curl --fail --silent --show-error http://127.0.0.1:8088/api/v1/health | grep -q '"status":"ok"'
+      - name: Exercise ticket API and database audit invariants
+        run: |
+          node tests/integration/tickets.mjs
+          docker compose --env-file "$ITSM_CI_ENV" -f infra/compose/compose.yaml exec -T db sh -ec '
+            export PGPASSWORD="$POSTGRES_PASSWORD"
+            psql -U itsm -d itsm -tAc "SELECT count(*) FROM tickets" | grep -q "^2$"
+            psql -U itsm -d itsm -tAc "SELECT count(*) FROM ticket_events" | grep -q "^5$"
+            psql -U itsm -d itsm -tAc "SELECT count(*) FROM audit_logs" | grep -q "^5$"
+            psql -U itsm -d itsm -tAc "SELECT count(*) FROM outbox_events" | grep -q "^5$"
+          '
+      - name: Exercise workspace permissions, SLA and voice draft invariants
+        run: node tests/integration/workspace.mjs
+      - name: Verify ordinary intake blocks sensitive payloads without persistence
+        run: |
+          node tests/integration/intake-policy.mjs
+          docker compose --env-file "$ITSM_CI_ENV" -f infra/compose/compose.yaml exec -T db sh -ec '
+            export PGPASSWORD="$POSTGRES_PASSWORD"
+            for table in tickets ticket_events audit_logs outbox_events api_idempotency voice_drafts operational_audits notification_deliveries; do
+              psql -U itsm -d itsm -tAc "SELECT count(*) FROM $table t WHERE strpos(row_to_json(t)::text, '\''blocked-intake-sentinel'\'') > 0" | grep -q "^0$"
+            done
+            psql -U itsm -d itsm -tAc "SELECT count(*) > 0 FROM operational_audits WHERE action='\''SECURITY_CHANNEL_REQUIRED'\''" | grep -q "^t$"
+          '
+      - name: Verify immutable migrations and isolated backup recovery
+        run: node tests/integration/migrations.mjs
+      - name: Verify personal ownership, handover and disabled-person recovery
+        run: node tests/integration/ownership.mjs
+      - name: Verify resolution-based confirmation auto-close
+        run: node tests/integration/auto-close.mjs
+      - name: Verify requester-only immutable service feedback
+        run: node tests/integration/ticket-feedback.mjs
+      - name: Verify knowledge review, immutable publication and audience boundaries
+        run: node tests/integration/knowledge.mjs
+      - name: Verify immediate P1 alerts and scoped supervisor confirmation
+        run: node tests/integration/priority-review.mjs
+      - name: Verify GEN intake, classification and revocable proxy boundaries
+        run: node tests/integration/intake-triage.mjs
+      - name: Install CI browser
+        run: npx playwright install --with-deps chromium
+      - name: Exercise desktop and mobile employee and agent flows
+        run: npx playwright test
+      - name: Verify REQ policy versions, publisher scope and fail-closed OA boundary
+        run: node tests/integration/request-catalog.mjs
+      - name: Verify durable OA and controlled manual fulfillment without enabling live service requests
+        run: node tests/integration/request-approval.mjs
+      - name: Verify service report boundaries and lifecycle metrics
+        run: node tests/integration/reports.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: workspace-browser-results
+          path: test-results/
+          retention-days: 14
+      - name: Show containers on failure
+        if: failure() && env.ITSM_CI_ENV != ''
+        run: docker compose --env-file "$ITSM_CI_ENV" -f infra/compose/compose.yaml ps -a
+
+  publish:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build-test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        app: [api, web, worker]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Normalize image name
+        id: name
+        run: echo "repository=${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/${{ matrix.app }}/Dockerfile
+          push: true
+          tags: ghcr.io/${{ steps.name.outputs.repository }}-${{ matrix.app }}:${{ github.sha }}
+
+  publish-data-images:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build-test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        include:
+          - app: postgres
+            upstream: ${{ needs.build-test.outputs.postgres-image }}
+          - app: redis
+            upstream: ${{ needs.build-test.outputs.redis-image }}
+    steps:
+      - name: Normalize image name
+        id: name
+        run: echo "repository=${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Copy tested upstream image to private GHCR
+        env:
+          SOURCE: ${{ matrix.upstream }}
+          TARGET: ghcr.io/${{ steps.name.outputs.repository }}-${{ matrix.app }}:${{ github.sha }}
+        run: |
+          docker pull "$SOURCE"
+          docker tag "$SOURCE" "$TARGET"
+          docker push "$TARGET"
+
+  release-bundle:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [build-test, publish, publish-data-images]
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Package verified main commit and immutable image digests
+        run: |
+          node scripts/package-release.mjs "$GITHUB_SHA" "$RUNNER_TEMP/itsm-release"
+          tar -czf "itsm-release-${GITHUB_SHA}.tar.gz" -C "$RUNNER_TEMP/itsm-release" .
+          sha256sum "itsm-release-${GITHUB_SHA}.tar.gz" > "itsm-release-${GITHUB_SHA}.tar.gz.sha256"
+      - name: Rehearse deployment and recovery from the exact release archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="itsm-release-${GITHUB_SHA}.tar.gz"
+          sha256sum --check "${archive}.sha256"
+          release_root="$RUNNER_TEMP/itsm-release-rehearsal"
+          private_env="$RUNNER_TEMP/itsm-release-rehearsal.env"
+          state="$RUNNER_TEMP/itsm-release-rehearsal-state"
+          mkdir "$release_root"
+          tar -xzf "$archive" -C "$release_root"
+          node "$release_root/scripts/create-development-env.mjs" "$private_env" --seed-development-fixtures
+          release() {
+            node "$release_root/scripts/release.mjs" "$@" --env "$private_env" --state "$state"
+          }
+          release check
+          release deploy "$GITHUB_SHA"
+          node tests/integration/tickets.mjs
+          backup_output=$(release backup)
+          backup_path=${backup_output#Backup verified: }
+          [[ "$backup_path" == "$state/backups/"*.dump && -f "$backup_path" ]]
+          release restore-check --backup "$backup_path"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: itsm-release-${{ github.sha }}
+          path: |
+            itsm-release-*.tar.gz
+            itsm-release-*.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 30
