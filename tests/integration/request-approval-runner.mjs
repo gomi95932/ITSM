@@ -60,9 +60,12 @@ const provider={
   async recoverCreated(reference) {const instanceId=references.get(reference); return instanceId?{instanceId}:null;},
 };
 async function processApproval(id,adapter=provider) {
-  await db.query('UPDATE request_approvals SET next_at=now() WHERE id=$1',[id]);
+  await db.query("UPDATE request_approvals SET next_at=now()-interval '1 day' WHERE id=$1",[id]);
   assert.equal(await processNextRequestApproval(db,adapter),true);
-  return row(id);
+  const processed=await row(id);
+  assert.ok(processed.next_at > new Date(Date.now()-60_000) || ['BLOCKED','EXPIRED'].includes(processed.state),
+    'the targeted approval must have been processed');
+  return processed;
 }
 async function hint(id,eventId=randomUUID(),extras={}) {
   const approval=await row(id);
