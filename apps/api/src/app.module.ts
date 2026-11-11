@@ -11,6 +11,8 @@ import { IntakePolicyService } from './intake-policy.service.js';
 import { DelegationsController } from './delegations.controller.js';
 import { RequestCatalogController } from './request-catalog.controller.js';
 import { RequestCatalogService } from './request-catalog.service.js';
+import { KnowledgeController } from './knowledge.controller.js';
+import { KnowledgeService } from './knowledge.service.js';
 
-@Module({ controllers: [HealthController, TicketsController,AuthController,WorkspaceController,DelegationsController,RequestCatalogController], providers: [Database,AuthService,TicketsService,SlaService,IntakePolicyService,RequestCatalogService] })
+@Module({ controllers: [HealthController, TicketsController,AuthController,WorkspaceController,DelegationsController,RequestCatalogController,KnowledgeController], providers: [Database,AuthService,TicketsService,SlaService,IntakePolicyService,RequestCatalogService,KnowledgeService] })
 export class AppModule {}

@@ -46,6 +46,10 @@ export const messages: Record<string,string> = {
   REQUEST_APPROVAL_POLICY_NOT_CONFIGURED:'该服务尚未开放审批，请联系服务台。',DRAFT_EXPIRED:'草稿已过期，请重新整理或直接填写表单。',
   ASR_UNAVAILABLE:'暂时无法转写，请继续使用文字填写。',INTAKE_RATE_LIMITED:'操作较频繁，请稍后再试。',
   EMPLOYEE_NOT_LINKED:'钉钉账号尚未关联公司员工，请联系管理员。',DINGTALK_NOT_CONFIGURED:'钉钉应用尚未配置，请联系管理员。',
+  INVALID_KNOWLEDGE_DRAFT:'请检查标题、正文、责任组和复核日期（须在未来 1 至 366 天内）。',
+  INVALID_KNOWLEDGE_ACTION:'操作参数无效，请刷新后重试。',KNOWLEDGE_ROLE_REQUIRED:'当前账号尚未被任命为该组知识编辑或审校人。',
+  KNOWLEDGE_AUTHOR_REQUIRED:'只有原作者可修订此草稿。',KNOWLEDGE_VERSION_OR_STATE_CONFLICT:'知识状态或版本已变化，请刷新后重试。',
+  KNOWLEDGE_SOURCE_UNAVAILABLE:'关联故障工单不可用。',INVALID_KNOWLEDGE_SEARCH:'搜索内容无效。',
 };
 export function errorText(error: unknown): string {
   return error instanceof ApiError ? messages[error.code] ?? `操作未完成（${error.status}），请检查后重试。` : '网络连接失败，请检查网络后重试。';

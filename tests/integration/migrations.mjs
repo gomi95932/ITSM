@@ -20,7 +20,7 @@ const compose=(args,options)=>run('docker',[...prefix,...args],options);
 const sql=async query=>(await compose(['exec','-T','db','sh','-ec','PGPASSWORD="$POSTGRES_PASSWORD" exec psql -v ON_ERROR_STOP=1 -U itsm -d itsm -Atc "$1"','sh',query])).text;
 try {
   const before=await sql('SELECT json_agg(s ORDER BY name) FROM schema_migrations s');
-  assert.equal(JSON.parse(before).length,10);
+  assert.equal(JSON.parse(before).length,11);
   await compose(['run','--rm','--no-deps','migrate']);
   assert.equal(await sql('SELECT json_agg(s ORDER BY name) FROM schema_migrations s'),before,'repeated migrations must preserve the ledger');
   const first=JSON.parse(before)[0];
