@@ -3,12 +3,12 @@ import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { Pool } from 'pg';
 import { enqueueRequestApproval, maintainRequestApprovals, processNextRequestApproval, queueVerifiedApprovalHint } from './apps/worker/dist/request-approval.js';
-import { prepareRequestFulfillment, recordRequestDelivery, recordRequestRevocation, maintainRequestFulfillments } from './apps/worker/dist/request-fulfillment.js';
+import { prepareRequestFulfillment, recordRequestDelivery, reviewRequestDelivery, recordRequestRevocation, maintainRequestFulfillments } from './apps/worker/dist/request-fulfillment.js';
 
 if (process.env.ITSM_APPROVAL_CI !== 'true' || process.env.NODE_ENV === 'production') throw new Error('DISPOSABLE_APPROVAL_CI_ONLY');
 const db = new Pool({host:process.env.DB_HOST,database:process.env.DB_NAME,user:process.env.DB_USER,password:process.env.DB_PASSWORD,max:6});
 const corp = 'ci-approval-corp';
-const roles = ['requester','manager','owner','verifier'];
+const roles = ['requester','manager','owner','verifier','reviewer'];
 const employee = role => `oa-ci-${role}`;
 const catalog = {code:'REQ-OA-CI',formVersion:1,published:true,name:'CI approval fixture',description:'Disposable tests only',
   groupId:'oa-ci-group',visibleGroups:[],fields:[],maxValidityDays:90,
@@ -78,6 +78,7 @@ try {
   }
   await db.query("INSERT INTO support_groups(id,name) VALUES ('oa-ci-group','CI approvals')");
   await db.query("INSERT INTO group_memberships(employee_id,group_id) VALUES ($1,'oa-ci-group')",[employee('verifier')]);
+  await db.query("INSERT INTO group_memberships(employee_id,group_id) VALUES ($1,'oa-ci-group')",[employee('reviewer')]);
   await db.query(`INSERT INTO service_catalog(code,type,form_version,published,group_id,name) VALUES ('REQ-OA-CI','REQ',1,true,'oa-ci-group','CI approval fixture')`);
   await db.query("INSERT INTO request_catalog_versions(service_code,form_version,snapshot) VALUES ('REQ-OA-CI',1,$1)",[JSON.stringify(catalog)]);
   const unavailable=await draft();
@@ -299,6 +300,8 @@ try {
     /FULFILLMENT_OPERATOR_DENIED/);
   const taskId=await prepareRequestFulfillment(db,provider,fulfillment.id,employee('verifier'));
   assert.equal(await prepareRequestFulfillment(db,provider,fulfillment.id,employee('verifier')),taskId);
+  await assert.rejects(reviewRequestDelivery(db,fulfillment.id,employee('reviewer'),'CHG-REVIEW-099'),
+    /FULFILLMENT_REVIEW_UNAVAILABLE/,'a prepared task is not a delivered grant');
   await assert.rejects(recordRequestDelivery(db,provider,fulfillment.id,employee('manager'),'CHG-100'),/FULFILLMENT_NOT_READY/);
   await assert.rejects(recordRequestDelivery(db,provider,fulfillment.id,employee('verifier'),'invalid secret value'),/FULFILLMENT_EVIDENCE_REQUIRED/);
   await recordRequestDelivery(db,provider,fulfillment.id,employee('verifier'),'CHG-100');
@@ -306,6 +309,19 @@ try {
   assert.equal(delivered.state,'DELIVERED');
   assert.ok(delivered.access_expires_at > delivered.delivered_at);
   await assert.rejects(recordRequestDelivery(db,provider,fulfillment.id,employee('verifier'),'CHG-101'),/FULFILLMENT_NOT_READY/);
+  await assert.rejects(reviewRequestDelivery(db,fulfillment.id,employee('verifier'),'CHG-REVIEW-100'),/FULFILLMENT_OPERATOR_DENIED/);
+  await assert.rejects(reviewRequestDelivery(db,fulfillment.id,employee('requester'),'CHG-REVIEW-100'),/FULFILLMENT_OPERATOR_DENIED/);
+  await assert.rejects(reviewRequestDelivery(db,fulfillment.id,employee('reviewer'),'bad evidence'),/FULFILLMENT_EVIDENCE_REQUIRED/);
+  await db.query('UPDATE employees SET active=false WHERE id=$1',[employee('reviewer')]);
+  await assert.rejects(reviewRequestDelivery(db,fulfillment.id,employee('reviewer'),'CHG-REVIEW-100'),/FULFILLMENT_OPERATOR_DENIED/);
+  await db.query('UPDATE employees SET active=true WHERE id=$1',[employee('reviewer')]);
+  await reviewRequestDelivery(db,fulfillment.id,employee('reviewer'),'CHG-REVIEW-100');
+  assert.equal((await db.query('SELECT reviewed_by FROM request_fulfillments WHERE id=$1',[taskId])).rows[0].reviewed_by,
+    employee('reviewer'));
+  await assert.rejects(reviewRequestDelivery(db,fulfillment.id,employee('reviewer'),'CHG-REVIEW-101'),/FULFILLMENT_REVIEW_UNAVAILABLE/);
+  await assert.rejects(db.query('UPDATE request_fulfillments SET reviewed_by=$2 WHERE id=$1',[taskId,employee('verifier')]),
+    /REQUEST_FULFILLMENT_IMMUTABLE/);
+  assert.equal((await db.query("SELECT count(*) FROM request_fulfillment_events WHERE fulfillment_id=$1 AND action='DELIVERY_REVIEWED'",[taskId])).rows[0].count,'1');
   await assert.rejects(db.query('DELETE FROM request_fulfillments WHERE id=$1',[taskId]),/REQUEST_FULFILLMENT_IMMUTABLE/);
   await assert.rejects(db.query("UPDATE request_fulfillment_events SET evidence_reference='CHG-999' WHERE fulfillment_id=$1",[taskId]),
     /REQUEST_CATALOG_VERSION_IMMUTABLE/);

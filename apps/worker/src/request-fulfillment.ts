@@ -2,7 +2,7 @@ import { type Pool, type PoolClient } from 'pg';
 import { bounded, localBlock, matches, type RequestApprovalProvider } from './request-approval.js';
 
 type Task = {id:string; approval_id:string; ticket_id:string; assignee_id:string; state:string;
-  ready_until:Date; access_expires_at:Date|null};
+  ready_until:Date; access_expires_at:Date|null; reviewed_at:Date|null};
 const evidence = (value:string) => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._/-]{2,99}$/.test(value);
 
 async function transaction<T>(db:Pool, fn:(client:PoolClient)=>Promise<T>):Promise<T> {
@@ -74,6 +74,22 @@ export async function recordRequestDelivery(db:Pool,provider:RequestApprovalProv
       access_expires_at=now()+($2::integer * interval '1 day'),updated_at=now() WHERE id=$1`,
       [task.id,approval.snapshot.requestedValidityDays]);
     await event(client,task,'DELIVERY_RECORDED','DELIVERED',actorId,reference);
+  });
+}
+
+// A second operator checks the actual downstream grant; approval and delivery evidence alone are not a review.
+export async function reviewRequestDelivery(db:Pool,approvalId:string,reviewerId:string,reference:string):Promise<void> {
+  if (!evidence(reference)) throw new Error('FULFILLMENT_EVIDENCE_REQUIRED');
+  await transaction(db,async client=>{
+    const {approval,task}=await locked(client,approvalId);
+    if (!task || !['DELIVERED','REVOKE_DUE'].includes(task.state) || task.reviewed_at)
+      throw new Error('FULFILLMENT_REVIEW_UNAVAILABLE');
+    if (reviewerId === task.assignee_id) throw new Error('FULFILLMENT_OPERATOR_DENIED');
+    const ticket=(await client.query('SELECT owner_group_id FROM tickets WHERE id=$1 FOR SHARE',[approval.ticket_id])).rows[0];
+    await operator(client,reviewerId,ticket.owner_group_id,approval,true);
+    await client.query('UPDATE request_fulfillments SET reviewed_at=now(),reviewed_by=$2,updated_at=now() WHERE id=$1',
+      [task.id,reviewerId]);
+    await event(client,task,'DELIVERY_REVIEWED',task.state,reviewerId,reference);
   });
 }
 
