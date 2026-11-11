@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { createHash } from 'node:crypto';
-import { schemaFingerprint, validateConfig, validateRelease, validateRuntimeContainer } from '../../scripts/release.mjs';
+import { requiredReleaseFiles, schemaFingerprint, validateConfig, validateRelease, validateRuntimeContainer } from '../../scripts/release.mjs';
 
 test('runtime verification requires approved image, project, service and healthy state',() => {
   const image=`sha256:${'c'.repeat(64)}`;
@@ -38,7 +38,7 @@ test('bundle verifies exact SHA, file contents and migration fingerprint',async 
   const directory=await mkdtemp(resolve(tmpdir(),'itsm-release-'));
   try {
     const files=[];
-    for (const path of ['infra/compose/compose.yaml','scripts/release.mjs','db/migrations/001_ticket_core.sql']) {
+    for (const path of requiredReleaseFiles) {
       await mkdir(resolve(directory,path,'..'),{recursive:true}); await writeFile(resolve(directory,path),'fixture');
       files.push({path,sha256:createHash('sha256').update(await readFile(resolve(directory,path))).digest('hex')});
     }
@@ -46,6 +46,12 @@ test('bundle verifies exact SHA, file contents and migration fingerprint',async 
     const sha='a'.repeat(40), manifest={sha,repository:'gomi95932/ITSM',ref:'refs/heads/main',files,schemaFingerprint:schemaFingerprint(files),images};
     await writeFile(resolve(directory,'release.json'),JSON.stringify(manifest));
     assert.equal((await validateRelease(directory,sha)).sha,sha);
+    for (const required of requiredReleaseFiles) {
+      const incomplete=files.filter(file => file.path !== required);
+      await writeFile(resolve(directory,'release.json'),JSON.stringify({...manifest,files:incomplete,schemaFingerprint:schemaFingerprint(incomplete)}));
+      await assert.rejects(validateRelease(directory,sha),/INCOMPLETE_RELEASE/);
+    }
+    await writeFile(resolve(directory,'release.json'),JSON.stringify(manifest));
     await assert.rejects(validateRelease(directory,'b'.repeat(40)),/UNAPPROVED/);
     manifest.images.api='ghcr.io/gomi95932/itsm-api:latest';
     await writeFile(resolve(directory,'release.json'),JSON.stringify(manifest));

@@ -5,15 +5,15 @@
 ## 1. 发布前置条件
 
 - 管理员确认变更窗口、磁盘、8088 端口及原服务清单；保留现有宿主 PostgreSQL、Redis、OpenClaw 等服务。
-- 服务器需有 Node.js 22、Docker Engine、Compose v2 和受控 GitHub/GHCR 出口。Docker 操作账户属于高权限账户，不开放 Docker TCP API。
-- 只使用本仓库 `main` 成功流水线的发布包和完整 40 位 SHA；先核对运行 URL、提交、`build-test`、两个镜像发布 job 和 `release-bundle` 全部成功。校验和只验证完整性，不提供发布者身份；不得从聊天、陌生镜像站或不受信任 PR 下载脚本执行。
+- 应用与 CI 使用 Node.js 22；发布工具要求 Node.js >=22、Docker Engine、Compose v2 和受控 GitHub/GHCR 出口。开发机已核实的宿主 Node.js 为 24.14.1，部署时仍须实际验证工具兼容性，不自动替换现有服务的全局运行时。Docker 操作账户属于高权限账户，不开放 Docker TCP API。
+- 只使用本仓库 `main` 成功流水线的发布包和完整 40 位 SHA；先核对运行 URL、提交、`build-test`、三个应用镜像发布 job（api/web/worker）、两个数据镜像发布 job（postgres/redis）和 `release-bundle` 全部成功。校验和只验证完整性，不提供发布者身份；不得从聊天、陌生镜像站或不受信任 PR 下载脚本执行。
 - GHCR 用只读 `read:packages` 拉取身份，通过 `docker login ghcr.io --password-stdin` 交互输入；不在命令、Git、日志或工单中保存令牌。
 - 创建独立目录 `/opt/itsm/releases/<SHA>`、`/opt/itsm/shared`；归属为批准的部署账户。共享目录权限 0700；环境文件 0600。首次创建目录须获管理员授权。
 - 开发环境可明确启用虚拟人员种子及开发身份，不可使用真实员工或生产数据。该身份不是正式钉钉免登。
 
 ## 2. 私密配置与发布包
 
-在服务器的受控源码副本中运行以下配置生成器；目标文件必须尚不存在，生成器不会覆盖已有凭据：
+发布包包含配置生成器、发布工具、Compose 文件、迁移及本手册，并在打包末尾执行完整性校验。在服务器核验并解压受信任发布包后，从该版本目录运行以下配置生成器；目标文件必须尚不存在，生成器不会覆盖已有凭据：
 
 ```sh
 node scripts/create-development-env.mjs /opt/itsm/shared/development.env --seed-development-fixtures

@@ -7,6 +7,13 @@ import { fileURLToPath } from 'node:url';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const sha256 = value => createHash('sha256').update(value).digest('hex');
 export const schemaFingerprint = files => sha256(JSON.stringify(files.filter(f => f.path.startsWith('db/migrations/')).sort((a,b) => a.path.localeCompare(b.path))));
+export const requiredReleaseFiles = Object.freeze([
+  'infra/compose/compose.yaml',
+  'scripts/release.mjs',
+  'scripts/create-development-env.mjs',
+  'docs/release-runbook.md',
+  'db/migrations/001_ticket_core.sql',
+]);
 
 export function validateConfig(config) {
   if (config.name !== 'itsm-dev') throw new Error('UNEXPECTED_COMPOSE_PROJECT');
@@ -49,7 +56,7 @@ export async function validateRelease(directory, expected) {
     const path = resolve(directory, file.path);
     if (!(await realpath(path)).startsWith(`${base}${sep}`) || !(await lstat(path)).isFile() || sha256(await readFile(path)) !== file.sha256) throw new Error('RELEASE_CHECKSUM_MISMATCH');
   }
-  for (const required of ['infra/compose/compose.yaml','scripts/release.mjs','db/migrations/001_ticket_core.sql'])
+  for (const required of requiredReleaseFiles)
     if (!seen.has(required)) throw new Error('INCOMPLETE_RELEASE');
   if (schemaFingerprint(manifest.files) !== manifest.schemaFingerprint) throw new Error('SCHEMA_FINGERPRINT_MISMATCH');
   for (const name of ['api','web','worker','postgres','redis']) {
