@@ -312,6 +312,7 @@ try {
   await assert.rejects(reviewRequestDelivery(db,fulfillment.id,employee('verifier'),'CHG-REVIEW-100'),/FULFILLMENT_OPERATOR_DENIED/);
   await assert.rejects(reviewRequestDelivery(db,fulfillment.id,employee('requester'),'CHG-REVIEW-100'),/FULFILLMENT_OPERATOR_DENIED/);
   await assert.rejects(reviewRequestDelivery(db,fulfillment.id,employee('reviewer'),'bad evidence'),/FULFILLMENT_EVIDENCE_REQUIRED/);
+  await assert.rejects(reviewRequestDelivery(db,fulfillment.id,employee('reviewer'),'CHG-100'),/FULFILLMENT_EVIDENCE_REUSED/);
   await db.query('UPDATE employees SET active=false WHERE id=$1',[employee('reviewer')]);
   await assert.rejects(reviewRequestDelivery(db,fulfillment.id,employee('reviewer'),'CHG-REVIEW-100'),/FULFILLMENT_OPERATOR_DENIED/);
   await db.query('UPDATE employees SET active=true WHERE id=$1',[employee('reviewer')]);
@@ -331,6 +332,8 @@ try {
   await maintainRequestFulfillments(db);
   assert.equal((await db.query('SELECT state FROM request_fulfillments WHERE id=$1',[taskId])).rows[0].state,'REVOKE_DUE',
     'a callback invalidates earlier approval evidence and requires manual revocation');
+  await assert.rejects(recordRequestRevocation(db,fulfillment.id,employee('verifier'),'CHG-100'),/FULFILLMENT_EVIDENCE_REUSED/);
+  await assert.rejects(recordRequestRevocation(db,fulfillment.id,employee('verifier'),'CHG-REVIEW-100'),/FULFILLMENT_EVIDENCE_REUSED/);
   await recordRequestRevocation(db,fulfillment.id,employee('verifier'),'CHG-102');
   assert.equal((await db.query('SELECT state FROM request_fulfillments WHERE id=$1',[taskId])).rows[0].state,'REVOKED');
 
