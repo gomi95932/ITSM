@@ -5,6 +5,7 @@ import { P1_REVIEW_REMINDER_MINUTES, serviceMinutes } from '@itsm/contracts';
 import { maintainRequestApprovals } from './request-approval.js';
 import { maintainRequestFulfillments } from './request-fulfillment.js';
 import { shouldAutoClose } from './auto-close.js';
+import { notificationLink } from './notification-message.js';
 
 const db = new Pool({ host:process.env.DB_HOST ?? 'db',database:process.env.DB_NAME ?? 'itsm',user:process.env.DB_USER ?? 'itsm',password:process.env.DB_PASSWORD,
   connectionTimeoutMillis:5000,statement_timeout:30000 });
@@ -55,7 +56,7 @@ async function expand() {
 async function deliver() {
   if (mode === 'disabled') return;
   await transaction(async client => {
-    const result = await client.query(`SELECT d.*,t.id AS ticket_id,t.number,t.requester_id,t.owner_group_id,t.pending_assignee_id,t.pending_group_id,e.action,e.detail,e.to_status,e.id AS event_id
+    const result = await client.query(`SELECT d.*,t.id AS ticket_id,t.number,t.requester_id,t.owner_group_id,t.pending_assignee_id,t.pending_group_id,e.action,e.to_status,e.id AS event_id
       FROM notification_deliveries d JOIN outbox_events o ON o.id=d.outbox_id JOIN ticket_events e ON e.id=o.event_id JOIN tickets t ON t.id=o.ticket_id
       WHERE d.state IN ('PENDING','SENDING') AND d.next_at<=now() ORDER BY (o.kind='P1_ALERT') DESC,d.next_at,d.id LIMIT 1 FOR UPDATE OF d SKIP LOCKED`);
     const row = result.rows[0]; if (!row) return;
@@ -81,13 +82,8 @@ async function deliver() {
         if (['ACCEPT','ACCEPT_HANDOVER'].includes(row.action) && row.employee_id === row.requester_id)
           await client.query('UPDATE sla_cycles SET responded_at=now() WHERE ticket_id=$1 AND cycle=1 AND responded_at IS NULL',[row.ticket_id]);
       } else {
-        const base = new URL(process.env.ITSM_PUBLIC_URL ?? '');
-        if (base.protocol !== 'https:') throw new Error('HTTPS_DEEP_LINK_REQUIRED');
-        base.hash = `/tickets/${row.ticket_id}`;
-        const reply = ['ACCEPT','ACCEPT_HANDOVER','REQUEST_INFO','RESOLVE'].includes(row.action) ? String(row.detail.comment ?? '').slice(0,500) : '';
         const data = await provider('asyncsend_v2',{ agent_id:process.env.DINGTALK_AGENT_ID,userid_list:user.ding_user_id,to_all_user:false,
-          msg:{ msgtype:'link',link:{ title:`${row.action.startsWith('P1_') ? 'P1 候选 · ' : 'IT 服务台 · '}${row.number}`,
-            text:row.action.startsWith('P1_') ? `${row.action==='P1_REVIEW_OVERDUE' ? '主管确认逾期，请立即跟进。' : '请立即响应，主管确认中。'}工单 ${row.number}` : `${row.to_status}${reply ? `\n${reply}` : ''}`,messageUrl:base.toString(),picUrl:'' } } });
+          msg:{ msgtype:'link',link:notificationLink(process.env.ITSM_PUBLIC_URL ?? '',row) } });
         if (data.task_id === undefined) throw new Error('TASK_NOT_RETURNED');
         await client.query("UPDATE notification_deliveries SET state='SENDING',provider_task_id=$2,attempts=0,next_at=now()+interval '5 seconds',updated_at=now() WHERE id=$1",[row.id,String(data.task_id)]);
       }
