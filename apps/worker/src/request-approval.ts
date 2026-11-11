@@ -99,8 +99,9 @@ export async function enqueueRequestApproval(client: PoolClient, input: {
   return result.rows[0].id;
 }
 
-async function localBlock(client: PoolClient, row: Approval): Promise<string | null> {
-  if (row.expires_at <= row.clock) return 'APPROVAL_EXPIRED';
+export async function localBlock(client: PoolClient, row: Approval): Promise<string | null> {
+  // The approval deadline does not shorten an already approved access term.
+  if (row.state !== 'APPROVED' && row.expires_at <= row.clock) return 'APPROVAL_EXPIRED';
   const ticket = (await client.query('SELECT * FROM tickets WHERE id=$1 FOR SHARE',[row.ticket_id])).rows[0];
   if (ticket?.status !== 'WAITING_APPROVAL') return 'TICKET_NOT_AWAITING_APPROVAL';
   if (ticket.requester_id !== row.snapshot.applicant.employeeId || ticket.service_code !== row.snapshot.serviceCode
@@ -161,7 +162,7 @@ export async function queueVerifiedApprovalHint(client: PoolClient, input: { cor
   return true;
 }
 
-async function bounded<T>(fn: (signal: AbortSignal) => Promise<T>): Promise<T> {
+export async function bounded<T>(fn: (signal: AbortSignal) => Promise<T>): Promise<T> {
   const controller = new AbortController();
   let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -170,7 +171,7 @@ async function bounded<T>(fn: (signal: AbortSignal) => Promise<T>): Promise<T> {
     })]);
   } finally { if (timeout) clearTimeout(timeout); }
 }
-function matches(row: Approval, observed: ApprovalObservation): boolean {
+export function matches(row: Approval, observed: ApprovalObservation): boolean {
   return !!observed && observed.instanceId === row.provider_instance_id && observed.corpId === row.corp_id
     && observed.templateId === row.snapshot.templateId && observed.applicantDingUserId === row.snapshot.applicant.dingUserId
     && Array.isArray(observed.approverDingUserIds)

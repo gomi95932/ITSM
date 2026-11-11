@@ -79,7 +79,7 @@ jobs:
         run: npx playwright test
       - name: Verify REQ policy versions, publisher scope and fail-closed OA boundary
         run: node tests/integration/request-catalog.mjs
-      - name: Verify durable OA lifecycle without enabling live service requests
+      - name: Verify durable OA and controlled manual fulfillment without enabling live service requests
         run: node tests/integration/request-approval.mjs
       - uses: actions/upload-artifact@v4
         if: always()

@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { Pool } from 'pg';
 import { enqueueRequestApproval, maintainRequestApprovals, processNextRequestApproval, queueVerifiedApprovalHint } from './apps/worker/dist/request-approval.js';
+import { prepareRequestFulfillment, recordRequestDelivery, recordRequestRevocation, maintainRequestFulfillments } from './apps/worker/dist/request-fulfillment.js';
 
 if (process.env.ITSM_APPROVAL_CI !== 'true' || process.env.NODE_ENV === 'production') throw new Error('DISPOSABLE_APPROVAL_CI_ONLY');
 const db = new Pool({host:process.env.DB_HOST,database:process.env.DB_NAME,user:process.env.DB_USER,password:process.env.DB_PASSWORD,max:6});
@@ -73,6 +74,7 @@ try {
     await db.query('INSERT INTO identity_links(corp_id,ding_user_id,employee_id) VALUES ($1,$2,$3)',[corp,`CI-DING-${role}`,employee(role)]);
   }
   await db.query("INSERT INTO support_groups(id,name) VALUES ('oa-ci-group','CI approvals')");
+  await db.query("INSERT INTO group_memberships(employee_id,group_id) VALUES ($1,'oa-ci-group')",[employee('verifier')]);
   await db.query(`INSERT INTO service_catalog(code,type,form_version,published,group_id,name) VALUES ('REQ-OA-CI','REQ',1,true,'oa-ci-group','CI approval fixture')`);
   await db.query("INSERT INTO request_catalog_versions(service_code,form_version,snapshot) VALUES ('REQ-OA-CI',1,$1)",[JSON.stringify(catalog)]);
   const unavailable=await draft();
@@ -285,7 +287,77 @@ try {
   await maintainRequestApprovals(db);
   assert.equal((await row(expiration.id)).state,'EXPIRED');
   assert.equal((await row(expiration.id)).creation_attempts,0);
+  const fulfillment=await fresh(); const fulfillmentRow=await processApproval(fulfillment.id);
+  await assert.rejects(prepareRequestFulfillment(db,provider,fulfillment.id,employee('verifier')),
+    /FULFILLMENT_APPROVAL_UNAVAILABLE/,'pending OA cannot create a delivery task');
+  records.get(fulfillmentRow.provider_instance_id).state='APPROVED';
+  await processApproval(fulfillment.id);
+  await assert.rejects(prepareRequestFulfillment(db,provider,fulfillment.id,employee('requester')),
+    /FULFILLMENT_OPERATOR_DENIED/);
+  const taskId=await prepareRequestFulfillment(db,provider,fulfillment.id,employee('verifier'));
+  assert.equal(await prepareRequestFulfillment(db,provider,fulfillment.id,employee('verifier')),taskId);
+  await assert.rejects(recordRequestDelivery(db,provider,fulfillment.id,employee('manager'),'CHG-100'),/FULFILLMENT_NOT_READY/);
+  await assert.rejects(recordRequestDelivery(db,provider,fulfillment.id,employee('verifier'),'invalid secret value'),/FULFILLMENT_EVIDENCE_REQUIRED/);
+  await recordRequestDelivery(db,provider,fulfillment.id,employee('verifier'),'CHG-100');
+  const delivered=(await db.query('SELECT * FROM request_fulfillments WHERE id=$1',[taskId])).rows[0];
+  assert.equal(delivered.state,'DELIVERED');
+  assert.ok(delivered.access_expires_at > delivered.delivered_at);
+  await assert.rejects(recordRequestDelivery(db,provider,fulfillment.id,employee('verifier'),'CHG-101'),/FULFILLMENT_NOT_READY/);
+  await assert.rejects(db.query('DELETE FROM request_fulfillments WHERE id=$1',[taskId]),/REQUEST_FULFILLMENT_IMMUTABLE/);
+  await assert.rejects(db.query("UPDATE request_fulfillment_events SET evidence_reference='CHG-999' WHERE fulfillment_id=$1",[taskId]),
+    /REQUEST_CATALOG_VERSION_IMMUTABLE/);
+  await db.query("UPDATE request_fulfillments SET access_expires_at=now()-interval '1 minute' WHERE id=$1",[taskId]).then(
+    ()=>assert.fail('immutable access term changed'),()=>{});
+  await hint(fulfillment.id);
+  await maintainRequestFulfillments(db);
+  assert.equal((await db.query('SELECT state FROM request_fulfillments WHERE id=$1',[taskId])).rows[0].state,'REVOKE_DUE',
+    'a callback invalidates earlier approval evidence and requires manual revocation');
+  await recordRequestRevocation(db,fulfillment.id,employee('verifier'),'CHG-102');
+  assert.equal((await db.query('SELECT state FROM request_fulfillments WHERE id=$1',[taskId])).rows[0].state,'REVOKED');
+
+  const withdrawnBeforeGrant=await fresh(); const withdrawnRow=await processApproval(withdrawnBeforeGrant.id);
+  records.get(withdrawnRow.provider_instance_id).state='APPROVED';
+  await processApproval(withdrawnBeforeGrant.id);
+  const readyId=await prepareRequestFulfillment(db,provider,withdrawnBeforeGrant.id,employee('verifier'));
+  records.get(withdrawnRow.provider_instance_id).state='WITHDRAWN';
+  await assert.rejects(recordRequestDelivery(db,provider,withdrawnBeforeGrant.id,employee('verifier'),'CHG-103'),
+    /FULFILLMENT_PROVIDER_NOT_APPROVED/,'provider withdrawal immediately before delivery blocks the receipt');
+  await hint(withdrawnBeforeGrant.id);
+  await maintainRequestFulfillments(db);
+  assert.equal((await db.query('SELECT state FROM request_fulfillments WHERE id=$1',[readyId])).rows[0].state,'BLOCKED');
+
+  const raced=await fresh(); const racedRow=await processApproval(raced.id);
+  records.get(racedRow.provider_instance_id).state='APPROVED';
+  await processApproval(raced.id);
+  await prepareRequestFulfillment(db,provider,raced.id,employee('verifier'));
+  await assert.rejects(recordRequestDelivery(db,{...provider,inspect:async(instanceId,signal)=>{
+    const observed=await provider.inspect(instanceId,signal);
+    await hint(raced.id);
+    return observed;
+  }},raced.id,employee('verifier'),'CHG-106'),/FULFILLMENT_APPROVAL_UNAVAILABLE/,
+  'callback arriving after remote inspection fences the stale reply');
+  await maintainRequestFulfillments(db);
+  assert.equal((await db.query('SELECT state FROM request_fulfillments WHERE approval_id=$1',[raced.id])).rows[0].state,'BLOCKED');
+
+  const deactivated=await fresh(); const deactivatedRow=await processApproval(deactivated.id);
+  records.get(deactivatedRow.provider_instance_id).state='APPROVED';
+  await processApproval(deactivated.id);
+  const deactivatedTask=await prepareRequestFulfillment(db,provider,deactivated.id,employee('verifier'));
+  await db.query('UPDATE employees SET active=false WHERE id=$1',[employee('requester')]);
+  await maintainRequestFulfillments(db);
+  assert.equal((await db.query('SELECT state FROM request_fulfillments WHERE id=$1',[deactivatedTask])).rows[0].state,'BLOCKED');
+  await db.query('UPDATE employees SET active=true WHERE id=$1',[employee('requester')]);
+
+  const cancelledAfterGrant=await fresh(); const cancelledRow=await processApproval(cancelledAfterGrant.id);
+  records.get(cancelledRow.provider_instance_id).state='APPROVED';
+  await processApproval(cancelledAfterGrant.id);
+  const cancelledTask=await prepareRequestFulfillment(db,provider,cancelledAfterGrant.id,employee('verifier'));
+  await recordRequestDelivery(db,provider,cancelledAfterGrant.id,employee('verifier'),'CHG-104');
+  await db.query("UPDATE tickets SET status='CANCELLED' WHERE id=$1",[cancelledAfterGrant.input.ticketId]);
+  await maintainRequestFulfillments(db);
+  assert.equal((await db.query('SELECT state FROM request_fulfillments WHERE id=$1',[cancelledTask])).rows[0].state,'REVOKE_DUE');
+  await recordRequestRevocation(db,cancelledAfterGrant.id,employee('verifier'),'CHG-105');
   assert.equal((await db.query("SELECT count(*) FROM request_approval_events WHERE strpos(row_to_json(request_approval_events)::text,'provider-secret-sentinel')>0")).rows[0].count,'0');
   assert.equal((await db.query("SELECT count(*) FROM request_approvals WHERE strpos(row_to_json(request_approvals)::text,'provider-secret-sentinel')>0")).rows[0].count,'0');
-  console.log('OA lifecycle verified: immutable identity/policy snapshots, atomic intent, one create, lease recovery, callback fencing, authoritative binding, withdrawal, cancellation, expiry and inactive-person blocking; real DingTalk remains gated');
+  console.log('OA and manual fulfillment core verified: immutable snapshots, callback fencing, operator scope, fresh approval, delivery evidence and revocation obligations; real DingTalk and REQ routes remain gated');
 } finally {await db.end();}

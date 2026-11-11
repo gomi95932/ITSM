@@ -3,6 +3,7 @@ import { writeFile } from 'node:fs/promises';
 import { Pool, type PoolClient } from 'pg';
 import { P1_REVIEW_REMINDER_MINUTES, serviceMinutes } from '@itsm/contracts';
 import { maintainRequestApprovals } from './request-approval.js';
+import { maintainRequestFulfillments } from './request-fulfillment.js';
 
 const db = new Pool({ host:process.env.DB_HOST ?? 'db',database:process.env.DB_NAME ?? 'itsm',user:process.env.DB_USER ?? 'itsm',password:process.env.DB_PASSWORD,
   connectionTimeoutMillis:5000,statement_timeout:30000 });
@@ -181,7 +182,7 @@ async function timers() {
 let ticks = 0;
 async function tick() {
   try {
-    if (ticks++ % 15 === 0) { await recoverOwnership(); await priorityReviewTimers(); await maintainRequestApprovals(db); await timers(); }
+    if (ticks++ % 15 === 0) { await recoverOwnership(); await priorityReviewTimers(); await maintainRequestApprovals(db); await maintainRequestFulfillments(db); await timers(); }
     await expand();
     for (let i=0;i<10 && !stopped;i++) await deliver();
     await writeFile('/tmp/itsm-worker-heartbeat', String(Date.now()), { mode:0o600 });

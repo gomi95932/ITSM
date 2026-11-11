@@ -32,7 +32,7 @@ try {
   const migrations=resolve(directory,'migrations');
   const { mkdir }=await import('node:fs/promises'); await mkdir(migrations);
   for (const file of await readdir('db/migrations')) await copyFile(resolve('db/migrations',file),resolve(migrations,file));
-  await writeFile(resolve(migrations,'008_atomic_failure.sql'),'CREATE TABLE migration_atomic_probe(id integer); SELECT 1/0;');
+  await writeFile(resolve(migrations,'999_atomic_failure.sql'),'CREATE TABLE migration_atomic_probe(id integer); SELECT 1/0;');
   const failed=await compose(['run','--rm','--no-deps','-v',`${migrations}:/srv/db/migrations:ro`,'migrate'],{success:false});
   assert.notEqual(failed.code,0,'invalid migration must fail');
   assert.equal(await sql("SELECT to_regclass('public.migration_atomic_probe') IS NULL"),'t','failed migration must roll back DDL');
