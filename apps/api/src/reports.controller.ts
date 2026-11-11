@@ -37,8 +37,8 @@ export class ReportsController {
         (SELECT count(*)::int FROM ticket_events ev WHERE ev.ticket_id=t.id AND ev.action='REOPEN') AS reopen_count
         FROM tickets t LEFT JOIN ticket_feedback f ON f.ticket_id=t.id
         WHERE t.service_type='INC' AND t.owner_group_id=$1
-          AND t.created_at>=($2::date AT TIME ZONE 'Asia/Shanghai')
-          AND t.created_at<(($3::date + 1) AT TIME ZONE 'Asia/Shanghai')
+          AND t.created_at>=($2::date::timestamp AT TIME ZONE 'Asia/Shanghai')
+          AND t.created_at<(($3::date + 1)::timestamp AT TIME ZONE 'Asia/Shanghai')
         ORDER BY t.created_at DESC,t.id DESC LIMIT 5001`, [groupId, from, to]);
       if (tickets.rows.length > 5000) throw new ServiceUnavailableException({ code: 'REPORT_WINDOW_TOO_LARGE' });
       const cycles = tickets.rows.length ? await client.query<Cycle>(`SELECT s.*,now() AS clock FROM sla_cycles s
