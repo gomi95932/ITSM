@@ -17,7 +17,7 @@
 发布包包含配置生成器、发布工具、Compose 文件、迁移及本手册，并在打包末尾执行完整性校验。在服务器核验并解压受信任发布包后，从该版本目录运行以下配置生成器；目标文件必须尚不存在，生成器不会覆盖已有凭据：
 
 ```sh
-node scripts/create-development-env.mjs /opt/itsm/shared/development.env --seed-development-fixtures
+sudo -H node scripts/create-development-env.mjs /opt/itsm/shared/development.env --seed-development-fixtures
 ```
 
 在 `10.10.81.125`，部署账户需要通过 `sudo` 访问 Docker。首次操作先执行 `sudo -v` 和 `sudo -H node --version`，确认 sudo 环境可找到受信任的系统 Node；用同一 `sudo -H` 身份执行上面的生成器和下文所有 `node scripts/release.mjs` 命令。相同身份也用于 `docker login`。这样配置、发布状态及 Docker 凭据始终由同一执行身份持有。不得先以普通账户生成配置、再直接混用 sudo 执行发布工具；也不要把私密配置改成全局可读或为方便而放宽 Docker 权限。若文件已存在或属主不符，停止并核验，不覆盖现有配置。
@@ -31,8 +31,8 @@ node scripts/create-development-env.mjs /opt/itsm/shared/development.env --seed-
 从已验证的版本目录执行；`SHA` 必须是本次批准的完整提交值：
 
 ```sh
-node scripts/release.mjs check
-node scripts/release.mjs deploy "$SHA"
+sudo -H node scripts/release.mjs check
+sudo -H node scripts/release.mjs deploy "$SHA"
 ```
 
 也可用 `--env /absolute/private.env --state /absolute/private-state` 指定私密路径。默认项目名固定 `itsm-dev`。脚本拒绝数据库、Redis、API、worker 或迁移服务暴露端口，以及 Web 非回环绑定；示例弱口令也会被拒绝。
@@ -46,8 +46,8 @@ node scripts/release.mjs deploy "$SHA"
 ## 4. 真实验证
 
 ```sh
-node scripts/release.mjs backup
-node scripts/release.mjs restore-check --backup /absolute/path/to/itsm-backup.dump
+sudo -H node scripts/release.mjs backup
+sudo -H node scripts/release.mjs restore-check --backup /absolute/path/to/itsm-backup.dump
 ```
 
 备份用 PostgreSQL custom dump，校验哈希和目录，权限 0600。恢复检查创建独立临时数据库，恢复后读取迁移账本及工单表，最后删除该临时数据库，不覆盖正在使用的 ITSM 数据库。仅备份成功不等于恢复已验证；需对迁移完成后的备份执行恢复检查。当前备份覆盖 PostgreSQL；后续附件对象存储必须独立纳入备份与恢复演练。
@@ -63,7 +63,7 @@ ssh -N -L 8088:127.0.0.1:8088 ituser@10.10.81.125
 ## 5. 回退与故障处理
 
 ```sh
-node scripts/release.mjs rollback
+sudo -H node scripts/release.mjs rollback
 ```
 
 只有当前/上版迁移指纹相同、Compose 文件一致且旧发布包完整可验证，才允许应用镜像回退；保留当前 PostgreSQL/Redis 镜像，不重跑旧迁移。回退不恢复已经写入的数据。迁移或 Compose 不兼容时停止，选择批准的前向修复或单独计划的数据库恢复，不能盲目拉旧镜像。
