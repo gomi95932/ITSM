@@ -71,6 +71,8 @@ jobs:
         run: node tests/integration/ownership.mjs
       - name: Verify resolution-based confirmation auto-close
         run: node tests/integration/auto-close.mjs
+      - name: Verify requester-only immutable service feedback
+        run: node tests/integration/ticket-feedback.mjs
       - name: Verify immediate P1 alerts and scoped supervisor confirmation
         run: node tests/integration/priority-review.mjs
       - name: Verify GEN intake, classification and revocable proxy boundaries

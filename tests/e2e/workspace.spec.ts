@@ -106,6 +106,14 @@ test('employee and IT workbench complete a real ticket round trip',async({page})
   await page.getByRole('checkbox',{name:'本次内容不含密码、密钥及安全事件证据'}).check();
   await page.getByRole('button',{name:'确认已解决',exact:true}).last().click();
   await expect(page.locator('.ticket-meta .status')).toHaveText('已关闭');
+  const feedback=page.getByRole('region',{name:'服务评价'});
+  await feedback.getByRole('combobox',{name:'满意度'}).selectOption('4');
+  await feedback.getByRole('textbox',{name:'补充意见（选填）'}).fill('问题已恢复');
+  await feedback.getByRole('checkbox',{name:'本次内容不含密码、密钥及安全事件证据'}).check();
+  await feedback.getByRole('button',{name:'提交评价'}).click();
+  await expect(feedback).toContainText('4 / 5');
+  await expect(feedback).toContainText('问题已恢复');
+  await expect(feedback.getByRole('button',{name:'提交评价'})).toHaveCount(0);
   await page.setViewportSize({width:390,height:844});await page.screenshot({path:'test-results/ticket-mobile.png',fullPage:true});
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
   await page.getByRole('button',{name:'我的工单',exact:true}).click();

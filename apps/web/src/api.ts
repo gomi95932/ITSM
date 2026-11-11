@@ -22,6 +22,8 @@ export async function api<T>(path: string,options: { method?: string; body?: unk
   return data as T;
 }
 export const messages: Record<string,string> = {
+  INVALID_FEEDBACK:'请选择 1 至 5 分，意见最多 1000 字。',FEEDBACK_NOT_AVAILABLE:'工单尚未关闭或不属于故障报障，暂不能评价。',
+  FEEDBACK_ALREADY_SUBMITTED:'此工单已评价，请刷新查看。',FEEDBACK_REQUESTER_REQUIRED:'仅报障本人可评价服务。',
   PRIORITY_REVIEWER_REQUIRED:'仅当前责任组的授权主管可确认，且不能确认本人提交的工单。',
   DELEGATION_REQUIRED:'代报授权已撤销、到期或人员不可用，请由本人重新提交。',
   TICKET_ACTION_NOT_AUTHORIZED:'当前身份无权执行此操作；代报授权不包含审批、确认交付、撤销或重开。',

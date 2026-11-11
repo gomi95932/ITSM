@@ -49,4 +49,7 @@ assert.equal(closed, true, 'worker must close after the resolution-based confirm
 assert.equal(await sql(`SELECT count(*) FROM ticket_events WHERE ticket_id='${id}' AND action='AUTO_CLOSE'`), '1');
 assert.equal(await sql(`SELECT count(*) FROM audit_logs a JOIN ticket_events e ON e.id=a.event_id
   JOIN outbox_events o ON o.event_id=e.id WHERE e.ticket_id='${id}' AND e.action='AUTO_CLOSE'`), '1');
+const feedback = await request(`/tickets/${id}/feedback`, 'employee-1', { rating: 5 });
+assert.equal(feedback.status, 200, JSON.stringify(feedback));
+assert.equal(await sql(`SELECT count(*) FROM ticket_feedback WHERE ticket_id='${id}'`), '1');
 console.log('Resolution-based auto-close verified with updated ticket timestamp and audit/outbox');

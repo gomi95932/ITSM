@@ -33,6 +33,14 @@ export class TicketsController {
     return this.tickets.action(await this.tickets.identity({ devUser:user,cookie,csrf },true), id, body, key ?? '', requestId?.slice(0, 128) ?? randomUUID());
   }
 
+  @Post(':id/feedback')
+  @HttpCode(200)
+  async feedback(@Headers('x-dev-user') user: string | undefined, @Headers('idempotency-key') key: string | undefined,
+    @Headers('x-request-id') requestId: string | undefined, @Param('id') id: string, @Body() body: unknown,
+    @Headers('cookie') cookie?: string, @Headers('x-csrf-token') csrf?: string): Promise<object> {
+    return this.tickets.feedback(await this.tickets.identity({ devUser:user,cookie,csrf },true), id, body, key ?? '', requestId?.slice(0,128) ?? randomUUID());
+  }
+
   @Post(':id/priority-review')
   @HttpCode(200)
   async reviewPriority(@Headers('x-dev-user') user: string | undefined, @Headers('idempotency-key') key: string | undefined,

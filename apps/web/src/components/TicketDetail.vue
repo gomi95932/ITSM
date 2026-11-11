@@ -17,6 +17,8 @@ const classificationService=computed(()=>catalog.value.find(item=>item.code===cl
 watch(classificationCode,()=>{classificationFields.value={};});
 watch([classificationCode,classificationReason,classificationFields],()=>{classificationSafe.value=false;classificationKey.value=crypto.randomUUID();},{deep:true});
 const reviewPriority=ref<Priority>('P1'),reviewReason=ref(''),reviewSafe=ref(false),reviewKey=ref(crypto.randomUUID());
+const feedbackRating=ref(0),feedbackComment=ref(''),feedbackSafe=ref(false),feedbackKey=ref(crypto.randomUUID());
+watch([feedbackRating,feedbackComment],()=>{feedbackKey.value=crypto.randomUUID();feedbackSafe.value=false;});
 const reviewLabels:Record<string,string>={NOT_REQUIRED:'无需主管确认',PENDING:'候选 · 待主管确认',CONFIRMED:'主管已确认',ADJUSTED:'主管已调整'};
 watch([reviewPriority,reviewReason],()=>{reviewKey.value=crypto.randomUUID();reviewSafe.value=false;});
 const fieldLabels:Record<string,string>={system:'业务系统',module:'模块 / 页面',location:'所在地点',device:'设备编号'};
@@ -70,6 +72,15 @@ async function submitPriorityReview(){
     reviewReason.value='';reviewSafe.value=false;reviewKey.value=crypto.randomUUID();await load();emit('changed');}
   catch(e){if(e instanceof ApiError&&e.status===409){await load();reviewKey.value=crypto.randomUUID();}error.value=errorText(e);}finally{busy.value=false;}
 }
+async function submitFeedback(){
+  if(!ticket.value?.canFeedback||!feedbackSafe.value||!feedbackRating.value||busy.value)return;
+  busy.value=true;error.value='';
+  try{await api(`/tickets/${props.id}/feedback`,{method:'POST',key:feedbackKey.value,
+    body:{contentClass:'GENERAL',rating:feedbackRating.value,...(feedbackComment.value.trim()?{comment:feedbackComment.value.trim()}:{})}});
+    await load();emit('changed');}
+  catch(e){error.value=errorText(e);if(e instanceof ApiError&&e.status===409)await load();}
+  finally{busy.value=false;}
+}
 onMounted(load);
 </script>
 <template>
@@ -104,7 +115,14 @@ onMounted(load);
       </section>
       <div class="detail-grid"><div><section class="detail-section"><h2>报障详情</h2><p class="multiline">{{ticket.description}}</p><dl v-if="Object.keys(ticket.fields).length" class="fact-list"><template v-for="(value,name) in ticket.fields" :key="name"><dt>{{fieldLabels[String(name)]??name}}</dt><dd>{{value}}</dd></template></dl></section>
         <section class="detail-section"><div class="section-heading"><h2>处理记录</h2><span class="muted">{{ticket.events?.length??0}} 条</span></div><ol class="timeline"><li v-for="(event,index) in ticket.events??[]" :key="index"><span class="timeline-dot"></span><div class="event-title"><strong>{{actions[event.action]??event.action}}</strong><time>{{formatDate(event.createdAt)}}</time></div><p v-if="event.detail.comment" class="multiline">{{event.detail.comment}}</p><p v-if="event.detail.reason" class="multiline">{{event.detail.reason}}</p><p v-if="event.detail.vendorReference" class="muted">厂商单号：{{event.detail.vendorReference}}</p><p v-if="event.detail.targetGroupId" class="muted">{{event.detail.oldGroupId}} → {{event.detail.targetGroupId}}</p></li></ol></section>
-      </div><aside><section class="detail-section sla-section"><h2><Clock3 :size="17"/> 服务时效</h2><div v-for="sla in ticket.sla??[]" :key="sla.cycle" class="sla-cycle"><div class="section-heading"><strong>第 {{sla.cycle}} 轮</strong><span :class="sla.breached?'danger-text':'muted'">{{sla.completed?'已停止':sla.paused?'等待补充，解决计时暂停':sla.breached?'已超时':'计时中'}}</span></div><p>首次响应 <strong>{{duration(sla.responseMinutes)}}</strong> / {{duration(sla.responseTarget)}}</p><p>解决耗时 <strong>{{duration(sla.resolutionMinutes)}}</strong> / {{duration(sla.resolutionTarget)}}</p><p v-if="!sla.responded&&!sla.completed" class="muted">等待人工回复送达</p></div><p v-if="!ticket.sla?.length" class="muted">此工单暂无 SLA 周期。</p><p class="caption">当前使用试点服务日历</p></section>
+      </div><aside><section v-if="ticket.canFeedback||ticket.feedback" class="detail-section" aria-label="服务评价"><h2>服务评价</h2>
+          <template v-if="ticket.feedback"><p>{{ticket.feedback.rating}} / 5 · {{formatDate(ticket.feedback.createdAt)}}</p><p v-if="ticket.feedback.comment" class="multiline">{{ticket.feedback.comment}}</p></template>
+          <form v-else class="action-form" @submit.prevent="submitFeedback">
+            <label>满意度<select v-model.number="feedbackRating" required><option :value="0" disabled>请选择</option><option v-for="value in 5" :key="value" :value="value">{{value}} 分</option></select></label>
+            <label>补充意见（选填）<textarea v-model="feedbackComment" maxlength="1000" rows="3"/></label>
+            <ContentBoundary v-model="feedbackSafe"/><div class="form-footer"><button type="submit" class="primary" :disabled="busy||!feedbackSafe||!feedbackRating"><Check :size="16"/>提交评价</button></div>
+          </form></section>
+        <section class="detail-section sla-section"><h2><Clock3 :size="17"/> 服务时效</h2><div v-for="sla in ticket.sla??[]" :key="sla.cycle" class="sla-cycle"><div class="section-heading"><strong>第 {{sla.cycle}} 轮</strong><span :class="sla.breached?'danger-text':'muted'">{{sla.completed?'已停止':sla.paused?'等待补充，解决计时暂停':sla.breached?'已超时':'计时中'}}</span></div><p>首次响应 <strong>{{duration(sla.responseMinutes)}}</strong> / {{duration(sla.responseTarget)}}</p><p>解决耗时 <strong>{{duration(sla.resolutionMinutes)}}</strong> / {{duration(sla.resolutionTarget)}}</p><p v-if="!sla.responded&&!sla.completed" class="muted">等待人工回复送达</p></div><p v-if="!ticket.sla?.length" class="muted">此工单暂无 SLA 周期。</p><p class="caption">当前使用试点服务日历</p></section>
         <section v-if="available.length" class="detail-section"><h2>处理操作</h2><div class="action-list"><button v-for="value in available" :key="value" class="secondary" :class="{selected:action===value}" @click="choose(value)">{{commands[value]}}</button></div>
           <form v-if="action" class="action-form" @submit.prevent="submit">
             <label v-if="['ACCEPT','ACCEPT_HANDOVER','REQUEST_INFO','ADD_INFO','WAIT_VENDOR','RESOLVE'].includes(action)">{{action==='RESOLVE'?'解决说明':action==='REQUEST_INFO'?'需要补充的内容':'回复内容'}}<textarea v-model="comment" required maxlength="2000" rows="3"/></label>

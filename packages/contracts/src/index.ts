@@ -56,6 +56,18 @@ export interface TicketActionInput {
   targetAssigneeId?: string;
 }
 
+export interface TicketFeedbackInput {
+  contentClass: 'GENERAL';
+  rating: number;
+  comment?: string;
+}
+
+export interface TicketFeedback {
+  rating: number;
+  comment: string | null;
+  createdAt: string;
+}
+
 export interface CatalogField { key: string; label: string; required: boolean; options?: string[] }
 export interface CatalogItem { code: string; name: string; description: string; type: TicketType; formVersion: number; fields: CatalogField[]; available: boolean }
 export interface SessionUser { id: string; name: string; groups: string[]; priorityReviewGroups?: string[]; csrfToken?: string }
@@ -71,6 +83,8 @@ export interface TicketView extends TicketReceipt {
   priorityReviewedBy: string | null;
   priorityReviewReason: string | null;
   canReviewPriority?: boolean;
+  canFeedback?: boolean;
+  feedback?: TicketFeedback | null;
   priorityAlert?: { reviewersAvailable: boolean; overdue: boolean; notificationMode: string; deliveries: Record<string, number> };
   events?: { action: string; fromStatus: string | null; toStatus: string; detail: Record<string, string>; createdAt: string }[];
   sla?: { cycle: number; priority: Priority; responseTarget: number; resolutionTarget: number; responseMinutes: number; resolutionMinutes: number; responded: boolean; completed: boolean; paused: boolean; breached: boolean }[];

@@ -1,7 +1,7 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
 import { createHash, randomUUID } from 'node:crypto';
 import { type PoolClient } from 'pg';
-import { P1_REVIEW_REMINDER_MINUTES, TICKET_ACTIONS, type ClassificationInput, type CreateTicketInput, type PriorityReviewInput, type PriorityReviewState, type TicketActionInput, type TicketReceipt, type TicketStatus } from '@itsm/contracts';
+import { P1_REVIEW_REMINDER_MINUTES, TICKET_ACTIONS, type ClassificationInput, type CreateTicketInput, type PriorityReviewInput, type PriorityReviewState, type TicketActionInput, type TicketFeedback, type TicketReceipt, type TicketStatus } from '@itsm/contracts';
 import { transition } from './ticket-state.js';
 import { Database } from './database.service.js';
 import { AuthService, type AuthHeaders, type Identity } from './auth.service.js';
@@ -228,7 +228,12 @@ export class TicketsService {
       const available = groupMember && ticket.priority_candidate_at ? await client.query(`SELECT 1 FROM priority_reviewers r
         JOIN employees e ON e.id=r.employee_id WHERE r.group_id=$1 AND e.active AND e.id<>$2 AND e.id<>$3 LIMIT 1`,[ticket.owner_group_id,ticket.requester_id,ticket.submitted_by_id]) : null;
       const delegated=!!ticket.delegation_id && await this.delegation(client,actor.id,ticket.delegation_id,false)===ticket.requester_id;
+      const feedbackVisible=actor.id===ticket.requester_id || !!membership.rowCount;
+      const feedback=feedbackVisible ? await client.query<{rating:number;comment:string|null;createdAt:Date}>(
+        'SELECT rating,comment,created_at AS "createdAt" FROM ticket_feedback WHERE ticket_id=$1',[id]) : null;
       return { ...this.publicTicket(ticket),canAddInfo:actor.id===ticket.requester_id||delegated,
+        canFeedback:actor.id===ticket.requester_id && ticket.service_type==='INC' && ticket.status==='CLOSED' && !feedback?.rowCount,
+        feedback:feedback?.rows[0] ?? null,
         canCorrectClassification:!!membership.rowCount && ['QUEUED','IN_PROGRESS','WAITING_USER','WAITING_VENDOR'].includes(ticket.status)
           && !ticket.pending_assignee_id && (ticket.assignee_id===actor.id||(!ticket.assignee_id&&ticket.status==='QUEUED')),
         canReviewPriority:!!reviewer.rowCount && actor.id!==ticket.requester_id && actor.id!==ticket.submitted_by_id
@@ -241,6 +246,34 @@ export class TicketsService {
         detail: { comment: event.detail?.comment, reason: event.detail?.reason }, createdAt: event.createdAt,
       })) };
     } finally { client.release(); }
+  }
+
+  async feedback(actor:Identity,id:string,body:unknown,key:string,requestId:string):Promise<TicketFeedback> {
+    if(!body||typeof body!=='object'||Array.isArray(body))throw new BadRequestException({code:'INVALID_FEEDBACK'});
+    const input=body as Record<string,unknown>;
+    if(Object.keys(input).some(k=>!['contentClass','rating','comment'].includes(k))
+      || typeof input.rating!=='number' || !Number.isInteger(input.rating) || input.rating<1 || input.rating>5
+      || (input.comment!==undefined && (typeof input.comment!=='string'||input.comment.length>1000)))
+      throw new BadRequestException({code:'INVALID_FEEDBACK'});
+    await this.intake.requireGeneral(actor.id,input,'ticket-feedback');
+    return this.transaction(async client=>{
+      await this.requireActive(client,actor);
+      const ticket=await this.accessible(client,actor,id,true);
+      if(ticket.requester_id!==actor.id)throw new ForbiddenException({code:'FEEDBACK_REQUESTER_REQUIRED'});
+      const previous=await this.claim(client,actor.id,`feedback:${id}`,key,input);
+      if(previous)return previous as TicketFeedback;
+      if(ticket.service_type!=='INC'||ticket.status!=='CLOSED')throw new ConflictException({code:'FEEDBACK_NOT_AVAILABLE'});
+      const exists=await client.query('SELECT 1 FROM ticket_feedback WHERE ticket_id=$1',[id]);
+      if(exists.rowCount)throw new ConflictException({code:'FEEDBACK_ALREADY_SUBMITTED'});
+      const saved=await client.query<{rating:number;comment:string|null;createdAt:Date}>(
+        'INSERT INTO ticket_feedback(ticket_id,requester_id,rating,comment) VALUES ($1,$2,$3,$4) RETURNING rating,comment,created_at AS "createdAt"',
+        [id,actor.id,input.rating,(input.comment as string|undefined)?.trim()||null]);
+      await this.record(client,ticket,actor.id,'FEEDBACK_SUBMITTED',ticket.status,{rating:input.rating},requestId,ticket);
+      const response:TicketFeedback={...saved.rows[0],createdAt:saved.rows[0].createdAt.toISOString()};
+      await client.query('UPDATE api_idempotency SET response=$4 WHERE actor_id=$1 AND scope=$2 AND key=$3',
+        [actor.id,`feedback:${id}`,key,JSON.stringify(response)]);
+      return response;
+    });
   }
 
   async reviewPriority(actor: Identity,id: string,body: unknown,key: string,requestId: string): Promise<TicketReceipt> {
