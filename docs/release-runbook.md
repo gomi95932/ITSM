@@ -10,6 +10,7 @@
 - GHCR 用只读 `read:packages` 拉取身份，通过 `docker login ghcr.io --password-stdin` 交互输入；不在命令、Git、日志或工单中保存令牌。
 - 创建独立目录 `/opt/itsm/releases/<SHA>`、`/opt/itsm/shared`；归属为批准的部署账户。共享目录权限 0700；环境文件 0600。首次创建目录须获管理员授权。
 - 开发环境可明确启用虚拟人员种子及开发身份，不可使用真实员工或生产数据。该身份不是正式钉钉免登。
+- `release-bundle` 在独立 GitHub 托管 Runner 上解开最终归档，用包内工具按实际镜像 digest 部署，运行工单闭环与越权回归，再做业务写入后的备份及隔离恢复。演练成功才上传发布包；这不替代开发机现场验收。
 
 ## 2. 私密配置与发布包
 
@@ -18,6 +19,8 @@
 ```sh
 node scripts/create-development-env.mjs /opt/itsm/shared/development.env --seed-development-fixtures
 ```
+
+在 `10.10.81.125`，部署账户需要通过 `sudo` 访问 Docker。首次操作先执行 `sudo -v` 和 `sudo -H node --version`，确认 sudo 环境可找到受信任的系统 Node；用同一 `sudo -H` 身份执行上面的生成器和下文所有 `node scripts/release.mjs` 命令。相同身份也用于 `docker login`。这样配置、发布状态及 Docker 凭据始终由同一执行身份持有。不得先以普通账户生成配置、再直接混用 sudo 执行发布工具；也不要把私密配置改成全局可读或为方便而放宽 Docker 权限。若文件已存在或属主不符，停止并核验，不覆盖现有配置。
 
 仅需要空数据库时省略种子选项。虚拟人员只用于隔离验证。`ITSM_SEED_DEV_DATA` 默认 false；正式模式禁止种子。改变现有 env 密码不等于改变已初始化 PostgreSQL 的密码，须另行批准轮换。
 

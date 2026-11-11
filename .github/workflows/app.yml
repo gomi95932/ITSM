@@ -154,6 +154,7 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: [build-test, publish, publish-data-images]
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     permissions:
       contents: read
       packages: read
@@ -172,6 +173,28 @@ jobs:
           node scripts/package-release.mjs "$GITHUB_SHA" "$RUNNER_TEMP/itsm-release"
           tar -czf "itsm-release-${GITHUB_SHA}.tar.gz" -C "$RUNNER_TEMP/itsm-release" .
           sha256sum "itsm-release-${GITHUB_SHA}.tar.gz" > "itsm-release-${GITHUB_SHA}.tar.gz.sha256"
+      - name: Rehearse deployment and recovery from the exact release archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="itsm-release-${GITHUB_SHA}.tar.gz"
+          sha256sum --check "${archive}.sha256"
+          release_root="$RUNNER_TEMP/itsm-release-rehearsal"
+          private_env="$RUNNER_TEMP/itsm-release-rehearsal.env"
+          state="$RUNNER_TEMP/itsm-release-rehearsal-state"
+          mkdir "$release_root"
+          tar -xzf "$archive" -C "$release_root"
+          node "$release_root/scripts/create-development-env.mjs" "$private_env" --seed-development-fixtures
+          release() {
+            node "$release_root/scripts/release.mjs" "$@" --env "$private_env" --state "$state"
+          }
+          release check
+          release deploy "$GITHUB_SHA"
+          node tests/integration/tickets.mjs
+          backup_output=$(release backup)
+          backup_path=${backup_output#Backup verified: }
+          [[ "$backup_path" == "$state/backups/"*.dump && -f "$backup_path" ]]
+          release restore-check --backup "$backup_path"
       - uses: actions/upload-artifact@v4
         with:
           name: itsm-release-${{ github.sha }}
