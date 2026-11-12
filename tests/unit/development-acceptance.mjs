@@ -68,6 +68,7 @@ test('development acceptance can repeat without touching an existing ticket', as
     const path = new URL(url).pathname.replace('/api/v1', '');
     const user = options.headers['x-dev-user'];
     const body = options.body ? JSON.parse(options.body) : undefined;
+    if (options.method === 'POST') assert.equal(body.contentClass, 'GENERAL');
     const reply = (data, status = 200) => Response.json(data, { status });
     if (path === '/health/ready') return reply({ status: 'ok' });
     if (path === '/auth/config') return reply({ mode: 'development' });

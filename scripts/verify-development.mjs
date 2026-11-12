@@ -17,11 +17,13 @@ export async function verifyDevelopment({ baseUrl, allowSyntheticWrites = false,
   let stage = 'preflight';
   const require = (condition, code) => { if (!condition) throw new Error(code); };
   const request = async (path, user, method = 'GET', body, key) => {
+    const payload = body !== undefined && method === 'POST' && path.endsWith('/actions')
+      ? { ...body, contentClass: 'GENERAL' } : body;
     const response = await fetchImpl(`${base}/api/v1${path}`, {
       method, redirect: 'error', signal: AbortSignal.timeout(10000),
       headers: { ...(user ? { 'x-dev-user': user } : {}), ...(body === undefined ? {} : { 'content-type': 'application/json' }),
         ...(key ? { 'idempotency-key': key } : {}) },
-      body: body === undefined ? undefined : JSON.stringify(body),
+      body: payload === undefined ? undefined : JSON.stringify(payload),
     });
     return { status: response.status, data: await response.json() };
   };
