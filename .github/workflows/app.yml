@@ -3,7 +3,7 @@ name: Application CI
 on:
   pull_request:
   push:
-    branches: [main, feat/t01-runtime-ci]
+    branches: [main, 'feat/**']
 
 permissions:
   contents: read
@@ -89,6 +89,10 @@ jobs:
         run: node tests/integration/request-approval.mjs
       - name: Verify service report boundaries and lifecycle metrics
         run: node tests/integration/reports.mjs
+      - name: Verify repeatable development acceptance on a populated database
+        run: |
+          node scripts/verify-development.mjs --base-url http://127.0.0.1:8088 --allow-synthetic-writes
+          node scripts/verify-development.mjs --base-url http://127.0.0.1:8088 --allow-synthetic-writes
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -199,6 +203,8 @@ jobs:
           release check
           release deploy "$GITHUB_SHA"
           node tests/integration/tickets.mjs
+          node "$release_root/scripts/verify-development.mjs" --base-url http://127.0.0.1:8088 --allow-synthetic-writes
+          node "$release_root/scripts/verify-development.mjs" --base-url http://127.0.0.1:8088 --allow-synthetic-writes
           backup_output=$(release backup)
           backup_path=${backup_output#Backup verified: }
           [[ "$backup_path" == "$state/backups/"*.dump && -f "$backup_path" ]]

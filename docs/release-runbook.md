@@ -45,6 +45,14 @@ sudo -H node scripts/release.mjs deploy "$SHA"
 
 ## 4. 真实验证
 
+新发布包包含 `scripts/verify-development.mjs`，无需在开发机安装 npm 依赖或复制源码测试。仅在批准的隔离开发环境、启用虚拟人员种子时执行以下命令；`--allow-synthetic-writes` 明确允许创建一张标记为 `ITSM deployment acceptance` 的测试工单并走完关闭流程。脚本仅接受 HTTP 回环地址，禁止重定向，在任何写入前核对开发模式和三个虚拟人员及权限。它不修改或删除已有工单，不假设数据库为空；每次执行会新增一张测试工单并保留审计痕迹，失败时报告已创建工单 ID 供人工核查，不自动绕过权限或清库。
+
+```sh
+node scripts/verify-development.mjs --base-url http://127.0.0.1:8088 --allow-synthetic-writes
+```
+
+可以按批准的 Web 端口替换 8088。CI 在解开实际发布包后连续执行两次，核验非空库重跑，再进行业务写入后的备份恢复。检查覆盖就绪、匿名访问、员工隔离、角色限制、幂等、过期版本冲突、工程师解决、员工确认及内部证据隐藏，不等于桌面/移动 UI 或真实钉钉/OA/通知验收。失败会留下本次测试工单，先排查，勿仅凭下一次通过忽略前次失败。旧发布包没有此工具时，不下载独立陌生脚本补跑，使用匹配已核验版本的测试方案。
+
 ```sh
 sudo -H node scripts/release.mjs backup
 sudo -H node scripts/release.mjs restore-check --backup /absolute/path/to/itsm-backup.dump
