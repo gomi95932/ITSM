@@ -9,6 +9,8 @@ if (!/^[a-f0-9]{40}$/.test(sha ?? '') || !destination || process.env.GITHUB_REF 
   throw new Error('ONLY_MAIN_RELEASES_CAN_BE_PACKAGED');
 if (execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim() !== sha) throw new Error('COMMIT_MISMATCH');
 const paths=requiredReleaseFiles.filter(path => !path.startsWith('db/migrations/'));
+// Legacy bundles remain valid rollback targets; every new bundle includes its hashed acceptance tool.
+paths.push('scripts/verify-development.mjs');
 const images={};
 for (const name of ['api','web','worker','postgres','redis']) {
   const repository=`ghcr.io/gomi95932/itsm-${name}`;
