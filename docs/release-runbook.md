@@ -32,12 +32,16 @@ sudo -H node scripts/create-development-env.mjs /opt/itsm/shared/development.env
 
 ```sh
 sudo -H node scripts/release.mjs check
-sudo -H node scripts/release.mjs deploy "$SHA"
+sudo -H node scripts/release.mjs deploy "$SHA" --verify-development
 ```
 
 也可用 `--env /absolute/private.env --state /absolute/private-state` 指定私密路径。默认项目名固定 `itsm-dev`。脚本拒绝数据库、Redis、API、worker 或迁移服务暴露端口，以及 Web 非回环绑定；示例弱口令也会被拒绝。
 
-部署流程：校验包 -> 拉取 digest 镜像 -> 停止本项目写入者 -> 备份 -> 启动本项目数据服务 -> 事务迁移 -> 启动 API/worker/Web -> 就绪与页面检查 -> 写入版本记录。任何阶段失败即停，不自动恢复数据库，也不声称新版本已发布。迁移文件应用后不可修改；迁移失败会回滚同批 DDL 和迁移账本。
+部署流程：校验包 -> 拉取 digest 镜像 -> 停止本项目写入者 -> 备份 -> 启动本项目数据服务 -> 事务迁移 -> 启动 API/worker/Web -> 就绪与页面检查 -> 合成工单业务验收 -> 再核对运行镜像 -> 写入版本记录。任何阶段失败即停，不自动恢复数据库，也不声称新版本已发布。迁移文件应用后不可修改；迁移失败会回滚同批 DDL 和迁移账本。
+
+`--verify-development` 明确授权创建一张合成工单并完成员工建单、工程师接收/解决、员工确认，以及幂等、版本冲突和越权检查。仅在开发认证、明确启用测试种子、API 和 worker 都使用 fake 通知且真实发送关闭时允许；部署修改前检查配置及验收脚本的清单哈希。真实身份环境不得加此参数，也不得临时开启开发认证来通过验收，应另行执行真实人员 UAT。省略参数只能得到 `verificationLevel=readiness-only`，不代表业务验收完成。
+
+成功记录保存 `verificationLevel`、`businessAcceptance`（运行编号、合成工单 ID、检查结果和时间）及五个服务的 `runtime`（容器 ID、镜像 ID、批准 digest），与同一记录的 SHA、备份和迁移指纹绑定。失败阶段及已创建的合成工单 ID 保存在私密失败记录中，`current.json` 不更新；此时实际容器可能已经升级，不能把旧 current 记录当作当前运行事实，必须核对失败阶段和容器后处置。合成工单保留审计，不删除历史。
 
 写入成功记录前，还必须逐个核对 db、Redis、API、worker、Web 的运行容器：每个服务只有一个运行实例，Compose 项目/服务标签匹配且非一次性任务，容器健康，并且实际 Image ID 与批准 digest 解析的本地 Image ID 一致。回退采用相同校验，但数据库和 Redis 保持当前版本。页面可访问不等于已运行目标版本；校验失败不会更新 `current.json`。
 
@@ -107,6 +111,8 @@ sudo -H node scripts/release.mjs rollback
 ```
 
 只有当前/上版迁移指纹相同、Compose 文件一致且旧发布包完整可验证，才允许应用镜像回退；保留当前 PostgreSQL/Redis 镜像，不重跑旧迁移。回退不恢复已经写入的数据。迁移或 Compose 不兼容时停止，选择批准的前向修复或单独计划的数据库恢复，不能盲目拉旧镜像。
+
+在同样满足合成验证条件的开发环境，可执行 `rollback --verify-development`，须从当前已部署发布包目录运行。工具先验证当前包中的验收脚本，再在回退后重新执行业务检查、核对五个运行镜像并生成新的回退记录。旧版业务验收结果不会冒充此次结果；不带参数回退也明确记录为仅就绪检查。
 
 `release-state` 保存 `current.json`、`previous.json`、历史、失败阶段及备份路径。`operation.lock` 防并发发布；异常断电留下锁时，管理员核对 PID 和真实活动操作，确认已终止后方可人工移除锁，不能自动按时间清锁。工具错误默认脱敏，不输出完整 Compose config、数据库内容或凭据。
 

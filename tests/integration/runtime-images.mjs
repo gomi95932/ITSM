@@ -9,7 +9,13 @@ const config=JSON.parse(compose(['config','--format','json']));
 const images=Object.fromEntries(Object.entries({postgres:'db',redis:'redis',api:'api',worker:'worker',web:'web'})
   .map(([name,service]) => [name,config.services[service].image]));
 const containerIdFor=service => compose(['ps','--status','running','-q',service]);
-await verifyRuntimeImages(images,containerIdFor);
+const runtime=await verifyRuntimeImages(images,containerIdFor);
+assert.deepEqual(Object.keys(runtime),['db','redis','api','worker','web']);
+for (const [service,evidence] of Object.entries(runtime)) {
+  assert.equal(evidence.containerId,containerIdFor(service));
+  assert.match(evidence.imageId,/^sha256:[a-f0-9]{64}$/);
+  assert.equal(evidence.image,images[{db:'postgres',redis:'redis',api:'api',worker:'worker',web:'web'}[service]]);
+}
 await assert.rejects(verifyRuntimeImages({...images,postgres:images.redis},containerIdFor),/RUNNING_IMAGE_MISMATCH/);
 await assert.rejects(verifyRuntimeImages(images,() => ''),/SINGLE_RUNNING_CONTAINER_REQUIRED/);
 await assert.rejects(verifyRuntimeImages(images,() => `${'a'.repeat(64)}\n${'b'.repeat(64)}`),/SINGLE_RUNNING_CONTAINER_REQUIRED/);

@@ -29,6 +29,16 @@ export function validateConfig(config) {
   return Number(ports[0].published);
 }
 
+export function validateBusinessAcceptanceConfig(config) {
+  if (config.services.api?.environment?.NODE_ENV !== 'development'
+    || config.services.api?.environment?.ENABLE_DEV_AUTH !== 'true'
+    || config.services.migrate?.environment?.ITSM_SEED_DEV_DATA !== 'true'
+    || config.services.api?.environment?.NOTIFICATION_MODE !== 'fake'
+    || config.services.worker?.environment?.NOTIFICATION_MODE !== 'fake'
+    || config.services.worker?.environment?.ENABLE_LIVE_NOTIFICATIONS !== 'false')
+    throw new Error('ISOLATED_SYNTHETIC_ACCEPTANCE_CONFIG_REQUIRED');
+}
+
 export function validateRuntimeContainer(container, expectedImage, service) {
   if (!/^sha256:[a-f0-9]{64}$/.test(expectedImage ?? '') || container.Image !== expectedImage)
     throw new Error('RUNNING_IMAGE_MISMATCH');
@@ -41,7 +51,7 @@ export function validateRuntimeContainer(container, expectedImage, service) {
     throw new Error('RUNNING_CONTAINER_NOT_HEALTHY');
 }
 
-export async function validateRelease(directory, expected) {
+export async function validateRelease(directory, expected, { requireBusinessAcceptance = false } = {}) {
   if (!/^[a-f0-9]{40}$/.test(expected ?? '')) throw new Error('FULL_COMMIT_SHA_REQUIRED');
   const base=await realpath(directory);
   if (!(await lstat(resolve(directory,'release.json'))).isFile()) throw new Error('INVALID_RELEASE_MANIFEST');
@@ -58,6 +68,8 @@ export async function validateRelease(directory, expected) {
   }
   for (const required of requiredReleaseFiles)
     if (!seen.has(required)) throw new Error('INCOMPLETE_RELEASE');
+  if (requireBusinessAcceptance && !seen.has('scripts/verify-development.mjs'))
+    throw new Error('HASHED_BUSINESS_ACCEPTANCE_TOOL_REQUIRED');
   if (schemaFingerprint(manifest.files) !== manifest.schemaFingerprint) throw new Error('SCHEMA_FINGERPRINT_MISMATCH');
   for (const name of ['api','web','worker','postgres','redis']) {
     if (!new RegExp(`^ghcr\\.io/gomi95932/itsm-${name}@sha256:[a-f0-9]{64}$`).test(manifest.images?.[name] ?? '')) throw new Error('IMMUTABLE_IMAGE_DIGEST_REQUIRED');
@@ -81,6 +93,7 @@ function run(command, args, options = {}) {
 }
 
 export async function verifyRuntimeImages(images, containerIdFor) {
+  const runtime={};
   for (const [service,imageName] of Object.entries({db:'postgres',redis:'redis',api:'api',worker:'worker',web:'web'})) {
     const id=await containerIdFor(service);
     if (!/^[a-f0-9]{12,64}$/.test(id)) throw new Error('SINGLE_RUNNING_CONTAINER_REQUIRED');
@@ -88,7 +101,9 @@ export async function verifyRuntimeImages(images, containerIdFor) {
     const inspected=JSON.parse(await run('docker',['container','inspect',id]));
     if (!Array.isArray(inspected) || inspected.length !== 1) throw new Error('SINGLE_RUNNING_CONTAINER_REQUIRED');
     validateRuntimeContainer(inspected[0],expectedImage,service);
+    runtime[service]={containerId:id,imageId:expectedImage,image:images[imageName]};
   }
+  return runtime;
 }
 
 async function atomicJson(path, value) {
@@ -110,13 +125,15 @@ export async function main(argv) {
   for (let i=0;i<args.length;i++) {
     if (args[i].startsWith('--')) {
       const key=args[i].slice(2);
+      if (key === 'verify-development' && !options[key]) { options[key]=true; continue; }
       if (!['env','state','backup'].includes(key) || !args[i+1] || args[i+1].startsWith('--') || options[key]) throw new Error('INVALID_RELEASE_ARGUMENT');
       options[key]=args[++i];
     } else positionals.push(args[i]);
   }
   if (!['check','deploy','backup','restore-check','rollback'].includes(command)
     || positionals.length !== (command === 'deploy' ? 1 : 0)
-    || (options.backup && command !== 'restore-check')) throw new Error('INVALID_RELEASE_COMMAND');
+    || (options.backup && command !== 'restore-check')
+    || (options['verify-development'] && !['deploy','rollback'].includes(command))) throw new Error('INVALID_RELEASE_COMMAND');
   const envFile=resolve(options.env ?? '/opt/itsm/shared/development.env');
   const state=resolve(options.state ?? '/opt/itsm/shared/release-state');
   const envInfo=await lstat(envFile);
@@ -125,7 +142,7 @@ export async function main(argv) {
   const stateInfo=await lstat(state);
   if (!stateInfo.isDirectory() || (stateInfo.mode & 0o077) || ![0,process.getuid?.()].includes(stateInfo.uid)) throw new Error('STATE_DIRECTORY_MUST_BE_PRIVATE');
   const lock=await open(resolve(state,'operation.lock'),'wx',0o600).catch(() => { throw new Error('RELEASE_OPERATION_ALREADY_LOCKED'); });
-  let phase='preflight', backupPath;
+  let phase='preflight', backupPath, businessAcceptance;
   try {
   await lock.writeFile(`${process.pid}\n`);
   let pinned={};
@@ -139,7 +156,10 @@ export async function main(argv) {
     await run('docker',['info','--format','{{.ServerVersion}}']);
     const config=JSON.parse(await compose(['config','--format','json']));
     const port=validateConfig(config);
+    if (options['verify-development']) validateBusinessAcceptanceConfig(config);
     const existing=await optionalJson(currentPath);
+    if (options['verify-development'])
+      await validateRelease(root,command === 'deploy' ? positionals[0] : existing?.sha,{requireBusinessAcceptance:true});
     const backup=async () => {
       const directory=resolve(state,'backups'); await mkdir(directory,{recursive:true,mode:0o700});
       const path=resolve(directory,`itsm-${new Date().toISOString().replace(/[:.]/g,'-')}.dump`);
@@ -160,6 +180,12 @@ export async function main(argv) {
       if (!web.ok || !(await web.text()).includes('id="app"')) throw new Error('WEB_SMOKE_FAILED');
     };
     const verifyRuntime=images => verifyRuntimeImages(images,service => compose(['ps','--status','running','-q',service]));
+    const acceptBusiness=async () => {
+      if (!options['verify-development']) return;
+      // An explicit flag and isolated fake-only configuration authorize synthetic writes.
+      const { verifyDevelopment }=await import('./verify-development.mjs');
+      businessAcceptance=await verifyDevelopment({baseUrl:`http://127.0.0.1:${port}`,allowSyntheticWrites:true});
+    };
     if (command === 'check') { console.log('Docker, private configuration and loopback isolation checks passed'); return; }
     if (command === 'backup') { backupPath=await backup(); console.log(`Backup verified: ${backupPath}`); return; }
     if (command === 'restore-check') {
@@ -192,11 +218,19 @@ export async function main(argv) {
       phase='rollback'; await compose(['pull','api','web','worker']);
       await compose(['up','-d','--no-build','--no-deps','--wait','--wait-timeout','180','api','worker','web']);
       phase='rollback-runtime-images';
-      await verifyRuntime({...previousManifest.images,postgres:existing.images.postgres,redis:existing.images.redis});
+      const rollbackImages={...previousManifest.images,postgres:existing.images.postgres,redis:existing.images.redis};
+      await verifyRuntime(rollbackImages);
       phase='rollback-smoke';
       await smoke();
+      phase='rollback-business-acceptance'; await acceptBusiness();
+      phase='rollback-final-runtime-images';
+      const runtime=await verifyRuntime(rollbackImages);
+      const record={...previous,images:rollbackImages,digests:{...previous.digests,postgres:existing.digests.postgres,redis:existing.digests.redis},
+        runtime,businessAcceptance:businessAcceptance ?? null,verificationLevel:businessAcceptance ? 'synthetic-business' : 'readiness-only',
+        verifiedAt:new Date().toISOString()};
+      await atomicJson(resolve(state,`rollback-${Date.now()}-${previous.sha}.json`),record);
       await atomicJson(previousPath,existing);
-      await atomicJson(currentPath,{...previous,images:{...previous.images,postgres:existing.images.postgres,redis:existing.images.redis},digests:{...previous.digests,postgres:existing.digests.postgres,redis:existing.digests.redis},verifiedAt:new Date().toISOString()});
+      await atomicJson(currentPath,record);
       console.log(`Application rollback verified: ${previous.sha}`); return;
     }
     const manifest=await validateRelease(root,positionals[0]);
@@ -219,16 +253,21 @@ export async function main(argv) {
     phase='start'; await compose(['up','-d','--no-build','--no-deps','--wait','--wait-timeout','180','api','worker','web']);
     phase='runtime-images'; await verifyRuntime(manifest.images);
     phase='smoke'; await smoke();
+    phase='business-acceptance'; await acceptBusiness();
+    phase='final-runtime-images'; const runtime=await verifyRuntime(manifest.images);
     const images={...manifest.images};
     const digests={};
     for (const [name,image] of Object.entries(images)) digests[name]=JSON.parse(await run('docker',['image','inspect',image,'--format','{{json .RepoDigests}}']));
-    const record={sha:manifest.sha,bundlePath:root,schemaFingerprint:manifest.schemaFingerprint,images,digests,backup:backupPath,verifiedAt:new Date().toISOString()};
+    const record={sha:manifest.sha,bundlePath:root,schemaFingerprint:manifest.schemaFingerprint,images,digests,backup:backupPath,
+      runtime,businessAcceptance:businessAcceptance ?? null,verificationLevel:businessAcceptance ? 'synthetic-business' : 'readiness-only',
+      verifiedAt:new Date().toISOString()};
     await atomicJson(resolve(state,`release-${Date.now()}-${manifest.sha}.json`),record);
     if (existing) await atomicJson(previousPath,existing);
     await atomicJson(currentPath,record);
     console.log(`Development deployment verified: ${manifest.sha}`);
   } catch (error) {
-    await atomicJson(resolve(state,`failure-${Date.now()}.json`),{phase,backup:backupPath ?? null,at:new Date().toISOString()}).catch(() => {});
+    await atomicJson(resolve(state,`failure-${Date.now()}.json`),{phase,backup:backupPath ?? null,
+      businessAcceptance:businessAcceptance ?? error.report ?? null,at:new Date().toISOString()}).catch(() => {});
     console.error(`Release stopped at ${phase}; no automatic database rollback was attempted`);
     throw error;
   } finally {

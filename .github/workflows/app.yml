@@ -212,7 +212,8 @@ jobs:
             node "$release_root/scripts/release.mjs" "$@" --env "$private_env" --state "$state"
           }
           release check
-          release deploy "$GITHUB_SHA"
+          release deploy "$GITHUB_SHA" --verify-development
+          node tests/integration/release-evidence.mjs "$state/current.json" "$GITHUB_SHA"
           node tests/integration/tickets.mjs
           node "$release_root/scripts/verify-development.mjs" --base-url http://127.0.0.1:8088 --allow-synthetic-writes
           node "$release_root/scripts/verify-development.mjs" --base-url http://127.0.0.1:8088 --allow-synthetic-writes
