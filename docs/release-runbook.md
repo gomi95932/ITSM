@@ -29,7 +29,51 @@ sudo -H node scripts/create-development-env.mjs /opt/itsm/shared/development.env
 
 新版本可用已审核工具的 `node scripts/stage-release.mjs "$SHA" "$RUN_ID" /absolute/private-staging/new-release` 自动完成来源、实际 ZIP digest、安全解包和清单绑定校验，要求指定 SHA 对应的 main Application CI 全部成功、未重跑变更且 artifact 未过期。`ITSM_GITHUB_READ_TOKEN` 由批准的秘密管理方式注入，不把令牌粘贴到命令行。父目录须由当前普通用户持有、0700、无链接，目标目录不得已存在。工具会拒绝旧版缺少 runAttempt 的清单，不以放宽门禁兼容。
 
-预备输出为 `artifact-verified`，不是发布批准。`verified/bundle` 仍是普通用户可写数据；管理员或后续受限服务必须先将批准版本复制至普通用户不可写的可信发布目录，在可信边界内重新校验后才可执行。不得直接 sudo 执行 staging 内的脚本，也不因具备 source/staging JSON 就开启无人值守 sudo。首次安装可信发布工具、自动提升及受限执行通道是独立的管理员变更。
+预备输出为 `artifact-verified`，不是发布批准。`verified/bundle` 仍是普通用户可写数据；管理员或后续受限服务必须先将批准版本放入普通用户不可写的可信发布目录，在可信边界内重新校验后才可执行。不得直接 sudo 执行 staging 内的脚本，也不因具备 source/staging JSON 就开启无人值守 sudo。首次安装可信发布工具、自动提升及受限执行通道是独立的管理员变更。
+
+### 2.1 受控 root 提升（代码待部署验证）
+
+`scripts/promote-release.mjs` 为独立可信工具入口，不从用户 staging 复制脚本，不调用 Docker、迁移或下载包内代码。管理员首次从已审核提交安装以下五个文件至固定 `/opt/itsm/tools/release/`：`promote-release.mjs`、`stage-release.mjs`、`release.mjs`、`verify-release-source.mjs`、`extract-release.py`。必须通过独立审核来源核对工具哈希，不能执行待验证包中的安装器或自动更新工具。工具及全部祖先目录须 root 持有、无符号链接、不可由组或其他用户写入；文件不得为硬链接。
+
+固定管理路径：
+
+- `/opt/itsm/releases/`：root 管理的发布目录；不覆盖既有版本，不自动修改既有目录属主。
+- `/opt/itsm/shared/release-approvals/`：root 管理的批准记录目录，建议 0700；每份 `<SHA>.json` 必须 0600、root 持有、无链接。
+- `/etc/itsm/github-actions-read.token`：root 私有 0600 的本仓库 Actions 只读身份；不用部署 Shell 环境或命令行传入 Token，不与 GHCR 凭据混用。凭据由管理员在受控会话中设置，不提交 Git 或记录到工单。
+
+管理员核对真实 main 成功运行后创建批准记录，字段契约如下；以下仅为夹具示例，不可作为真实发布批准：
+
+```json
+{
+  "version": 1,
+  "repository": "gomi95932/ITSM",
+  "ref": "refs/heads/main",
+  "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "runId": 123,
+  "runAttempt": 2,
+  "artifactId": 456,
+  "artifactDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "artifactSize": 100,
+  "approvedBy": "release-reviewer",
+  "approvalRef": "change/CHG-001",
+  "approvedAt": "2026-11-15T02:00:00Z",
+  "expiresAt": "2026-11-15T04:00:00Z"
+}
+```
+
+批准由 root 文件所有权形成当前信任边界，`approvedBy` 只是记录，不是第二套登录或审批认证；后续 OA/受限批准服务应负责真实身份复核。批准时窗最长 24 小时，SHA、run/attempt、artifact ID、实际 ZIP digest 和长度全部精确匹配；失败不得放宽字段。工具查验来源前拒绝不安全路径，在重新下载、安全提取及清单验证后，再次核对来源、批准撤销/变更与有效期。
+
+由已批准的管理员以受信任 Node >=22 执行固定工具；以下命令仅说明已安装入口，不授权新增免密 sudo：
+
+```sh
+sudo -H /usr/bin/node /opt/itsm/tools/release/promote-release.mjs "$SHA" "$RUN_ID"
+```
+
+安装前须核实 `/usr/bin/node` 为实际 root 管理的可信运行时，不能引用普通用户安装的 Node、可写包装脚本或 `NODE_OPTIONS`。不要授予通用 `sudo node`、`SETENV` 或 Docker 组权限。当前代码不安装 sudoers、systemd 服务或定时器，受限非交互发布身份仍待单独批准及验收。
+
+成功产物为 `/opt/itsm/releases/<SHA>/` 和同层 `<SHA>.promotion.json`，级别 `approved-root-promoted`、`deploymentPerformed=false`；两者须同时存在才可进入单独批准的部署步骤。新目录及文件保留 root 私有权限。不会更新 `current.json`，不会改变运行服务。普通账户不能修改提升后的文件。
+
+提升按 SHA 使用独占锁；既有目录、证明或锁均拒绝，不覆盖。正常失败清理本次私有临时目录；进程异常终止可能遗留锁，须核对真实进程后人工恢复。目录和证明分两次 rename 发布，异常终止时可能只存在目录；这不是成功提升，禁止直接执行，应保留现场并人工对账。提升成功后批准过期不自动停止已部署服务；实际自动部署仍须在执行时重新检查批准及来源，不能只信历史 promotion 证明。
 
 ## 3. 检查与部署
 

@@ -34,6 +34,8 @@ jobs:
       - run: npm test
       - name: Reject unsafe release archives with isolated Python fixtures
         run: python3 tests/unit/release-extraction.py
+      - name: Verify privileged promotion boundary in disposable root-owned CI fixtures
+        run: sudo -n env -i PATH=/usr/bin:/bin "$(command -v node)" tests/integration/release-promotion.mjs
       - name: Set disposable CI configuration path
         run: echo "ITSM_CI_ENV=$RUNNER_TEMP/itsm-ci.env" >> "$GITHUB_ENV"
       - name: Create private disposable CI configuration

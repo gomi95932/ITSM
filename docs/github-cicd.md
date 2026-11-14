@@ -49,7 +49,9 @@
 
 成功时输出 `artifact-verified` 证明；包位于 `<目标目录>/verified/bundle`，同层保留来源与预备证明。失败不会生成 `verified`，可能留下空的预留目录；保留现场，人工核对后另选新目录重试，不覆盖。它不调用 Docker、sudo、容器、迁移或包内代码，不等于批准、部署、权限提升或业务验收。
 
-后续仍需受控特权入口将已批准版本复制至 root 管理且普通用户不可写的发布目录，并在该可信边界内重新校验后执行发布。禁止直接 `sudo node <普通用户可改写目录>/scripts/release.mjs`，不能仅凭预备证明绕过批准或信任边界。服务器上的部署身份、目录安装、实际 main 制品预备与发布、备份恢复和回退证据仍待完成。
+`scripts/promote-release.mjs` 补充受控提升代码，安装和现场验收仍待管理员变更。它不相信普通用户 staging 中的文件或 JSON，而以固定 root 工具和只读身份重新查验 GitHub、重新下载实际制品，只把已批准的精确版本放入 root 管理目录。命令只接收 SHA 与 run ID，不接收目录、命令、配置文件或凭据路径；固定路径和安装要求见发布手册。批准文件须 root 私有、绑定 artifact ID/digest/attempt，最长有效 24 小时；发布前再查批准和来源。完成提升仍不执行 Docker、迁移或新包代码，不等于自动部署。
+
+GitHub 临时 Linux Runner 增加 root 自有 `/run/itsm-promotion-test-*` 夹具测试，通过独立模拟来源验证提升与拒绝路径。模拟 API 不证明服务器 GitHub 身份、真实下载、sudo 入口或现场权限已经生效。禁止直接 `sudo node <普通用户可改写目录>/scripts/release.mjs`，不能仅凭预备证明绕过批准或信任边界。服务器上的部署身份、可信工具安装、批准机制接入、实际 main 制品提升与发布、备份恢复和回退证据仍待完成；不提供通用 Node 或 Docker 的免密 sudo 权限。
 
 Compose 项目名为 `itsm-dev`，数据库和 Redis 仅在独立内部网络中访问，使用独立命名卷；没有宿主机端口映射。Web 仅绑定 `127.0.0.1:8088`，须经 SSH 隧道访问。不要执行 `docker compose down -v`、全局 `docker system prune` 或修改宿主机已有 PostgreSQL、Redis、OpenClaw。启动前单独确认 HTTP 端口、磁盘、备份目标与访问控制。
 

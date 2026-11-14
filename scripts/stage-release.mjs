@@ -75,7 +75,7 @@ export async function validateStagedRelease(bundle,source) {
   return manifest;
 }
 
-async function extractArtifact(artifact,destination,sha) {
+export async function extractArtifact(artifact,destination,sha) {
   try {
     await execute('/usr/bin/python3',[fileURLToPath(new URL('./extract-release.py',import.meta.url)),artifact,destination,sha],{
       timeout:45000,maxBuffer:4096,env:{PATH:'/usr/bin:/bin',LANG:'C.UTF-8'},

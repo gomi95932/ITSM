@@ -16,6 +16,7 @@ paths.push('scripts/verify-development.mjs');
 paths.push('scripts/verify-release-source.mjs');
 paths.push('scripts/stage-release.mjs');
 paths.push('scripts/extract-release.py');
+paths.push('scripts/promote-release.mjs');
 const images={};
 for (const name of ['api','web','worker','postgres','redis']) {
   const repository=`ghcr.io/gomi95932/itsm-${name}`;
