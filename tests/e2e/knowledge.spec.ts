@@ -1,4 +1,4 @@
-import { test,expect } from '@playwright/test';
+import { test,expect } from './fixtures';
 
 test('knowledge moves from author to independent reviewer and employee reading',async({page})=>{
   const title=`E2E 设备巡检知识 ${Date.now()}`;

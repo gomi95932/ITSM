@@ -1,4 +1,4 @@
-import { test,expect } from '@playwright/test';
+import { test,expect } from './fixtures';
 test('explicit proxy grant, ordinary GEN intake, correction and revocation stay scoped on desktop and mobile',async({page})=>{
   test.setTimeout(60000);
   await page.setViewportSize({width:1440,height:1000});await page.goto('/');

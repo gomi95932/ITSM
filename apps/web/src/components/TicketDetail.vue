@@ -3,26 +3,27 @@ import { computed,onMounted,ref,watch } from 'vue';
 import { ArrowLeft,Check,Clock3,LoaderCircle,RefreshCw,Tags } from 'lucide-vue-next';
 import type { CatalogItem,Priority,SessionUser,TicketAction,TicketActionInput,TicketView } from '@itsm/contracts';
 import { api,errorText,ApiError } from '../api';
+import { createRequestKey } from '../request-key';
 import { actions as ticketActions,priorityActions,duration,formatDate,statuses } from '../labels';
 import ContentBoundary from './ContentBoundary.vue';
 const props=defineProps<{id:string;user:SessionUser}>();
 const actions={...ticketActions,...priorityActions};
 const emit=defineEmits<{back:[];changed:[]}>();
 const ticket=ref<TicketView>(),loading=ref(false),busy=ref(false),error=ref(''),action=ref<TicketAction>(),comment=ref(''),reason=ref(''),dueAt=ref(''),vendorReference=ref(''),vendorOwner=ref(''),category=ref(''),evidence=ref(''),target=ref('');
-const groups=ref<{id:string;name:string}[]>([]),key=ref(crypto.randomUUID());
+const groups=ref<{id:string;name:string}[]>([]),key=ref(createRequestKey());
 const members=ref<{id:string;name:string}[]>([]),targetPerson=ref(''),membersLoading=ref(false);
 const contentSafe=ref(false);
-const catalog=ref<CatalogItem[]>([]),correcting=ref(false),classificationCode=ref(''),classificationReason=ref(''),classificationFields=ref<Record<string,string>>({}),classificationSafe=ref(false),classificationKey=ref(crypto.randomUUID());
+const catalog=ref<CatalogItem[]>([]),correcting=ref(false),classificationCode=ref(''),classificationReason=ref(''),classificationFields=ref<Record<string,string>>({}),classificationSafe=ref(false),classificationKey=ref(createRequestKey());
 const classificationService=computed(()=>catalog.value.find(item=>item.code===classificationCode.value));
 watch(classificationCode,()=>{classificationFields.value={};});
-watch([classificationCode,classificationReason,classificationFields],()=>{classificationSafe.value=false;classificationKey.value=crypto.randomUUID();},{deep:true});
-const reviewPriority=ref<Priority>('P1'),reviewReason=ref(''),reviewSafe=ref(false),reviewKey=ref(crypto.randomUUID());
-const feedbackRating=ref(0),feedbackComment=ref(''),feedbackSafe=ref(false),feedbackKey=ref(crypto.randomUUID());
-watch([feedbackRating,feedbackComment],()=>{feedbackKey.value=crypto.randomUUID();feedbackSafe.value=false;});
+watch([classificationCode,classificationReason,classificationFields],()=>{classificationSafe.value=false;classificationKey.value=createRequestKey();},{deep:true});
+const reviewPriority=ref<Priority>('P1'),reviewReason=ref(''),reviewSafe=ref(false),reviewKey=ref(createRequestKey());
+const feedbackRating=ref(0),feedbackComment=ref(''),feedbackSafe=ref(false),feedbackKey=ref(createRequestKey());
+watch([feedbackRating,feedbackComment],()=>{feedbackKey.value=createRequestKey();feedbackSafe.value=false;});
 const reviewLabels:Record<string,string>={NOT_REQUIRED:'无需主管确认',PENDING:'候选 · 待主管确认',CONFIRMED:'主管已确认',ADJUSTED:'主管已调整'};
-watch([reviewPriority,reviewReason],()=>{reviewKey.value=crypto.randomUUID();reviewSafe.value=false;});
+watch([reviewPriority,reviewReason],()=>{reviewKey.value=createRequestKey();reviewSafe.value=false;});
 const fieldLabels:Record<string,string>={system:'业务系统',module:'模块 / 页面',location:'所在地点',device:'设备编号'};
-watch([comment,reason,dueAt,vendorReference,vendorOwner,category,evidence,target,targetPerson],()=>{key.value=crypto.randomUUID();contentSafe.value=false;});
+watch([comment,reason,dueAt,vendorReference,vendorOwner,category,evidence,target,targetPerson],()=>{key.value=createRequestKey();contentSafe.value=false;});
 watch(target,async value=>{
   targetPerson.value='';members.value=[];membersLoading.value=!!value;
   if(!value)return;
@@ -48,12 +49,12 @@ const available=computed<TicketAction[]>(()=>{
 });
 const commands:Record<string,string>={ACCEPT:'接单并回复',REQUEST_INFO:'请求补充',ADD_INFO:'补充信息',WAIT_VENDOR:'等待厂商',RESOLVE:'提交解决方案',CONFIRM:'确认已解决',REOPEN:'仍未解决',CANCEL:'撤销报障',REASSIGN:'发起交接',ACCEPT_HANDOVER:'确认接收',DECLINE_HANDOVER:'退回交接',CANCEL_HANDOVER:'撤回交接'};
 async function load(){loading.value=true;error.value='';try{ticket.value=await api<TicketView>(`/tickets/${props.id}`);catalog.value=(await api<{items:CatalogItem[]}>('/catalog')).items;if(props.user.groups.length)groups.value=(await api<{items:{id:string;name:string}[]}>('/support-groups')).items;}catch(e){error.value=errorText(e);}finally{loading.value=false;}}
-function choose(value:TicketAction){correcting.value=false;action.value=value;comment.value='';reason.value='';dueAt.value='';vendorReference.value='';vendorOwner.value='';category.value='';evidence.value='';target.value='';targetPerson.value='';contentSafe.value=false;key.value=crypto.randomUUID();error.value='';}
+function choose(value:TicketAction){correcting.value=false;action.value=value;comment.value='';reason.value='';dueAt.value='';vendorReference.value='';vendorOwner.value='';category.value='';evidence.value='';target.value='';targetPerson.value='';contentSafe.value=false;key.value=createRequestKey();error.value='';}
 async function submitClassification(){
   if(!ticket.value||!classificationService.value||!classificationSafe.value||busy.value)return;busy.value=true;error.value='';
   try{await api(`/tickets/${props.id}/classification`,{method:'POST',key:classificationKey.value,body:{contentClass:'GENERAL',expectedVersion:ticket.value.version,serviceCode:classificationCode.value,formVersion:classificationService.value.formVersion,fields:classificationFields.value,reason:classificationReason.value}});
     correcting.value=false;classificationCode.value='';classificationReason.value='';await load();emit('changed');}
-  catch(e){if(e instanceof ApiError&&e.status===409){await load();classificationKey.value=crypto.randomUUID();}error.value=errorText(e);}finally{busy.value=false;}
+  catch(e){if(e instanceof ApiError&&e.status===409){await load();classificationKey.value=createRequestKey();}error.value=errorText(e);}finally{busy.value=false;}
 }
 async function submit(){
   if(!ticket.value||!action.value||busy.value||!contentSafe.value)return;busy.value=true;error.value='';
@@ -63,14 +64,14 @@ async function submit(){
   if(vendorReference.value)body.vendorReference=vendorReference.value;if(vendorOwner.value)body.vendorOwner=vendorOwner.value;
   if(category.value)body.resolutionCategory=category.value;if(evidence.value)body.evidence=evidence.value;if(target.value)body.targetGroupId=target.value;if(targetPerson.value)body.targetAssigneeId=targetPerson.value;
   try{await api(`/tickets/${props.id}/actions`,{method:'POST',body,key:key.value});action.value=undefined;await load();emit('changed');}
-  catch(e){if(e instanceof ApiError&&e.status===409){await load();key.value=crypto.randomUUID();}error.value=errorText(e);}finally{busy.value=false;}
+  catch(e){if(e instanceof ApiError&&e.status===409){await load();key.value=createRequestKey();}error.value=errorText(e);}finally{busy.value=false;}
 }
 async function submitPriorityReview(){
   if(!ticket.value||!ticket.value.canReviewPriority||!reviewSafe.value||!reviewReason.value.trim()||busy.value)return;
   busy.value=true;error.value='';
   try{await api(`/tickets/${props.id}/priority-review`,{method:'POST',key:reviewKey.value,body:{contentClass:'GENERAL',expectedVersion:ticket.value.version,priority:reviewPriority.value,reason:reviewReason.value}});
-    reviewReason.value='';reviewSafe.value=false;reviewKey.value=crypto.randomUUID();await load();emit('changed');}
-  catch(e){if(e instanceof ApiError&&e.status===409){await load();reviewKey.value=crypto.randomUUID();}error.value=errorText(e);}finally{busy.value=false;}
+    reviewReason.value='';reviewSafe.value=false;reviewKey.value=createRequestKey();await load();emit('changed');}
+  catch(e){if(e instanceof ApiError&&e.status===409){await load();reviewKey.value=createRequestKey();}error.value=errorText(e);}finally{busy.value=false;}
 }
 async function submitFeedback(){
   if(!ticket.value?.canFeedback||!feedbackSafe.value||!feedbackRating.value||busy.value)return;
