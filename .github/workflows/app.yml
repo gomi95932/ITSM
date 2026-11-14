@@ -9,6 +9,9 @@ permissions:
   contents: read
 
 jobs:
+  security:
+    uses: ./.github/workflows/security.yml
+
   build-test:
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -107,7 +110,7 @@ jobs:
 
   publish:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: build-test
+    needs: [build-test, security]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -134,7 +137,7 @@ jobs:
 
   publish-data-images:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: build-test
+    needs: [build-test, security]
     runs-on: ubuntu-latest
     permissions:
       contents: read

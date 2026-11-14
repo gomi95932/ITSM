@@ -1,0 +1,63 @@
+rules:
+  - id: itsm-no-dynamic-code
+    message: Do not execute JavaScript source strings; parse structured data instead.
+    languages: [javascript, typescript]
+    severity: ERROR
+    pattern-either:
+      - pattern: eval(...)
+      - pattern: new Function(...)
+  - id: itsm-no-shell-command-strings
+    message: Use spawn or execFile with an argument array and without a shell.
+    languages: [javascript, typescript]
+    severity: ERROR
+    pattern-either:
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  import { exec as $EXEC } from 'node:child_process';
+                  ...
+              - pattern-inside: |
+                  import { execSync as $EXEC } from 'node:child_process';
+                  ...
+              - pattern-inside: |
+                  import { exec as $EXEC } from 'child_process';
+                  ...
+              - pattern-inside: |
+                  import { execSync as $EXEC } from 'child_process';
+                  ...
+          - pattern: $EXEC(...)
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  import * as $CP from 'node:child_process';
+                  ...
+              - pattern-inside: |
+                  import * as $CP from 'child_process';
+                  ...
+              - pattern-inside: |
+                  import $CP from 'node:child_process';
+                  ...
+              - pattern-inside: |
+                  import $CP from 'child_process';
+                  ...
+              - pattern-inside: |
+                  const $CP = require('node:child_process');
+                  ...
+              - pattern-inside: |
+                  const $CP = require('child_process');
+                  ...
+          - pattern-either:
+              - pattern: $CP.exec(...)
+              - pattern: $CP.execSync(...)
+  - id: itsm-no-disabled-tls
+    message: Keep certificate verification enabled; install the trusted corporate CA.
+    languages: [javascript, typescript]
+    severity: ERROR
+    pattern-either:
+      - pattern: 'process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0"'
+      - pattern: '{..., rejectUnauthorized: false, ...}'
+  - id: itsm-no-shell-option
+    message: A shell must not interpret command arguments.
+    languages: [javascript, typescript]
+    severity: ERROR
+    pattern: '{..., shell: true, ...}'
