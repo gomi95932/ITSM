@@ -115,6 +115,7 @@ jobs:
         run: docker compose --env-file "$ITSM_CI_ENV" -f infra/compose/compose.yaml ps -a
 
   publish:
+    name: publish-${{ matrix.app }}
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: [build-test, security]
     runs-on: ubuntu-latest
@@ -142,6 +143,7 @@ jobs:
           tags: ghcr.io/${{ steps.name.outputs.repository }}-${{ matrix.app }}:${{ github.sha }}
 
   publish-data-images:
+    name: publish-${{ matrix.app }}
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: [build-test, security]
     runs-on: ubuntu-latest

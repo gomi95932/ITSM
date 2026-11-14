@@ -27,6 +27,18 @@
 
 ## 开发机隔离原则
 
+### 自动化发布来源校验
+
+`scripts/verify-release-source.mjs <完整40位SHA> <Actions运行ID>` 是只读来源门禁，不下载或执行发布包，不修改容器、sudo 或服务器配置。使用独立只读身份，通过环境变量 `ITSM_GITHUB_READ_TOKEN` 注入；CI 可使用 `GITHUB_TOKEN`。身份只需本仓库 Actions 读取权限，不需要写权限；不要在命令参数、文档或 Git 中填写 Token。
+
+工具校验固定仓库的 `app.yml`、main push、指定 SHA、完整成功运行、当前 attempt 的十个必须成功任务，以及唯一且未过期的 `itsm-release-<SHA>` 制品。制品必须带 SHA256 digest，创建时间必须在当前 attempt 的发布任务内；查询前后 attempt 和运行状态不得变化。列举超过 100 项时安全拒绝，不默默忽略分页。
+
+输出绑定 run、attempt、artifact ID、digest 与下载 API 地址；级别明确为 `github-source-only`。这不是制品下载校验、批准、部署成功或业务验收。后续下载必须校验返回归档的实际 digest，解包时阻止路径逃逸和链接，并核对包内 SHA、runId、文件哈希及镜像 digest。服务器只能执行可信受控目录里的已批准包；不得因为此只读工具成功就以 root 执行普通用户可改写的脚本。
+
+发布矩阵任务使用稳定名称 `publish-api/web/worker/postgres/redis`。旧版本运行使用旧任务名时会拒绝本门禁，不通过放宽匹配补救；旧版保留手册中的人工来源核验流程。自动化拉取、特权执行入口和服务器现场验证仍须另行完成。
+
+`Release source verification` 工作流仅在 main push 的 Application CI 成功结束后自动做上述只读检查，另提供 main 上的手动入口。只签出该 main 提交，不执行 artifact 或 PR 代码，不接入内网，也没有部署写权限。成功时保存 `release-source.json`，失败时停止，不冒充 CD 成功。工作流首次合并后仍需用实际 main 发布运行验证 GitHub 返回字段与任务名。
+
 Compose 项目名为 `itsm-dev`，数据库和 Redis 仅在独立内部网络中访问，使用独立命名卷；没有宿主机端口映射。Web 仅绑定 `127.0.0.1:8088`，须经 SSH 隧道访问。不要执行 `docker compose down -v`、全局 `docker system prune` 或修改宿主机已有 PostgreSQL、Redis、OpenClaw。启动前单独确认 HTTP 端口、磁盘、备份目标与访问控制。
 
 ## 下一项开发任务

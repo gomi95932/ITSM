@@ -11,6 +11,7 @@ if (execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim() !== sha) t
 const paths=requiredReleaseFiles.filter(path => !path.startsWith('db/migrations/'));
 // Legacy bundles remain valid rollback targets; every new bundle includes its hashed acceptance tool.
 paths.push('scripts/verify-development.mjs');
+paths.push('scripts/verify-release-source.mjs');
 const images={};
 for (const name of ['api','web','worker','postgres','redis']) {
   const repository=`ghcr.io/gomi95932/itsm-${name}`;
