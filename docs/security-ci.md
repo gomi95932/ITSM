@@ -23,4 +23,14 @@ Initial implementation on 2026-11-14. Actual branch CI results must be recorded 
 
 Official metadata checked on 2026-11-14: GitHub release `gitleaks/gitleaks` tag `v8.30.1`, Linux x64 asset ID `378332058`, SHA-256 `551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb`; PyPI confirms Semgrep `1.185.0` supports Python `>=3.10`. The command-execution rule is import-scoped, with a negative fixture for normal regular-expression `.exec()` calls.
 
-CI #113 (`f955477`) passed SAST fixtures, code scan and dependency audit. The two historical secret findings were inspected in their original Git blobs on 2026-11-15: knowledge intake and feedback integration tests intentionally submit the same synthetic marker and assert rejection with HTTP 403. These are not active provider credentials; no revocation or history rewrite is warranted for these two test fixtures. Their precise exclusions expire on 2027-02-01 and do not exclude entire commits, files or a credential pattern. The final passing feature CI SHA remains to be recorded.
+CI #113 (`f955477`) passed SAST fixtures, code scan and dependency audit. The two historical secret findings were inspected in their original Git blobs on 2026-11-15: knowledge intake and feedback integration tests intentionally submit the same synthetic marker and assert rejection with HTTP 403. These are not active provider credentials; no revocation or history rewrite is warranted for these two test fixtures. Their precise exclusions expire on 2027-02-01 and do not exclude entire commits, files or a credential pattern.
+
+On 2026-11-15, the authenticated Actions UI confirmed Application CI #114
+(`a84747608b006cddfda9c7c604921f9f670e54d4`, run `43614123177`)
+succeeded. Its descendant #117
+(`cea0a78529a2306d493bbe148c7980def487d619`, run `43618605172`)
+also succeeded: build-test 5m40s, secrets 7s, SAST 36s, dependencies 11s.
+Image publication and release-bundle were skipped because these were feature
+branches. These results prove neither main-branch enforcement nor deployment
+of the security gates to the intranet server. Any subsequent integration
+commit requires its own CI evidence.

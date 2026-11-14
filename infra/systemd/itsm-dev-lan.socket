@@ -1,0 +1,14 @@
+[Unit]
+Description=ITSM development LAN entry on 10.10.81.125:8080
+
+[Socket]
+ListenStream=10.10.81.125:8080
+FreeBind=yes
+NoDelay=yes
+Accept=no
+IPAddressDeny=any
+IPAddressAllow=127.0.0.1/32 10.10.81.0/24 10.10.91.0/24
+IPAccounting=yes
+
+[Install]
+WantedBy=sockets.target

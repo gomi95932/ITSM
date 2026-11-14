@@ -68,6 +68,38 @@ ssh -N -L 8088:127.0.0.1:8088 ituser@10.10.81.125
 
 浏览器访问 `http://127.0.0.1:8088`，核验员工提交、服务台处理、员工确认和权限隔离；`/api/v1/health/ready` 只证明数据库及必要结构可读，不替代业务端到端验收。worker 健康依赖成功处理循环的心跳。正式钉钉、OA、通知需各自真实权限和联调证据。
 
+### 4.1 经批准的局域网测试入口
+
+开发验证入口为 `http://10.10.81.125:8080`，由宿主机已有 `systemd-socket-proxyd` 转发到 `127.0.0.1:8088`。不修改受校验的 Compose、环境文件或镜像，不开放数据库、Redis、API 和 worker 端口。配置源为 `infra/systemd/itsm-dev-lan.socket`、`infra/systemd/itsm-dev-lan.service`，目标为服务器 `/etc/systemd/system/` 下同名文件；它们独立于应用发布包维护，后续应用升级仍需核验该入口。
+
+仅用于虚拟身份及合成数据测试。当前访问者可以选择开发测试用户，不能作为正式人员认证；HTTP 不加密，禁止输入真实敏感数据。不得配置公网端口映射。入口来源仅允许 `10.10.81.0/24` 与 `10.10.91.0/24`；本机代理进程连接 Web 的 `127.0.0.1/32` 规则单独配置。这不是公司人员认证，跨 VLAN 仍取决于企业网络 ACL。服务器的 nftables 与 systemd socket 过滤均须与上述批准网段一致。
+
+首次安装前确认 8080 空闲、两个同名单元不存在，保留原服务基线。将审核后的两个文件传入目标主机并核对 SHA256，再以 root:root、0644 安装；不得覆盖来源不明的既有单元。服务器需要 systemd 255 及实际可用的 cgroup/eBPF 网络过滤，不仅是编译特性显示支持。执行：
+
+```sh
+sudo systemd-analyze verify /etc/systemd/system/itsm-dev-lan.socket /etc/systemd/system/itsm-dev-lan.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now itsm-dev-lan.socket
+curl --noproxy '*' --fail --max-time 10 http://10.10.81.125:8080/api/v1/health/ready
+sudo systemctl status --no-pager itsm-dev-lan.socket itsm-dev-lan.service
+sudo journalctl --no-pager -u itsm-dev-lan.socket -u itsm-dev-lan.service -n 30
+```
+
+验收必须包括：8080 仅绑定目标内网 IP、8088 仍仅绑定回环地址、原服务正常、从另一台内网电脑打开页面及就绪接口。再比较以下两条只读探测：第一条应成功，证明测试源可用；第二条必须超时或拒绝，因为 `127.0.0.2` 不在该入口白名单。第二条成功即访问控制验收失败，应立即停止入口，不得宣称内网限制已生效。检查日志不得有 BPF 不受支持或过滤器安装失败信息。外网来源、交换机 ACL、公网 NAT 未做端到端验证，不能据此宣称整个网络边界已通过验收。
+
+```sh
+curl --noproxy '*' --interface 127.0.0.2 --fail --max-time 3 http://127.0.0.1:8088/api/v1/health/ready
+curl --noproxy '*' --interface 127.0.0.2 --fail --connect-timeout 2 --max-time 3 http://10.10.81.125:8080/api/v1/health/ready
+```
+
+代理只转发 TCP，不注入 `X-Forwarded-For`，应用看到的是代理连接地址，不能把它当作终端 IP 溯源方案。正式上线需有真实认证、HTTPS 和可信边界代理的来源审计设计。关闭测试入口仅停用本单元，不删除数据或停止 ITSM 容器：
+
+```sh
+sudo systemctl disable --now itsm-dev-lan.socket
+```
+
+`PartOf` 会同时停止代理服务；关闭后检查 8080 不再监听而 8088 仍可用。开机自动启动仅在 enable 成功后成立；未实际重启主机不能宣称重启恢复已验证。
+
 ## 5. 回退与故障处理
 
 ```sh
