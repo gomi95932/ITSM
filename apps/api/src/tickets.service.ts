@@ -9,6 +9,10 @@ import { SlaService } from './sla.service.js';
 import { IntakePolicyService } from './intake-policy.service.js';
 import { ownershipDenial } from './ticket-ownership.js';
 
+export function canViewRequestProgress(actorId: string, requesterId: string, serviceType: string): boolean {
+  return actorId === requesterId && serviceType === 'REQ';
+}
+
 type TicketRow = {
   id: string; number: string; requester_id: string; owner_group_id: string;
   service_code: string; service_type: string; form_version: number; subject: string;
@@ -231,7 +235,26 @@ export class TicketsService {
       const feedbackVisible=actor.id===ticket.requester_id || !!membership.rowCount;
       const feedback=feedbackVisible ? await client.query<{rating:number;comment:string|null;createdAt:Date}>(
         'SELECT rating,comment,created_at AS "createdAt" FROM ticket_feedback WHERE ticket_id=$1',[id]) : null;
+      const requestProgress = canViewRequestProgress(actor.id, ticket.requester_id, ticket.service_type)
+        ? await client.query(`SELECT a.state AS approval_state,a.updated_at AS approval_updated_at,
+            f.state AS fulfillment_state,f.delivered_at,f.access_expires_at,f.revoked_at,f.reviewed_at,f.updated_at AS fulfillment_updated_at
+          FROM request_approvals a LEFT JOIN request_fulfillments f ON f.approval_id=a.id
+          WHERE a.ticket_id=$1`, [id])
+        : null;
+      const progressRow = requestProgress?.rows[0];
       return { ...this.publicTicket(ticket),canAddInfo:actor.id===ticket.requester_id||delegated,
+        ...(canViewRequestProgress(actor.id, ticket.requester_id, ticket.service_type) ? { requestProgress: {
+          approval: progressRow ? { state: progressRow.approval_state, updatedAt: progressRow.approval_updated_at }
+            : null,
+          fulfillment: progressRow?.fulfillment_state ? {
+            state: progressRow.fulfillment_state,
+            deliveredAt: progressRow.delivered_at,
+            accessExpiresAt: progressRow.access_expires_at,
+            revokedAt: progressRow.revoked_at,
+            reviewedAt: progressRow.reviewed_at,
+            updatedAt: progressRow.fulfillment_updated_at,
+          } : null,
+        } } : {}),
         canFeedback:actor.id===ticket.requester_id && ticket.service_type==='INC' && ticket.status==='CLOSED' && !feedback?.rowCount,
         feedback:feedback?.rows[0] ?? null,
         canCorrectClassification:!!membership.rowCount && ['QUEUED','IN_PROGRESS','WAITING_USER','WAITING_VENDOR'].includes(ticket.status)

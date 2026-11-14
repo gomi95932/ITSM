@@ -23,6 +23,8 @@ watch([feedbackRating,feedbackComment],()=>{feedbackKey.value=createRequestKey()
 const reviewLabels:Record<string,string>={NOT_REQUIRED:'无需主管确认',PENDING:'候选 · 待主管确认',CONFIRMED:'主管已确认',ADJUSTED:'主管已调整'};
 watch([reviewPriority,reviewReason],()=>{reviewKey.value=createRequestKey();reviewSafe.value=false;});
 const fieldLabels:Record<string,string>={system:'业务系统',module:'模块 / 页面',location:'所在地点',device:'设备编号'};
+const approvalLabels:Record<string,string>={QUEUED:'等待发起',CREATING:'正在发起',CREATE_UNCERTAIN:'发起结果待核实',PENDING:'审批中',APPROVED:'审批已通过',REJECTED:'审批未通过',WITHDRAWN:'已撤回',EXPIRED:'已过期',BLOCKED:'受阻待处理'};
+const fulfillmentLabels:Record<string,string>={READY:'待人工交付',DELIVERED:'已交付',REVOKE_DUE:'待回收',REVOKED:'已回收',BLOCKED:'交付受阻'};
 watch([comment,reason,dueAt,vendorReference,vendorOwner,category,evidence,target,targetPerson],()=>{key.value=createRequestKey();contentSafe.value=false;});
 watch(target,async value=>{
   targetPerson.value='';members.value=[];membersLoading.value=!!value;
@@ -113,6 +115,16 @@ onMounted(load);
           <label v-for="field in classificationService?.fields??[]" :key="field.key">{{field.label}}<select v-if="field.options" v-model="classificationFields[field.key]" :required="field.required"><option value="">请选择</option><option v-for="option in field.options" :key="option">{{option}}</option></select><input v-else v-model="classificationFields[field.key]" :required="field.required" maxlength="500"/></label>
           <label>纠偏原因<textarea v-model="classificationReason" required maxlength="2000" rows="2"/></label><ContentBoundary v-model="classificationSafe"/><div class="form-footer"><button class="primary" type="submit" :disabled="busy||!classificationSafe||!classificationCode||!classificationReason.trim()"><Check :size="16"/>保存分类</button></div>
         </form>
+      </section>
+      <section v-if="mine&&ticket.serviceType==='REQ'" class="detail-section" aria-label="申请进度"><h2>申请进度</h2>
+        <template v-if="ticket.requestProgress?.approval"><p>审批：<strong>{{approvalLabels[ticket.requestProgress.approval.state]??ticket.requestProgress.approval.state}}</strong><span class="muted"> · {{formatDate(ticket.requestProgress.approval.updatedAt)}}</span></p></template>
+        <p v-else class="muted">审批记录尚未生成。</p>
+        <template v-if="ticket.requestProgress?.fulfillment"><p>交付：<strong>{{fulfillmentLabels[ticket.requestProgress.fulfillment.state]??ticket.requestProgress.fulfillment.state}}</strong><span class="muted"> · {{formatDate(ticket.requestProgress.fulfillment.updatedAt)}}</span></p>
+          <p v-if="ticket.requestProgress.fulfillment.deliveredAt" class="muted">交付时间：{{formatDate(ticket.requestProgress.fulfillment.deliveredAt)}}</p>
+          <p v-if="ticket.requestProgress.fulfillment.accessExpiresAt" class="muted">权限到期：{{formatDate(ticket.requestProgress.fulfillment.accessExpiresAt)}}</p>
+          <p v-if="ticket.requestProgress.fulfillment.revokedAt" class="muted">回收时间：{{formatDate(ticket.requestProgress.fulfillment.revokedAt)}}</p>
+          <p v-if="ticket.requestProgress.fulfillment.reviewedAt" class="muted">交付复核：{{formatDate(ticket.requestProgress.fulfillment.reviewedAt)}}</p>
+        </template><p v-else class="muted">交付记录尚未生成；审批通过不代表权限已开通。</p>
       </section>
       <div class="detail-grid"><div><section class="detail-section"><h2>报障详情</h2><p class="multiline">{{ticket.description}}</p><dl v-if="Object.keys(ticket.fields).length" class="fact-list"><template v-for="(value,name) in ticket.fields" :key="name"><dt>{{fieldLabels[String(name)]??name}}</dt><dd>{{value}}</dd></template></dl></section>
         <section class="detail-section"><div class="section-heading"><h2>处理记录</h2><span class="muted">{{ticket.events?.length??0}} 条</span></div><ol class="timeline"><li v-for="(event,index) in ticket.events??[]" :key="index"><span class="timeline-dot"></span><div class="event-title"><strong>{{actions[event.action]??event.action}}</strong><time>{{formatDate(event.createdAt)}}</time></div><p v-if="event.detail.comment" class="multiline">{{event.detail.comment}}</p><p v-if="event.detail.reason" class="multiline">{{event.detail.reason}}</p><p v-if="event.detail.vendorReference" class="muted">厂商单号：{{event.detail.vendorReference}}</p><p v-if="event.detail.targetGroupId" class="muted">{{event.detail.oldGroupId}} → {{event.detail.targetGroupId}}</p></li></ol></section>
