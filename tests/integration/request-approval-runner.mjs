@@ -288,10 +288,16 @@ try {
   }})).state,'BLOCKED','cancel-versus-approve race never releases fulfillment');
 
   const expiration=await enqueue(await draft(),new Date(Date.now()+1500));
-  const deadline=Date.now()+5000;
-  while (Date.now()<expiration.input.expiresAt.getTime() && Date.now()<deadline) await delay(25);
-  await maintainRequestApprovals(db);
-  assert.equal((await row(expiration.id)).state,'EXPIRED');
+  const deadline=Date.now()+10000;
+  let expirationState;
+  // Observe the database-driven transition instead of assuming both clocks reach the deadline together.
+  do {
+    await maintainRequestApprovals(db);
+    expirationState=(await row(expiration.id)).state;
+    if (expirationState === 'EXPIRED') break;
+    await delay(25);
+  } while (Date.now()<deadline);
+  assert.equal(expirationState,'EXPIRED','queued approval must expire within the bounded maintenance window');
   assert.equal((await row(expiration.id)).creation_attempts,0);
   const fulfillment=await fresh(); const fulfillmentRow=await processApproval(fulfillment.id);
   await assert.rejects(prepareRequestFulfillment(db,provider,fulfillment.id,employee('verifier')),
