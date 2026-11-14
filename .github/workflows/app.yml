@@ -32,6 +32,8 @@ jobs:
       - run: npm run build
       - run: npm run typecheck
       - run: npm test
+      - name: Reject unsafe release archives with isolated Python fixtures
+        run: python3 tests/unit/release-extraction.py
       - name: Set disposable CI configuration path
         run: echo "ITSM_CI_ENV=$RUNNER_TEMP/itsm-ci.env" >> "$GITHUB_ENV"
       - name: Create private disposable CI configuration

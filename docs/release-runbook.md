@@ -6,6 +6,7 @@
 
 - 管理员确认变更窗口、磁盘、8088 端口及原服务清单；保留现有宿主 PostgreSQL、Redis、OpenClaw 等服务。
 - 应用与 CI 使用 Node.js 22；发布工具要求 Node.js >=22、Docker Engine、Compose v2 和受控 GitHub/GHCR 出口。开发机已核实的宿主 Node.js 为 24.14.1，部署时仍须实际验证工具兼容性，不自动替换现有服务的全局运行时。Docker 操作账户属于高权限账户，不开放 Docker TCP API。
+- 自动制品预备还需要系统 `/usr/bin/python3`；以普通账户执行已审核目录中的 `stage-release.mjs`。来源校验和解包无需 Docker 或 sudo，不将其与特权部署混用。
 - 只使用本仓库 `main` 成功流水线的发布包和完整 40 位 SHA；先核对运行 URL、提交、`build-test`、三个应用镜像发布 job（api/web/worker）、两个数据镜像发布 job（postgres/redis）和 `release-bundle` 全部成功。校验和只验证完整性，不提供发布者身份；不得从聊天、陌生镜像站或不受信任 PR 下载脚本执行。
 - GHCR 用只读 `read:packages` 拉取身份，通过 `docker login ghcr.io --password-stdin` 交互输入；不在命令、Git、日志或工单中保存令牌。
 - 创建独立目录 `/opt/itsm/releases/<SHA>`、`/opt/itsm/shared`；归属为批准的部署账户。共享目录权限 0700；环境文件 0600。首次创建目录须获管理员授权。
@@ -25,6 +26,10 @@ sudo -H node scripts/create-development-env.mjs /opt/itsm/shared/development.env
 仅需要空数据库时省略种子选项。虚拟人员只用于隔离验证。`ITSM_SEED_DEV_DATA` 默认 false；正式模式禁止种子。改变现有 env 密码不等于改变已初始化 PostgreSQL 的密码，须另行批准轮换。
 
 下载 `itsm-release-<SHA>` artifact 后，在服务器核对归档的 SHA256，再解压到本次新建的版本目录。不能覆盖旧版本目录或从未核验归档直接执行。发布清单记录代码 SHA、所有文件哈希、迁移指纹和五个 GHCR 镜像的 `sha256` digest。镜像按 digest 拉取，不依赖可变标签。
+
+新版本可用已审核工具的 `node scripts/stage-release.mjs "$SHA" "$RUN_ID" /absolute/private-staging/new-release` 自动完成来源、实际 ZIP digest、安全解包和清单绑定校验，要求指定 SHA 对应的 main Application CI 全部成功、未重跑变更且 artifact 未过期。`ITSM_GITHUB_READ_TOKEN` 由批准的秘密管理方式注入，不把令牌粘贴到命令行。父目录须由当前普通用户持有、0700、无链接，目标目录不得已存在。工具会拒绝旧版缺少 runAttempt 的清单，不以放宽门禁兼容。
+
+预备输出为 `artifact-verified`，不是发布批准。`verified/bundle` 仍是普通用户可写数据；管理员或后续受限服务必须先将批准版本复制至普通用户不可写的可信发布目录，在可信边界内重新校验后才可执行。不得直接 sudo 执行 staging 内的脚本，也不因具备 source/staging JSON 就开启无人值守 sudo。首次安装可信发布工具、自动提升及受限执行通道是独立的管理员变更。
 
 ## 3. 检查与部署
 

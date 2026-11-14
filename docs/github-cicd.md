@@ -35,9 +35,21 @@
 
 输出绑定 run、attempt、artifact ID、digest 与下载 API 地址；级别明确为 `github-source-only`。这不是制品下载校验、批准、部署成功或业务验收。后续下载必须校验返回归档的实际 digest，解包时阻止路径逃逸和链接，并核对包内 SHA、runId、文件哈希及镜像 digest。服务器只能执行可信受控目录里的已批准包；不得因为此只读工具成功就以 root 执行普通用户可改写的脚本。
 
-发布矩阵任务使用稳定名称 `publish-api/web/worker/postgres/redis`。旧版本运行使用旧任务名时会拒绝本门禁，不通过放宽匹配补救；旧版保留手册中的人工来源核验流程。自动化拉取、特权执行入口和服务器现场验证仍须另行完成。
+发布矩阵任务使用稳定名称 `publish-api/web/worker/postgres/redis`。旧版本运行使用旧任务名时会拒绝本门禁，不通过放宽匹配补救；旧版保留手册中的人工来源核验流程。
 
-`Release source verification` 工作流仅在 main push 的 Application CI 成功结束后自动做上述只读检查，另提供 main 上的手动入口。只签出该 main 提交，不执行 artifact 或 PR 代码，不接入内网，也没有部署写权限。成功时保存 `release-source.json`，失败时停止，不冒充 CD 成功。工作流首次合并后仍需用实际 main 发布运行验证 GitHub 返回字段与任务名。
+`Release source verification` 工作流仅在 main push 的 Application CI 成功结束后启动，另提供 main 上的手动入口。只签出该 main 提交，不执行 artifact 或 PR 代码，不接入内网，也没有部署写权限。完成来源校验后，在 Runner 私有临时目录下载及校验同一 artifact，安全解包并核对清单，保存 `release-source.json` 和 `release-staging.json`；失败即停止，不冒充服务器发布成功。工作流首次合并后仍需用实际 main 发布运行验证 GitHub 返回字段、任务名及实际下载行为。
+
+### 制品下载与非特权预备
+
+`scripts/stage-release.mjs <完整40位SHA> <Actions运行ID> <绝对新目录>` 复用上述来源门禁。运行环境为 Linux、Node >=22 和系统 `/usr/bin/python3`（Python >=3.8）；只从已审核的可信工具目录运行，不使用新下载包里的工具校验它自身。GitHub 读取身份与 GHCR 拉取身份分离，前者仅放在环境变量，不写入命令参数、证明文件或解包子进程环境。
+
+该命令拒绝 root 执行。目标父目录必须属于当前普通用户、0700 且路径不经过符号链接；目标目录必须尚不存在。下载请求固定本仓库 artifact API；只接受 HTTPS 的 GitHub Actions 对象存储重定向，并且不向存储域转发 Authorization。实际 ZIP 长度和 SHA256 必须与 API 的 artifact 元数据一致，不仅校验包内自带 checksum。
+
+可信 Python 辅助工具仅提取精确命名的 tar.gz 和 checksum；禁止路径穿越、重复项、符号链接、硬链接、设备/FIFO、PAX 元数据与额外 ZIP 文件，限制压缩包/展开大小、成员数、内存和 CPU。文件重新以私有权限创建，不恢复归档所有者或执行权限。随后用可信 Node 代码验证发布清单、完整文件集合、每个文件 hash、SHA、runId、runAttempt、迁移指纹及五个镜像 digest，下载后再次查询来源，拒绝期间发生重跑或替换的运行。
+
+成功时输出 `artifact-verified` 证明；包位于 `<目标目录>/verified/bundle`，同层保留来源与预备证明。失败不会生成 `verified`，可能留下空的预留目录；保留现场，人工核对后另选新目录重试，不覆盖。它不调用 Docker、sudo、容器、迁移或包内代码，不等于批准、部署、权限提升或业务验收。
+
+后续仍需受控特权入口将已批准版本复制至 root 管理且普通用户不可写的发布目录，并在该可信边界内重新校验后执行发布。禁止直接 `sudo node <普通用户可改写目录>/scripts/release.mjs`，不能仅凭预备证明绕过批准或信任边界。服务器上的部署身份、目录安装、实际 main 制品预备与发布、备份恢复和回退证据仍待完成。
 
 Compose 项目名为 `itsm-dev`，数据库和 Redis 仅在独立内部网络中访问，使用独立命名卷；没有宿主机端口映射。Web 仅绑定 `127.0.0.1:8088`，须经 SSH 隧道访问。不要执行 `docker compose down -v`、全局 `docker system prune` 或修改宿主机已有 PostgreSQL、Redis、OpenClaw。启动前单独确认 HTTP 端口、磁盘、备份目标与访问控制。
 

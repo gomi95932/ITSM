@@ -29,7 +29,7 @@ jobs:
        github.event.workflow_run.event == 'push' &&
        github.event.workflow_run.head_repository.full_name == 'gomi95932/ITSM')
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
@@ -44,8 +44,18 @@ jobs:
           RELEASE_RUN_ID: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.id || inputs.run_id }}
           GITHUB_TOKEN: ${{ github.token }}
         run: node scripts/verify-release-source.mjs "$RELEASE_SHA" "$RELEASE_RUN_ID" > "$RUNNER_TEMP/release-source.json"
+      - name: Download, verify and safely stage the exact artifact without deploying
+        env:
+          RELEASE_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || inputs.sha }}
+          RELEASE_RUN_ID: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.id || inputs.run_id }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -m 700 "$RUNNER_TEMP/itsm-staging"
+          node scripts/stage-release.mjs "$RELEASE_SHA" "$RELEASE_RUN_ID" "$RUNNER_TEMP/itsm-staging/release" > "$RUNNER_TEMP/release-staging.json"
       - uses: actions/upload-artifact@v4
         with:
           name: release-source-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/release-source.json
+          path: |
+            ${{ runner.temp }}/release-source.json
+            ${{ runner.temp }}/release-staging.json
           retention-days: 30

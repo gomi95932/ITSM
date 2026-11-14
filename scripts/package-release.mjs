@@ -7,11 +7,15 @@ import { requiredReleaseFiles, schemaFingerprint, validateRelease } from './rele
 const [sha,destination]=process.argv.slice(2);
 if (!/^[a-f0-9]{40}$/.test(sha ?? '') || !destination || process.env.GITHUB_REF !== 'refs/heads/main' || process.env.GITHUB_REPOSITORY !== 'gomi95932/ITSM')
   throw new Error('ONLY_MAIN_RELEASES_CAN_BE_PACKAGED');
+for (const value of [process.env.GITHUB_RUN_ID,process.env.GITHUB_RUN_ATTEMPT])
+  if (!/^[1-9][0-9]*$/.test(value ?? '') || !Number.isSafeInteger(Number(value))) throw new Error('EXACT_RELEASE_RUN_REQUIRED');
 if (execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim() !== sha) throw new Error('COMMIT_MISMATCH');
 const paths=requiredReleaseFiles.filter(path => !path.startsWith('db/migrations/'));
 // Legacy bundles remain valid rollback targets; every new bundle includes its hashed acceptance tool.
 paths.push('scripts/verify-development.mjs');
 paths.push('scripts/verify-release-source.mjs');
+paths.push('scripts/stage-release.mjs');
+paths.push('scripts/extract-release.py');
 const images={};
 for (const name of ['api','web','worker','postgres','redis']) {
   const repository=`ghcr.io/gomi95932/itsm-${name}`;
@@ -30,6 +34,7 @@ for (const path of paths) {
 }
 await writeFile(resolve(destination,'release.json'),`${JSON.stringify({
   sha,repository:process.env.GITHUB_REPOSITORY,ref:process.env.GITHUB_REF,runId:process.env.GITHUB_RUN_ID,
+  runAttempt:Number(process.env.GITHUB_RUN_ATTEMPT),
   schemaFingerprint:schemaFingerprint(files),files,images,
 },null,2)}\n`,{flag:'wx'});
 await validateRelease(destination,sha);
