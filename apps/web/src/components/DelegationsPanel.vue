@@ -3,11 +3,12 @@ import {onMounted,ref,watch} from 'vue';
 import {Check,LoaderCircle,RefreshCw,X} from 'lucide-vue-next';
 import type {DelegationView,SessionUser} from '@itsm/contracts';
 import {api,errorText} from '../api';
+import {createRequestKey} from '../request-key';
 import {formatDate} from '../labels';
 const props=defineProps<{user:SessionUser}>();
-const grants=ref<DelegationView[]>([]),candidates=ref<{id:string;name:string}[]>([]),delegate=ref(''),hours=ref(24),consent=ref(false),busy=ref(false),error=ref(''),grantId=ref(crypto.randomUUID());
+const grants=ref<DelegationView[]>([]),candidates=ref<{id:string;name:string}[]>([]),delegate=ref(''),hours=ref(24),consent=ref(false),busy=ref(false),error=ref(''),grantId=ref(createRequestKey());
 let expiresAt='';
-watch([delegate,hours],()=>{grantId.value=crypto.randomUUID();expiresAt='';consent.value=false;});
+watch([delegate,hours],()=>{grantId.value=createRequestKey();expiresAt='';consent.value=false;});
 async function load(){error.value='';try{const [list,people]=await Promise.all([api<{items:DelegationView[]}>('/delegations'),api<{items:{id:string;name:string}[]}>('/delegations/candidates')]);grants.value=list.items;candidates.value=people.items;}catch(e){error.value=errorText(e);}}
 async function grant(){
   if(!delegate.value||!consent.value||busy.value)return;busy.value=true;error.value='';

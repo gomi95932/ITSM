@@ -3,6 +3,7 @@ import { computed,onMounted,ref } from 'vue';
 import { ArrowLeft,BookOpen,Check,FilePlus2,RefreshCw,Search } from 'lucide-vue-next';
 import type { SessionUser } from '@itsm/contracts';
 import { api,errorText } from '../api';
+import { createRequestKey } from '../request-key';
 import { formatDate } from '../labels';
 
 type Role={groupId:string;editor:boolean;reviewer:boolean};
@@ -45,8 +46,8 @@ async function save(){
     if(!Number.isFinite(date.getTime()))throw new Error('INVALID_DATE');
     const body={contentClass:'GENERAL',title:form.value.title,body:form.value.body,audience:form.value.audience,reviewDueAt:date.toISOString()};
     selected.value=selected.value
-      ? await api<Article>(`/knowledge/${selected.value.id}/revise`,{method:'POST',key:crypto.randomUUID(),body:{...body,expectedVersion:selected.value.draftVersion}})
-      : await api<Article>('/knowledge',{method:'POST',key:crypto.randomUUID(),body:{...body,groupId:form.value.groupId}});
+      ? await api<Article>(`/knowledge/${selected.value.id}/revise`,{method:'POST',key:createRequestKey(),body:{...body,expectedVersion:selected.value.draftVersion}})
+      : await api<Article>('/knowledge',{method:'POST',key:createRequestKey(),body:{...body,groupId:form.value.groupId}});
     scope.value='managed';formOpen.value=false;await load();
   }catch(e){error.value=e instanceof Error&&e.message==='INVALID_DATE'?'请选择复核日期。':errorText(e);}
   finally{busy.value=false;}
@@ -56,7 +57,7 @@ async function transition(action:string){
   busy.value=true;error.value='';
   try{
     selected.value=await api<Article>(`/knowledge/${selected.value.id}/${action}`,{
-      method:'POST',key:crypto.randomUUID(),body:{expectedVersion:selected.value.draftVersion},
+      method:'POST',key:createRequestKey(),body:{expectedVersion:selected.value.draftVersion},
     });
     await load();
   }catch(e){error.value=errorText(e);}finally{busy.value=false;}
