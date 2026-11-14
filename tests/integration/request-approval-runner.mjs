@@ -92,13 +92,15 @@ try {
     ()=>assert.fail('self manager accepted'),()=>{});
 
   const beforeTickets=Number((await db.query('SELECT count(*) FROM tickets')).rows[0].count);
+  const beforeApprovals=Number((await db.query('SELECT count(*) FROM request_approvals')).rows[0].count);
   await assert.rejects(transaction(async client=>{
     const ticketId=await draft(client);
     await enqueueRequestApproval(client,{ticketId,corpId:corp,expiresAt:new Date(Date.now()+3600000),requestedValidityDays:30});
     throw new Error('ROLLBACK_INTENT');
   }),/ROLLBACK_INTENT/);
   assert.equal(Number((await db.query('SELECT count(*) FROM tickets')).rows[0].count),beforeTickets);
-  assert.equal(Number((await db.query('SELECT count(*) FROM request_approvals')).rows[0].count),0);
+  assert.equal(Number((await db.query('SELECT count(*) FROM request_approvals')).rows[0].count),beforeApprovals,
+    'rolled-back intent must not add approval records, including on a populated database');
 
   const normal=await fresh();
   assert.equal(await transaction(client=>enqueueRequestApproval(client,normal.input)),normal.id,'same intent is idempotent');
