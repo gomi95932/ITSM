@@ -4,6 +4,17 @@ INSERT INTO employees(id, display_name) VALUES
 ON CONFLICT (id) DO NOTHING;
 INSERT INTO support_groups(id, name) VALUES ('service-desk', 'IT 服务台'),('applications','应用支持组') ON CONFLICT (id) DO NOTHING;
 INSERT INTO group_memberships(employee_id, group_id) VALUES ('agent-1', 'service-desk'),('agent-2','applications'),('agent-3','service-desk') ON CONFLICT DO NOTHING;
+-- Disposable demonstration identities only; never bootstrap real administrators from seeds.
+INSERT INTO employees(id,display_name) VALUES ('demo-admin-1','演示配置管理员一'),('demo-admin-2','演示配置管理员二') ON CONFLICT DO NOTHING;
+WITH inserted AS (
+  INSERT INTO role_bindings(id,employee_id,role_code,group_id,valid_from,valid_to,status,source,requested_by,reviewed_by,reason,reviewed_at) VALUES
+    ('dc000000-0000-4000-8000-000000000001','demo-admin-1','PLATFORM_ADMIN',NULL,now(),now()+interval '365 days','ACTIVE','BOOTSTRAP','demo-admin-1','demo-admin-2','Disposable CI bootstrap',now()),
+    ('dc000000-0000-4000-8000-000000000002','demo-admin-2','PLATFORM_ADMIN',NULL,now(),now()+interval '365 days','ACTIVE','BOOTSTRAP','demo-admin-2','demo-admin-1','Disposable CI bootstrap',now()),
+    ('dc000000-0000-4000-8000-000000000003','agent-1','DISPATCHER','service-desk',now(),now()+interval '365 days','ACTIVE','REVIEW','demo-admin-1','demo-admin-2','Disposable CI dispatcher',now())
+  ON CONFLICT DO NOTHING RETURNING *
+)
+INSERT INTO role_binding_audits(binding_id,actor_id,action,after_value,reason)
+SELECT id,reviewed_by,CASE WHEN source='BOOTSTRAP' THEN 'BOOTSTRAPPED' ELSE 'APPROVED' END,to_jsonb(inserted),reason FROM inserted;
 -- Demo-only role. Production appointments must be reviewed explicitly.
 INSERT INTO priority_reviewers(employee_id,group_id) VALUES ('agent-3','service-desk'),('agent-2','applications') ON CONFLICT DO NOTHING;
 INSERT INTO service_catalog(code, type, form_version, published, group_id, required_fields)

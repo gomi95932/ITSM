@@ -76,6 +76,8 @@ jobs:
         run: node tests/integration/migrations.mjs
       - name: Verify personal ownership, handover and disabled-person recovery
         run: node tests/integration/ownership.mjs
+      - name: Verify scoped roles, independent review and immediate dispatch revocation
+        run: node tests/integration/roles.mjs
       - name: Verify resolution-based confirmation auto-close
         run: node tests/integration/auto-close.mjs
       - name: Verify requester-only immutable service feedback

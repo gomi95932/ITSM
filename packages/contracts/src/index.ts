@@ -70,13 +70,26 @@ export interface TicketFeedback {
 
 export interface CatalogField { key: string; label: string; required: boolean; options?: string[] }
 export interface CatalogItem { code: string; name: string; description: string; type: TicketType; formVersion: number; fields: CatalogField[]; available: boolean }
-export interface SessionUser { id: string; name: string; groups: string[]; priorityReviewGroups?: string[]; csrfToken?: string }
+export const MANAGED_ROLE_CODES=['PLATFORM_ADMIN','DISPATCHER','GROUP_LEAD'] as const;
+export type ManagedRoleCode=typeof MANAGED_ROLE_CODES[number];
+export interface RoleBindingInput {
+  id:string; employeeId:string; roleCode:ManagedRoleCode; groupId:string|null;
+  validFrom:string; validTo:string; reason:string; contentClass:'GENERAL';
+}
+export interface RoleDecisionInput { expectedVersion:number; reason:string; decision?:'APPROVE'|'REJECT'; contentClass:'GENERAL' }
+export interface RoleBindingView extends Omit<RoleBindingInput,'contentClass'> {
+  employeeName:string; groupName:string|null; status:'PENDING'|'ACTIVE'|'REJECTED'|'REVOKED'; source:'REVIEW'|'BOOTSTRAP';
+  requestedBy:string; reviewedBy:string|null; revokedBy:string|null; reviewReason:string|null; revokeReason:string|null;
+  version:number; effective:boolean; createdAt:string;
+}
+export interface SessionUser { id: string; name: string; groups: string[]; priorityReviewGroups?: string[]; csrfToken?: string; canManageRoles?:boolean }
 export interface TicketView extends TicketReceipt {
   serviceCode: string; serviceType: TicketType; subject: string; description: string;
   priority: Priority; impact: Impact; urgency: Urgency; fields: Record<string, unknown>;
   createdAt: string; updatedAt: string; requesterId: string;
   submittedById: string; originalServiceCode: string;
   canCorrectClassification?: boolean; canAddInfo?: boolean;
+  canDispatchQueued?: boolean;
   priorityReviewState: PriorityReviewState;
   priorityCandidateAt: string | null;
   priorityReviewedAt: string | null;

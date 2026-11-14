@@ -14,6 +14,8 @@ import { RequestCatalogService } from './request-catalog.service.js';
 import { KnowledgeController } from './knowledge.controller.js';
 import { KnowledgeService } from './knowledge.service.js';
 import { ReportsController } from './reports.controller.js';
+import { RolesController } from './roles.controller.js';
+import { RolesService } from './roles.service.js';
 
-@Module({ controllers: [HealthController, TicketsController,AuthController,WorkspaceController,DelegationsController,RequestCatalogController,KnowledgeController,ReportsController], providers: [Database,AuthService,TicketsService,SlaService,IntakePolicyService,RequestCatalogService,KnowledgeService] })
+@Module({ controllers: [HealthController, TicketsController,AuthController,WorkspaceController,DelegationsController,RequestCatalogController,KnowledgeController,ReportsController,RolesController], providers: [Database,AuthService,TicketsService,SlaService,IntakePolicyService,RequestCatalogService,KnowledgeService,RolesService] })
 export class AppModule {}
