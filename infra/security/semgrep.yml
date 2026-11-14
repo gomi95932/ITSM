@@ -14,6 +14,24 @@ rules:
       - patterns:
           - pattern-either:
               - pattern-inside: |
+                  import { exec } from 'node:child_process';
+                  ...
+              - pattern-inside: |
+                  import { exec } from 'child_process';
+                  ...
+          - pattern: exec(...)
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  import { execSync } from 'node:child_process';
+                  ...
+              - pattern-inside: |
+                  import { execSync } from 'child_process';
+                  ...
+          - pattern: execSync(...)
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
                   import { exec as $EXEC } from 'node:child_process';
                   ...
               - pattern-inside: |
