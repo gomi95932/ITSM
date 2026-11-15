@@ -25,6 +25,8 @@ Audience selection runs when the outbox expands and again before each send attem
 
 Only an effective dispatcher or group lead for the ticket's current owning group may retry a DEAD delivery. Role authorization uses the shared role-change transaction lock and existing live role predicates. Denied retries return 404 and do not reset delivery state. Successful retries retain the delivery ID and provider task ID, reset the existing attempt cycle and write an operational audit. Provider acceptance is not proof of user receipt. Existing attempt limits apply per retry cycle; this change does not introduce a lifetime manual-retry cap.
 
+The notification list returns a live `canRetry` flag per delivery. The web client shows the retry command only for DEAD deliveries with that flag. The flag is presentation guidance, not an authorization token; POST always checks current permissions again.
+
 ## Verification
 
 CI runs the action policy unit tests and `tests/integration/notification-audience.mjs` in the disposable Compose environment. It verifies exact recipients, no group broadcast, stale handover exclusion, idempotent expansion, revocation/expiry/employee checks and API-level retry scope/audits. Do not run fixture tests against the development server's persistent database.

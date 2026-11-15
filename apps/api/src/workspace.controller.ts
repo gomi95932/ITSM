@@ -31,9 +31,11 @@ export class WorkspaceController {
   }
   @Get('notifications') async notifications(@Headers() h: H) {
     const actor = await this.identity.identity(auth(h)); if (!actor.groups.length) throw new NotFoundException();
-    const result = await this.db.pool.query(`SELECT d.id,d.state,d.attempts,d.last_error AS "lastError",d.updated_at AS "updatedAt",t.number
+    const result = await this.db.pool.query(`SELECT d.id,d.state,d.attempts,d.last_error AS "lastError",d.updated_at AS "updatedAt",t.number,
+      (d.state='DEAD' AND EXISTS(SELECT 1 FROM role_bindings r WHERE r.employee_id=$2 AND r.group_id=t.owner_group_id
+        AND r.role_code IN ('DISPATCHER','GROUP_LEAD') AND ${ROLE_EFFECTIVE_SQL})) AS "canRetry"
       FROM notification_deliveries d JOIN outbox_events o ON o.id=d.outbox_id JOIN tickets t ON t.id=o.ticket_id
-      WHERE t.owner_group_id=ANY($1::text[]) ORDER BY d.updated_at DESC LIMIT 100`,[actor.groups]);
+      WHERE t.owner_group_id=ANY($1::text[]) ORDER BY d.updated_at DESC LIMIT 100`,[actor.groups,actor.id]);
     return { mode: process.env.NOTIFICATION_MODE ?? 'disabled', items:result.rows };
   }
   @Post('notifications/:id/retry') @HttpCode(200) async retry(@Headers() h: H,@Param('id') id: string) {

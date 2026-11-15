@@ -52,6 +52,13 @@ async function retry(deliveryId,user) {
     method:'POST',headers:{'Content-Type':'application/json','X-Dev-User':id(user)},body:'{}'});
   return response.status;
 }
+async function canRetry(deliveryId,user) {
+  const response=await fetch('http://api:3000/api/v1/notifications',{headers:{'X-Dev-User':id(user)}});
+  assert.equal(response.status,200);
+  const delivery=(await response.json()).items.find(item=>item.id===deliveryId);
+  assert.ok(delivery,'current-group delivery visible');
+  return delivery.canRetry;
+}
 try {
   // Uncommitted audience fixtures are invisible to the concurrent notification worker.
   await client.query('BEGIN');
@@ -91,6 +98,10 @@ try {
   await client.query(`INSERT INTO notification_deliveries(id,outbox_id,employee_id,state,next_at)
     VALUES ($1,$2,$3,'DEAD',now()+interval '1 day')`,[delivery,retryEvent.outboxId,id('requester')]);
   await client.query('COMMIT');
+  for (const person of ['peer','owner','admin','reviewer','expired','future','revoked'])
+    assert.equal(await canRetry(delivery,person),false,`${person} sees no retry command`);
+  assert.equal(await canRetry(delivery,'dispatcher'),true);
+  assert.equal(await canRetry(delivery,'lead'),true);
   for (const person of ['peer','owner','admin','reviewer','candidate','expired','future','revoked'])
     assert.equal(await retry(delivery,person),404,`${person} cannot retry`);
   assert.equal((await db.query('SELECT state FROM notification_deliveries WHERE id=$1',[delivery])).rows[0].state,'DEAD');
@@ -98,9 +109,15 @@ try {
   assert.equal((await db.query("SELECT count(*) FROM operational_audits WHERE action='NOTIFICATION_RETRY' AND target_id=$1",[delivery])).rows[0].count,'1');
   await db.query("UPDATE notification_deliveries SET state='DEAD',next_at=now()+interval '1 day' WHERE id=$1",[delivery]);
   await db.query("UPDATE role_bindings SET status='REVOKED' WHERE employee_id=$1",[id('dispatcher')]);
+  assert.equal(await canRetry(delivery,'dispatcher'),false,'revocation removes the retry command');
   assert.equal(await retry(delivery,'dispatcher'),404,'retry rechecks revoked role');
+  assert.equal(await retry(delivery,'disabled'),401,'disabled employee cannot retry');
   assert.equal(await retry(delivery,'lead'),200,'current scoped group lead can retry');
   assert.equal((await db.query("SELECT count(*) FROM operational_audits WHERE action='NOTIFICATION_RETRY' AND target_id=$1",[delivery])).rows[0].count,'2');
+  await db.query("UPDATE notification_deliveries SET state='DEAD',next_at=now()+interval '1 day' WHERE id=$1",[delivery]);
+  await db.query('DELETE FROM group_memberships WHERE employee_id=$1 AND group_id=$2',[id('lead'),id('group')]);
+  assert.equal(await retry(delivery,'lead'),404,'removed member cannot use an existing role');
+  assert.equal((await db.query('SELECT state FROM notification_deliveries WHERE id=$1',[delivery])).rows[0].state,'DEAD');
   console.log('Notification audience verified: targeted events, stale handovers, idempotent expansion, live revocation and scoped audited retries');
 } finally {
   await client.query('ROLLBACK');
