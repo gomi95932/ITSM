@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash,randomBytes,randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
+import { setTimeout as delay } from 'node:timers/promises';
 
 if(process.env.GITHUB_ACTIONS!=='true'||!process.env.ITSM_CI_ENV)throw new Error('DISPOSABLE_GITHUB_CI_ONLY');
 const prefix=['compose','--project-name','itsm-dev','--env-file',process.env.ITSM_CI_ENV,'-f','infra/compose/compose.yaml'];
@@ -23,6 +24,46 @@ async function sql(query){
 async function request(path,user='demo-admin-1',body,method=body?'POST':'GET',headers={}){
   const response=await fetch('http://127.0.0.1:8088/api/v1'+path,{method,headers:{'Content-Type':'application/json','X-Dev-User':user,...headers},
     body:body?JSON.stringify({contentClass:'GENERAL',...body}):undefined});
+  return {status:response.status,data:await response.json()};
+}
+async function authorizationGate(shared,operation){
+  const child=spawn('docker',[...prefix,'exec','-T','db','sh','-ec',
+    'PGPASSWORD="$POSTGRES_PASSWORD" exec psql -qAt -v ON_ERROR_STOP=1 -v VERBOSITY=sqlstate -U itsm -d itsm'],
+    {stdio:['pipe','pipe','pipe']});
+  let output='',readySeen=false,resolveReady,rejectReady;
+  const ready=new Promise((resolve,reject)=>{resolveReady=resolve;rejectReady=reject;});
+  const closed=new Promise(resolve=>{
+    child.on('error',error=>{rejectReady(error);resolve(null);});
+    child.on('close',code=>{if(!readySeen)rejectReady(new Error('GROUP_AUTH_GATE_NOT_READY'));resolve(code);});
+  });
+  child.stderr.resume();child.stdin.on('error',()=>{});
+  child.stdout.on('data',chunk=>{
+    output=(output+chunk).slice(-1024);
+    if(output.includes('GROUP_AUTH_GATE_READY')){readySeen=true;resolveReady();}
+  });
+  child.stdin.write(`SET statement_timeout='15s'; SET idle_in_transaction_session_timeout='15s';
+    BEGIN; SELECT pg_advisory_xact_lock${shared?'_shared':''}(71820512);
+    ${shared?'':`SELECT id FROM support_groups WHERE id='ci-membership' FOR UPDATE;`}
+    \\echo GROUP_AUTH_GATE_READY
+`);
+  try{await ready;await operation();}
+  finally{
+    child.stdin.end('ROLLBACK;\n\\q\n');
+    assert.equal(await closed,0,'authorization gate must release its transaction');
+  }
+}
+async function waitForAuthorizationWait(mode){
+  const deadline=Date.now()+10000;
+  while(Date.now()<deadline){
+    if(await sql(`SELECT EXISTS(SELECT 1 FROM pg_locks WHERE locktype='advisory' AND database=(SELECT oid FROM pg_database WHERE datname=current_database())
+      AND classid=0 AND objid=71820512 AND objsubid=1 AND NOT granted AND mode='${mode}')`)==='t')return;
+    await delay(50);
+  }
+  throw new Error(`GROUP_AUTH_WAIT_NOT_OBSERVED mode=${mode}`);
+}
+async function knowledgeRequest(path,user,body){
+  const response=await fetch('http://127.0.0.1:8088/api/v1/knowledge'+path,{method:'POST',signal:AbortSignal.timeout(20000),
+    headers:{'Content-Type':'application/json','X-Dev-User':user,'Idempotency-Key':randomUUID()},body:JSON.stringify(body)});
   return {status:response.status,data:await response.json()};
 }
 const a='demo-admin-1',b='demo-admin-2',g='ci-membership',subject='group-subject',peer='group-peer',lead='group-lead';
@@ -163,6 +204,38 @@ await review(unavailable.data,b,'REJECT');
 const audit=await request(`${root}/${g}/history`);
 assert.equal(audit.status,200);assert.ok(audit.data.items.some(row=>row.action==='MEMBER_APPROVED'&&row.beforeValue?.removedCapabilities));
 assert.equal(await sql("SELECT count(*) FROM support_group_audits WHERE strpos(row_to_json(support_group_audits)::text,'blocked-group-sentinel')>0"),'0');
+await sql(`INSERT INTO knowledge_editors(employee_id,group_id) VALUES ('${subject}','${g}'),('${peer}','${g}')`);
+const draft={contentClass:'GENERAL',groupId:g,title:'Membership concurrency',body:'Ordinary concurrency fixture',
+  audience:'SUPPORT_GROUP',reviewDueAt:new Date(Date.now()+2*86400000).toISOString()};
+let queued;
+await authorizationGate(false,async()=>{
+  queued=knowledgeRequest('',subject,draft);
+  await waitForAuthorizationWait('ShareLock');
+});
+const created=await queued;assert.equal(created.status,201,JSON.stringify(created));
+await authorizationGate(false,async()=>{
+  const {groupId,...revision}=draft;
+  queued=knowledgeRequest(`/${created.data.id}/revise`,subject,{...revision,expectedVersion:1});
+  await waitForAuthorizationWait('ShareLock');
+});
+assert.equal((await queued).status,200,'revision must wait outside article and membership locks');
+await authorizationGate(false,async()=>{
+  queued=knowledgeRequest(`/${created.data.id}/submit`,subject,{expectedVersion:2});
+  await waitForAuthorizationWait('ShareLock');
+});
+assert.equal((await queued).status,200,'transition must share the authorization boundary');
+await sql(`UPDATE knowledge_articles SET status='ARCHIVED' WHERE id='${created.data.id}'`);
+const racingRemoval=await propose(subject,'REMOVE');assert.equal(racingRemoval.status,201);
+let reviewed;
+await authorizationGate(true,async()=>{
+  reviewed=review(racingRemoval.data);
+  await waitForAuthorizationWait('ExclusiveLock');
+  queued=knowledgeRequest('',subject,{...draft,title:'Rejected after membership removal'});
+  await waitForAuthorizationWait('ShareLock');
+});
+assert.equal((await reviewed).status,200,'earlier membership removal must complete without a knowledge lock cycle');
+assert.equal((await queued).status,403,'queued knowledge write must recheck membership after removal');
+assert.equal(await sql(`SELECT count(*) FROM knowledge_articles WHERE owner_group_id='${g}' AND title='Rejected after membership removal'`),'0');
 // Leave a harmless, isolated fixture; never mutate actual users or production data.
 assert.equal(await sql(`SELECT status FROM role_bindings WHERE id='${leadRole.id}'`),'ACTIVE');
-console.log('Support-group scope, independent membership review, stale writes, obligations, continuity, session revocation and audit verified');
+console.log('Support-group scope, independent membership review, stale writes, obligations, continuity, knowledge concurrency, session revocation and audit verified');

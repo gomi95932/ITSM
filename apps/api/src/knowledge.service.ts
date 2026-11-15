@@ -4,6 +4,7 @@ import { type PoolClient } from 'pg';
 import { type Identity } from './auth.service.js';
 import { Database } from './database.service.js';
 import { IntakePolicyService } from './intake-policy.service.js';
+import { ROLE_AUTHORIZATION_LOCK } from './role-policy.js';
 
 type Article = { id: string; owner_group_id: string; author_id: string; source_ticket_id: string | null;
   status: string; draft_version: number; published_version: number | null; review_version: number | null;
@@ -79,6 +80,8 @@ export class KnowledgeService {
     const input=draft(body,true);
     await this.intake.requireGeneral(actor.id,input as unknown as Record<string,unknown>,'knowledge');
     return this.db.transaction(async client => {
+      // Take the authorization gate before article/member locks, as group removal does.
+      await client.query('SELECT pg_advisory_xact_lock_shared($1)',[ROLE_AUTHORIZATION_LOCK]);
       await this.appointed(client,actor,input.groupId!,'editors');
       const {hash,response}=await this.replay(client,actor,null,'CREATE',input,key);
       if (response) return response;
@@ -100,6 +103,7 @@ export class KnowledgeService {
     const input=draft(body,false);
     await this.intake.requireGeneral(actor.id,input as unknown as Record<string,unknown>,'knowledge');
     return this.db.transaction(async client => {
+      await client.query('SELECT pg_advisory_xact_lock_shared($1)',[ROLE_AUTHORIZATION_LOCK]);
       const row=await this.locked(client,id);
       await this.appointed(client,actor,row.owner_group_id,'editors');
       if (row.author_id !== actor.id) throw new ForbiddenException({code:'KNOWLEDGE_AUTHOR_REQUIRED'});
@@ -122,6 +126,7 @@ export class KnowledgeService {
     if (!plain(body) || !only(body,['expectedVersion']) || !Number.isInteger(body.expectedVersion) || (body.expectedVersion as number)<1)
       throw new BadRequestException({code:'INVALID_KNOWLEDGE_ACTION'});
     return this.db.transaction(async client => {
+      await client.query('SELECT pg_advisory_xact_lock_shared($1)',[ROLE_AUTHORIZATION_LOCK]);
       const row=await this.locked(client,id);
       await this.appointed(client,actor,row.owner_group_id,action==='APPROVE'||action==='REJECT'?'reviewers':'editors');
       const {hash,response}=await this.replay(client,actor,id,action,body,key);
