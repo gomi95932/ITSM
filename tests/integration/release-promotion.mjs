@@ -27,6 +27,24 @@ async function fixture(t) {
   const approvalPath=join(paths.approvals,`${sha}.json`);
   await writeFile(approvalPath,JSON.stringify(approval),{mode:0o600});
   const helpers=await import(pathToFileURL(join(paths.tools,'promote-release.mjs')));
+  for (const name of files) {
+    const path=join(paths.tools,name);
+    try {
+      await helpers.requireRootOwnedPath(path);
+    } catch (error) {
+      let cursor=path;
+      const ancestors=[];
+      while (true) {
+        const info=await lstat(cursor);
+        ancestors.push({path:cursor,uid:info.uid,mode:(info.mode & 0o7777).toString(8),
+          links:info.nlink,file:info.isFile(),directory:info.isDirectory(),symlink:info.isSymbolicLink()});
+        if (cursor === '/') break;
+        cursor=dirname(cursor);
+      }
+      t.diagnostic(JSON.stringify({fixtureTrustFailure:ancestors}));
+      throw error;
+    }
+  }
   const source={...approval,verificationLevel:'github-source-only'};
   let queries=0,downloads=0,extracts=0,clock=instant;
   const dependencies={paths,now:() => clock,
