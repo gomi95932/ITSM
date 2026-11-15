@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { chmod, copyFile, link, lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, chown, copyFile, link, lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { test } from 'node:test';
@@ -18,6 +18,7 @@ async function fixture(t) {
   for (const name of ['tools','releases','approvals']) await mkdir(paths[name],{mode:0o700});
   for (const name of files) {
     await copyFile(join(checkout,'scripts',name),join(paths.tools,name));
+    await chown(join(paths.tools,name),0,0);
     await chmod(join(paths.tools,name),0o600);
   }
   await writeFile(paths.token,'fixture-read-identity\n',{mode:0o600});
