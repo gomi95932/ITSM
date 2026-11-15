@@ -102,8 +102,8 @@ await sql(`INSERT INTO auth_sessions(token_hash,csrf_token,employee_id,expires_a
 removal=await propose(subject,'REMOVE');
 assert.equal((await review(removal.data)).data.code,'GROUP_SPECIALIST_CONTINUITY_REQUIRED');
 await sql(`INSERT INTO priority_reviewers(employee_id,group_id) VALUES ('${peer}','${g}');
-  INSERT INTO tickets(number,requester_id,owner_group_id,service_code,service_type,form_version,subject,description,fields,impact,urgency,priority,status,assignee_id)
-  VALUES ('GROUP-CI-OWNER','employee-1','${g}','INC-GROUP-CI','INC',1,'CI owner','Ordinary fixture','{}','INDIVIDUAL','LOW','P4','IN_PROGRESS','${subject}');`);
+  INSERT INTO tickets(number,requester_id,submitted_by_id,owner_group_id,service_code,service_type,form_version,subject,description,fields,impact,urgency,priority,status,assignee_id)
+  VALUES ('GROUP-CI-OWNER','employee-1','employee-1','${g}','INC-GROUP-CI','INC',1,'CI owner','Ordinary fixture','{}','INDIVIDUAL','LOW','P4','IN_PROGRESS','${subject}');`);
 assert.equal((await review(removal.data)).data.code,'GROUP_RESPONSIBILITY_TRANSFER_REQUIRED');
 assert.equal(await sql(`SELECT status FROM role_bindings WHERE id='${subjectRole.id}'`),'ACTIVE','failed removal preserves role');
 await sql(`UPDATE tickets SET assignee_id='${peer}',pending_group_id='${g}',pending_assignee_id='${subject}' WHERE number='GROUP-CI-OWNER'`);
@@ -120,8 +120,8 @@ for(const state of ['DRAFT','IN_REVIEW','APPROVED']){
 await sql(`UPDATE knowledge_articles SET status='ARCHIVED' WHERE id='${knowledge}'`);
 const fulfillmentTicket=randomUUID();
 await sql(`INSERT INTO service_catalog(code,type,form_version,published,group_id) VALUES ('REQ-GROUP-CI','REQ',1,true,'${g}');
-  INSERT INTO tickets(id,number,requester_id,owner_group_id,service_code,service_type,form_version,subject,description,fields,impact,urgency,priority,status)
-    VALUES ('${fulfillmentTicket}','GROUP-CI-FULFILLMENT','employee-1','${g}','REQ-GROUP-CI','REQ',1,'CI delivery','Ordinary delivery fixture','{}','INDIVIDUAL','LOW','P4','CLOSED');
+  INSERT INTO tickets(id,number,requester_id,submitted_by_id,owner_group_id,service_code,service_type,form_version,subject,description,fields,impact,urgency,priority,status)
+    VALUES ('${fulfillmentTicket}','GROUP-CI-FULFILLMENT','employee-1','employee-1','${g}','REQ-GROUP-CI','REQ',1,'CI delivery','Ordinary delivery fixture','{}','INDIVIDUAL','LOW','P4','CLOSED');
   INSERT INTO request_approvals(ticket_id,corp_id,snapshot,expires_at,state,provider_instance_id,last_verified_at,next_at)
     VALUES ('${fulfillmentTicket}','ci-group','{}',now()+interval '1 day','APPROVED','ci-group-approval',now(),now()+interval '1 day');
   INSERT INTO request_fulfillments(approval_id,ticket_id,assignee_id,ready_until)
