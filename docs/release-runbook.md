@@ -69,11 +69,55 @@ sudo -H node scripts/create-development-env.mjs /opt/itsm/shared/development.env
 sudo -H /usr/bin/node /opt/itsm/tools/release/promote-release.mjs "$SHA" "$RUN_ID"
 ```
 
-安装前须核实 `/usr/bin/node` 为实际 root 管理的可信运行时，不能引用普通用户安装的 Node、可写包装脚本或 `NODE_OPTIONS`。不要授予通用 `sudo node`、`SETENV` 或 Docker 组权限。当前代码不安装 sudoers、systemd 服务或定时器，受限非交互发布身份仍待单独批准及验收。
+安装前须核实 `/usr/bin/node` 为实际 root 管理的可信运行时，不能引用普通用户安装的 Node、可写包装脚本或 `NODE_OPTIONS`。不要授予通用 `sudo node`、`SETENV` 或 Docker 组权限。代码不自动安装 sudoers、systemd 服务或定时器；下一节提供服务模板，首次安装及受限非交互触发身份仍待单独批准及验收。
 
 成功产物为 `/opt/itsm/releases/<SHA>/` 和同层 `<SHA>.promotion.json`，级别 `approved-root-promoted`、`deploymentPerformed=false`；两者须同时存在才可进入单独批准的部署步骤。新目录及文件保留 root 私有权限。不会更新 `current.json`，不会改变运行服务。普通账户不能修改提升后的文件。
 
 提升按 SHA 使用独占锁；既有目录、证明或锁均拒绝，不覆盖。正常失败清理本次私有临时目录；进程异常终止可能遗留锁，须核对真实进程后人工恢复。目录和证明分两次 rename 发布，异常终止时可能只存在目录；这不是成功提升，禁止直接执行，应保留现场并人工对账。提升成功后批准过期不自动停止已部署服务；实际自动部署仍须在执行时重新检查批准及来源，不能只信历史 promotion 证明。
+
+### 2.2 已批准版本的固定部署入口（代码待部署验证）
+
+`execute-approved-deployment.mjs` 只接受一个 32 位小写十六进制 `requestId`，CLI 不接受 SHA、环境路径、Compose 参数或任意 Shell。入口只允许安装在 `/opt/itsm/tools/release/` 后执行。管理员须独立审核并安装本文件及 2.1 节五个依赖，核对源提交和哈希；发布包包含这些文件不等于获准自动更新可信工具。
+
+此模式必须先满足以下条件，不沿用第 1 节人工发布目录的普通用户可写权限：
+
+- `/opt/itsm`、`releases`、`shared`、工具目录及其所有祖先都由 root 管理，组和其他用户不可写且无链接。已提升版本树中每个目录/文件须 root 私有；文件不得有额外硬链接。
+- `/opt/itsm/shared/deployment-approvals`、`deployment-executions`、`release-state` 为 root:root 0700；`development.env`、批准、状态和凭据文件为 root 私有 0600。旧状态、环境和数据保留，不自动重建或覆盖。
+- `/usr/bin/node`、`/usr/bin/docker` 为可信 root 文件；GHCR 只读拉取凭据由 root 的 Docker 配置管理。程序清除继承环境，固定使用本地 `/var/run/docker.sock`，不继承 `NODE_OPTIONS`、`COMPOSE_FILE` 或外部 Docker 上下文。
+- 已存在同 SHA 的 `approved-root-promoted` 发布目录及证明，且与本次批准的 run、attempt、artifact 和镜像清单一致。
+- 管理员明确本次为合成数据开发验证。实际发布工具仍校验开发身份、虚拟人员和 fake 通知配置；不得对生产或真实业务数据执行该验收模式。
+
+截至 2026-11-15 的只读核验发现 `/opt/itsm`、`releases`、`shared` 仍由 `ituser` 持有，可信工具及批准目录尚未安装；固定入口应拒绝该状态。目录归属调整是独立管理员变更：先暂停人工发布、记录文件及权限、备份现有私密配置和状态，核对其他服务依赖，再对精确路径逐项迁移及复核。禁止递归盲目 chown、清空 shared 或以本工具顺便修复权限。
+
+实际部署批准与“允许提升发布包”是两件事。管理员在 `deployment-approvals/<requestId>.json` 保存 2.1 节全部来源字段，增加以下字段；以下值仍只是夹具，不能直接用作服务器批准：
+
+```json
+{
+  "requestId": "dddddddddddddddddddddddddddddddd",
+  "operation": "deploy-development",
+  "verifyDevelopment": true,
+  "expectedCurrentSha": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+}
+```
+
+`expectedCurrentSha` 必须等于受控状态中的当前完整 SHA；只有首次无状态部署才可显式写 `null`，不能省略或用分支名。批准继承最长 24 小时时窗、真实复核人和变更单引用，绑定精确 GitHub 来源。`approvedBy` 是审计字段，不提供登录认证；root 批准文件须由已授权管理员或未来受控审批服务生成，不能允许普通部署账户自己批准。
+
+可审核安装 `infra/systemd/itsm-deploy-approved@.service` 至 `/etc/systemd/system/` 的同名模板，root:root 0644。它使用干净环境调用固定入口、私有 umask、整组停止和启动超时，不启用定时器、不自动重试、不授予 sudoers。模板有 Docker 高权限，不将它描述为隔离任意恶意发布包的安全沙箱。安装和权限批准后由授权管理通道触发：
+
+```sh
+sudo systemd-analyze verify /etc/systemd/system/itsm-deploy-approved@.service
+sudo systemctl daemon-reload
+sudo systemctl start itsm-deploy-approved@dddddddddddddddddddddddddddddddd.service
+sudo systemctl --no-pager --full status itsm-deploy-approved@dddddddddddddddddddddddddddddddd.service
+```
+
+命令只描述固定入口，不授权当前机器立即执行。不要给普通部署身份任意 `systemctl`、`sudo node`、`sudo env` 或 root Shell。后续非交互触发必须由专门审核的受限通道检查实例编号和批准，不能安装执行任意 PR 的高权限 Runner。手工发布与固定服务执行必须纳入同一变更窗口，禁止并行运行；现有发布工具另有自身操作锁，但不替代运维协调。
+
+入口取得全局部署执行锁，在线复核来源、再次检查批准有效性及当前基线后，先用 `wx` 创建一次性回执，再执行 `deploy <SHA> --verify-development`。随后核对五个镜像及合成业务结果，执行一次部署后备份和指定备份的隔离恢复检查。只有全部通过才写 `status=succeeded`。隔离恢复目前验证恢复命令、迁移表和工单可读，不代表已验证全部业务数据一致性或异机灾难恢复。
+
+回执在 `deployment-executions/<requestId>.json`，保留来源、批准、基线、阶段、镜像、业务结果和备份哈希；不写令牌。既有回执无论成功、失败或运行中都不得覆盖，同一批准不能重用。失败后不自动数据库回滚，已运行服务和已写数据可能存在，按回执、发布状态与日志人工核验；重试须使用新编号和基于实际状态的新批准。服务异常终止可能留下锁或运行中回执，应核对实际进程及 Docker 状态后人工对账，不能按过期时间自动删锁。
+
+CI 在临时 root-owned Linux 夹具中覆盖批准、可信路径、来源、基线、重放及失败阶段，子发布调用使用 mock；它只证明编排拒绝路径。真正发布工具的容器及业务验收仍由 main 发布包演练和开发服务器现场验收证明，不能用这些夹具宣称服务器可发布。
 
 ## 3. 检查与部署
 
