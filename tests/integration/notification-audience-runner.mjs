@@ -7,6 +7,7 @@ if (process.env.ITSM_NOTIFICATION_CI !== 'true' || process.env.NODE_ENV === 'pro
 const db = new Pool({host:process.env.DB_HOST,database:process.env.DB_NAME,user:process.env.DB_USER,password:process.env.DB_PASSWORD});
 const client = await db.connect();
 const prefix = `notify-${randomUUID()}`;
+const apiOrigin = 'http://api:3000';
 const id = name => `${prefix}-${name}`;
 const people = ['requester','owner','peer','dispatcher','lead','admin','reviewer','candidate','other-candidate',
   'expired','future','revoked','disabled','proposer','approver'];
@@ -48,12 +49,12 @@ async function audience(action,expected,detail={}) {
   return e;
 }
 async function retry(deliveryId,user) {
-  const response=await fetch(`http://api:3000/api/v1/notifications/${deliveryId}/retry`,{
+  const response=await fetch(new URL(`/api/v1/notifications/${deliveryId}/retry`,apiOrigin),{
     method:'POST',headers:{'Content-Type':'application/json','X-Dev-User':id(user)},body:'{}'});
   return response.status;
 }
 async function canRetry(deliveryId,user) {
-  const response=await fetch('http://api:3000/api/v1/notifications',{headers:{'X-Dev-User':id(user)}});
+  const response=await fetch(new URL('/api/v1/notifications',apiOrigin),{headers:{'X-Dev-User':id(user)}});
   assert.equal(response.status,200);
   const delivery=(await response.json()).items.find(item=>item.id===deliveryId);
   assert.ok(delivery,'current-group delivery visible');
