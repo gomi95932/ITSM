@@ -1,6 +1,6 @@
 # 支持组与成员维护候选
 
-日期：2026-11-16。状态：代码候选。`d7c93ff` 的 Application CI #144 已核实成功；下述并发补丁仍须新一轮 CI，尚未合并、部署及真实人员验收。
+日期：2026-11-16。状态：已通过功能分支 CI 的代码候选。`e9a07a9c4b2a12d8c6bfd2838733110453358d91` 的 Application CI #145 已核实成功，包含下述并发补丁；桌面及手机关键截图已人工检查。尚未合并、部署及真实人员验收。
 
 ## 本切片
 
@@ -40,3 +40,10 @@ GitHub CI 执行 `tests/integration/support-groups.mjs`，覆盖独立复核、�
 厂区/服务范围、日历、主备联系人、兜底组、成员有效期及到期扫描、排班和完整路由发布仍待开发，不将本切片记为 V1.2 第 15 章全部完成。专业资料不代替鉴权；本切片也不开放自动停用人员、生产权限交付或三期安全事件功能。
 
 正式试点需真实任命、独立复核人员、责任移交清单及现场验收。CI 模拟身份不证明钉钉正式免登已可用。
+
+## 候选验证记录
+
+- Application CI #145：`https://github.com/gomi95932/ITSM/actions/runs/43735163649`，push 分支 `feat/support-group-membership`，总耗时 5m10s；build-test、secrets、SAST、dependencies 均成功。
+- 浏览器工件 `workspace-browser-results`，页面显示 3.39 MB，GitHub 报告摘要 `sha256:daca9c6d9f2f249a8c13895ae535cc7785e2c59bf5a38510cd154d0850324ea1`。该摘要来自 GitHub 页面，不冒充本地 ZIP 复算结果。
+- 下载后人工检查 `groups-proposal-desktop.png`、`groups-members-mobile.png`、`groups-audit-mobile.png`：提案、成员列表及审计弹窗可见，关键文本无明显遮挡或横向溢出。静态截图不证明所有交互状态或真实钉钉客户端兼容性。
+- 功能分支按工作流条件跳过 publish 和 release-bundle；本记录不证明 main 发布、服务器安装或备份恢复已完成。文档变更不等同于新的代码测试结果；上述 CI 对应完整 SHA 为本节所列候选版本。
