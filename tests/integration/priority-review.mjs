@@ -61,6 +61,9 @@ const nonP1=await create('employee-1','INDIVIDUAL');assert.equal((await review(n
 let raced=await create();const race=await Promise.all([review(raced,reviewer),review(raced,peer)]);
 assert.deepEqual(race.map(r=>r.status).sort(),[200,409]);assert.equal((await get(raced)).priorityReviewState,'CONFIRMED');
 let routed=await create();
+assert.equal((await request(`/tickets/${routed.id}/actions`,ordinary,{action:'REASSIGN',expectedVersion:routed.version,targetGroupId:'applications',targetAssigneeId:other,reason:'Specialist takeover'})).status,403,'ordinary membership is not dispatcher appointment');
+await sql(`INSERT INTO role_bindings(id,employee_id,role_code,group_id,valid_from,valid_to,status,requested_by,reviewed_by,reason)
+  VALUES(gen_random_uuid(),${quote(ordinary)},'DISPATCHER','service-desk',now(),now()+interval '1 day','ACTIVE','demo-admin-1','demo-admin-2','CI routing appointment')`);
 let result=await request(`/tickets/${routed.id}/actions`,ordinary,{action:'REASSIGN',expectedVersion:routed.version,targetGroupId:'applications',targetAssigneeId:other,reason:'Specialist takeover'});assert.equal(result.status,200);routed=result.data;
 result=await request(`/tickets/${routed.id}/actions`,other,{action:'ACCEPT_HANDOVER',expectedVersion:routed.version,comment:'Taking over response'});assert.equal(result.status,200);routed=result.data;
 assert.equal((await review(routed,reviewer)).status,404);assert.equal((await get(routed,other)).canReviewPriority,true);

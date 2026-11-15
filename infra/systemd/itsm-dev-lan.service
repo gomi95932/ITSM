@@ -1,0 +1,21 @@
+[Unit]
+Description=Forward ITSM development LAN traffic to loopback Web
+Requires=itsm-dev-lan.socket
+After=itsm-dev-lan.socket
+PartOf=itsm-dev-lan.socket
+
+[Service]
+ExecStart=/usr/lib/systemd/systemd-socket-proxyd --connections-max=128 127.0.0.1:8088
+DynamicUser=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+IPAddressDeny=any
+IPAddressAllow=127.0.0.1/32
+IPAccounting=yes
+Restart=on-failure
+RestartSec=3s

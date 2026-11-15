@@ -8,7 +8,14 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 jobs:
+  security:
+    uses: ./.github/workflows/security.yml
+
   build-test:
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -25,6 +32,10 @@ jobs:
       - run: npm run build
       - run: npm run typecheck
       - run: npm test
+      - name: Reject unsafe release archives with isolated Python fixtures
+        run: python3 tests/unit/release-extraction.py
+      - name: Verify privileged promotion boundary in disposable root-owned CI fixtures
+        run: sudo -n env -i PATH=/usr/bin:/bin "$(command -v node)" tests/integration/release-promotion.mjs
       - name: Set disposable CI configuration path
         run: echo "ITSM_CI_ENV=$RUNNER_TEMP/itsm-ci.env" >> "$GITHUB_ENV"
       - name: Create private disposable CI configuration
@@ -69,6 +80,8 @@ jobs:
         run: node tests/integration/migrations.mjs
       - name: Verify personal ownership, handover and disabled-person recovery
         run: node tests/integration/ownership.mjs
+      - name: Verify scoped roles, independent review and immediate dispatch revocation
+        run: node tests/integration/roles.mjs
       - name: Verify resolution-based confirmation auto-close
         run: node tests/integration/auto-close.mjs
       - name: Verify requester-only immutable service feedback
@@ -106,8 +119,9 @@ jobs:
         run: docker compose --env-file "$ITSM_CI_ENV" -f infra/compose/compose.yaml ps -a
 
   publish:
+    name: publish-${{ matrix.app }}
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: build-test
+    needs: [build-test, security]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -133,8 +147,9 @@ jobs:
           tags: ghcr.io/${{ steps.name.outputs.repository }}-${{ matrix.app }}:${{ github.sha }}
 
   publish-data-images:
+    name: publish-${{ matrix.app }}
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: build-test
+    needs: [build-test, security]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -203,7 +218,8 @@ jobs:
             node "$release_root/scripts/release.mjs" "$@" --env "$private_env" --state "$state"
           }
           release check
-          release deploy "$GITHUB_SHA"
+          release deploy "$GITHUB_SHA" --verify-development
+          node tests/integration/release-evidence.mjs "$state/current.json" "$GITHUB_SHA"
           node tests/integration/tickets.mjs
           node "$release_root/scripts/verify-development.mjs" --base-url http://127.0.0.1:8088 --allow-synthetic-writes
           node "$release_root/scripts/verify-development.mjs" --base-url http://127.0.0.1:8088 --allow-synthetic-writes

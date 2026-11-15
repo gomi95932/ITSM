@@ -45,7 +45,7 @@ const available=computed<TicketAction[]>(()=>{
     const owner=ticket.value.assigneeId===props.user.id;
     if(!ticket.value.assigneeId&&!ticket.value.pendingAssigneeId)result.push('ACCEPT');
     if(owner){if(state==='IN_PROGRESS')result.push('REQUEST_INFO','WAIT_VENDOR','RESOLVE');if(state==='WAITING_VENDOR')result.push('RESOLVE');}
-    if(owner||(!ticket.value.assigneeId&&state==='QUEUED'))result.push(ticket.value.pendingAssigneeId?'CANCEL_HANDOVER':'REASSIGN');
+    if(owner||(!ticket.value.assigneeId&&state==='QUEUED'&&ticket.value.canDispatchQueued))result.push(ticket.value.pendingAssigneeId?'CANCEL_HANDOVER':'REASSIGN');
   }
   return result;
 });

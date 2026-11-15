@@ -3,10 +3,14 @@ name: Bootstrap checks
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, 'feat/**']
 
 permissions:
   contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   repository-config:
@@ -18,6 +22,9 @@ jobs:
           test -s README.md
           test -s docs/github-cicd.md
           test -s infra/compose/compose.yaml
+          grep -Fqx 'IPAddressAllow=127.0.0.1/32 10.10.81.0/24 10.10.91.0/24' infra/systemd/itsm-dev-lan.socket
+          ! grep -Eq 'IPAddressAllow=.*(10\.0\.0\.0/8|172\.16\.0\.0/12|192\.168\.0\.0/16)' infra/systemd/itsm-dev-lan.socket
+          systemd-analyze verify infra/systemd/itsm-dev-lan.socket infra/systemd/itsm-dev-lan.service
           git show --format= --check HEAD
       - name: Validate Compose configuration with example credentials
         run: docker compose --env-file infra/compose/.env.example -f infra/compose/compose.yaml config --quiet

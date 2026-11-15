@@ -8,6 +8,7 @@ import { AuthService, type AuthHeaders, type Identity } from './auth.service.js'
 import { SlaService } from './sla.service.js';
 import { IntakePolicyService } from './intake-policy.service.js';
 import { ownershipDenial } from './ticket-ownership.js';
+import { canDispatch, ROLE_AUTHORIZATION_LOCK } from './role-policy.js';
 
 export function canViewRequestProgress(actorId: string, requesterId: string, serviceType: string): boolean {
   return actorId === requesterId && serviceType === 'REQ';
@@ -242,7 +243,9 @@ export class TicketsService {
           WHERE a.ticket_id=$1`, [id])
         : null;
       const progressRow = requestProgress?.rows[0];
+      const dispatcher=!!membership.rowCount&&await canDispatch(client,actor.id,ticket.owner_group_id);
       return { ...this.publicTicket(ticket),canAddInfo:actor.id===ticket.requester_id||delegated,
+        canDispatchQueued:dispatcher,
         ...(canViewRequestProgress(actor.id, ticket.requester_id, ticket.service_type) ? { requestProgress: {
           approval: progressRow ? { state: progressRow.approval_state, updatedAt: progressRow.approval_updated_at }
             : null,
@@ -258,7 +261,7 @@ export class TicketsService {
         canFeedback:actor.id===ticket.requester_id && ticket.service_type==='INC' && ticket.status==='CLOSED' && !feedback?.rowCount,
         feedback:feedback?.rows[0] ?? null,
         canCorrectClassification:!!membership.rowCount && ['QUEUED','IN_PROGRESS','WAITING_USER','WAITING_VENDOR'].includes(ticket.status)
-          && !ticket.pending_assignee_id && (ticket.assignee_id===actor.id||(!ticket.assignee_id&&ticket.status==='QUEUED')),
+          && !ticket.pending_assignee_id && (ticket.assignee_id===actor.id||(!ticket.assignee_id&&ticket.status==='QUEUED'&&dispatcher)),
         canReviewPriority:!!reviewer.rowCount && actor.id!==ticket.requester_id && actor.id!==ticket.submitted_by_id
           && ticket.priority_review_state==='PENDING' && !['CLOSED','CANCELLED','REJECTED'].includes(ticket.status),
         ...(alerts ? { priorityAlert:{ reviewersAvailable:!!available?.rowCount,
@@ -339,11 +342,14 @@ export class TicketsService {
       throw new BadRequestException({code:'INVALID_CLASSIFICATION'});
     await this.intake.requireGeneral(actor.id,input as unknown as Record<string,unknown>,'classification');
     return this.transaction(async client=>{
+      await client.query('SELECT pg_advisory_xact_lock_shared($1)',[ROLE_AUTHORIZATION_LOCK]);
       await this.requireActive(client,actor);
       const ticket=await this.accessible(client,actor,id,true);
       const member=await client.query('SELECT 1 FROM group_memberships WHERE employee_id=$1 AND group_id=$2 FOR SHARE',[actor.id,ticket.owner_group_id]);
       if(!member.rowCount||!(ticket.assignee_id===actor.id||(!ticket.assignee_id&&ticket.status==='QUEUED')))
         throw new ForbiddenException({code:'CLASSIFICATION_OWNER_REQUIRED'});
+      if(!ticket.assignee_id&&!await canDispatch(client,actor.id,ticket.owner_group_id))
+        throw new ForbiddenException({code:'DISPATCH_ROLE_REQUIRED'});
       const previous=await this.claim(client,actor.id,`classification:${id}`,key,input);
       if(previous)return previous as TicketReceipt;
       if(ticket.version!==input.expectedVersion)throw new ConflictException({code:'VERSION_CONFLICT'});
@@ -368,6 +374,7 @@ export class TicketsService {
     validateAction(body);
     await this.intake.requireGeneral(actor.id, body as unknown as Record<string, unknown>, 'ticket-action');
     return this.transaction(async client => {
+      await client.query('SELECT pg_advisory_xact_lock_shared($1)',[ROLE_AUTHORIZATION_LOCK]);
       await this.requireActive(client, actor);
       const ticket = await this.accessible(client, actor, id, true);
       const member = await client.query('SELECT 1 FROM group_memberships WHERE employee_id=$1 AND group_id=$2 FOR SHARE', [actor.id, ticket.owner_group_id]);
@@ -375,6 +382,8 @@ export class TicketsService {
         && await this.delegation(client,actor.id,ticket.delegation_id,false)===ticket.requester_id;
       if(['ADD_INFO','CONFIRM','REOPEN','CANCEL'].includes(body.action) && ticket.requester_id!==actor.id && !delegatedInfo)
         throw new ForbiddenException({code:'TICKET_ACTION_NOT_AUTHORIZED'});
+      if(!ticket.assignee_id&&ticket.status==='QUEUED'&&['REASSIGN','CANCEL_HANDOVER'].includes(body.action)
+        &&!await canDispatch(client,actor.id,ticket.owner_group_id))throw new ForbiddenException({code:'DISPATCH_ROLE_REQUIRED'});
       const previous = await this.claim(client, actor.id, `action:${id}`, key, body);
       if (previous) return previous as TicketReceipt;
       if (ticket.version !== body.expectedVersion) throw new ConflictException({ code: 'VERSION_CONFLICT' });

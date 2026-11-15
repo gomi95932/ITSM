@@ -82,6 +82,8 @@ await until(async()=>JSON.parse(await sql(`SELECT row_to_json(t)::text FROM tick
 const p=JSON.parse(await sql(`SELECT row_to_json(t)::text FROM tickets t WHERE id=${quote(pending.id)}`));assert.equal(p.assignee_id,owner);
 await sql(`INSERT INTO group_memberships(employee_id,group_id) VALUES (${quote(peer)},'service-desk')`);
 // Unassigned routing retains the old group until the recipient confirms.
+await sql(`INSERT INTO role_bindings(id,employee_id,role_code,group_id,valid_from,valid_to,status,requested_by,reviewed_by,reason)
+  VALUES(gen_random_uuid(),${quote(owner)},'DISPATCHER','service-desk',now(),now()+interval '1 day','ACTIVE','demo-admin-1','demo-admin-2','CI routing appointment')`);
 let routed=await create();routed=await ok(routed,owner,'REASSIGN',handoverBody);
 assert.equal(routed.status,'QUEUED');assert.equal(routed.assigneeId,null);
 routed=await ok(routed,c,'ACCEPT_HANDOVER',{comment:'Taking queued work'});

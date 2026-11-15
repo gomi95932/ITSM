@@ -1,8 +1,9 @@
 import { ForbiddenException, Injectable, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
 import { createHash, randomBytes } from 'node:crypto';
 import { Database } from './database.service.js';
+import { ROLE_EFFECTIVE_SQL } from './role-policy.js';
 
-export type Identity = { id: string; name: string; groups: string[]; priorityReviewGroups?: string[]; csrfToken?: string };
+export type Identity = { id: string; name: string; groups: string[]; priorityReviewGroups?: string[]; csrfToken?: string; canManageRoles?:boolean };
 export type AuthHeaders = { devUser?: string; cookie?: string; csrf?: string };
 export const devEnabled = () => process.env.NODE_ENV !== 'production' && process.env.ENABLE_DEV_AUTH === 'true';
 const digest = (value: string) => createHash('sha256').update(value).digest('hex');
@@ -30,7 +31,9 @@ export class AuthService {
     if (!employee.rowCount) throw new UnauthorizedException({ code: 'EMPLOYEE_DISABLED' });
     const groups = await this.db.pool.query('SELECT group_id FROM group_memberships WHERE employee_id=$1', [id]);
     const reviews = await this.db.pool.query('SELECT group_id FROM priority_reviewers WHERE employee_id=$1', [id]);
-    return { id, name: employee.rows[0].display_name, groups: groups.rows.map(r => r.group_id), priorityReviewGroups: reviews.rows.map(r => r.group_id), csrfToken: csrf };
+    const roles=await this.db.pool.query(`SELECT 1 FROM role_bindings r WHERE r.employee_id=$1
+      AND r.role_code IN ('PLATFORM_ADMIN','GROUP_LEAD') AND ${ROLE_EFFECTIVE_SQL} LIMIT 1`,[id]);
+    return { id, name: employee.rows[0].display_name, groups: groups.rows.map(r => r.group_id), priorityReviewGroups: reviews.rows.map(r => r.group_id), csrfToken: csrf,canManageRoles:!!roles.rowCount };
   }
 
   config() {

@@ -22,6 +22,13 @@ export async function api<T>(path: string,options: { method?: string; body?: unk
   return data as T;
 }
 export const messages: Record<string,string> = {
+  DISPATCH_ROLE_REQUIRED:'未接单工单的派人和分类须由本组有效调度员或组长操作；工程师可先领取再处理。',
+  INVALID_ROLE_BINDING:'请核对角色、人员、支持组、有效期和处理依据。',ROLE_SELF_GRANT_DENIED:'不能给自己提交角色授权。',
+  ROLE_INDEPENDENT_REVIEW_REQUIRED:'复核人须是其他平台管理员，且不能是申请人或被授权人。',
+  ROLE_SUBJECT_UNAVAILABLE:'被授权人须在职；组角色还须是对应支持组成员。',ROLE_VALIDITY_INVALID:'有效期无效或已经到期，最长支持 366 天。',
+  ROLE_BINDING_EXISTS:'已有待复核或未撤销的同范围授权，请先核对并撤销旧授权。',ROLE_BINDING_ID_CONFLICT:'此提案编号已有其他内容，请重新发起。',
+  ROLE_VERSION_CONFLICT:'授权已被其他人更新，列表已刷新，请重新核对。',ROLE_STATE_CONFLICT:'授权状态已变化，列表已刷新，请重新核对。',
+  ROLE_ADMIN_CONTINUITY_REQUIRED:'至少保留两名有效平台管理员；请先完成接替授权。紧急人员停用仍走现有受控停用渠道。',
   INVALID_FEEDBACK:'请选择 1 至 5 分，意见最多 1000 字。',FEEDBACK_NOT_AVAILABLE:'工单尚未关闭或不属于故障报障，暂不能评价。',
   FEEDBACK_ALREADY_SUBMITTED:'此工单已评价，请刷新查看。',FEEDBACK_REQUESTER_REQUIRED:'仅报障本人可评价服务。',
   PRIORITY_REVIEWER_REQUIRED:'仅当前责任组的授权主管可确认，且不能确认本人提交的工单。',
