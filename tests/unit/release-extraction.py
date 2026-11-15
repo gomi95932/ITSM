@@ -76,6 +76,19 @@ class ExtractionTests(unittest.TestCase):
         self.assertEqual(result.stderr.strip(), "UNSAFE_RELEASE_ARCHIVE")
         self.assertNotIn("sensitive-archive-path", result.stdout + result.stderr)
 
+    def test_accepts_only_the_reviewed_systemd_template_path(self):
+        template = "infra/systemd/itsm-deploy-approved@.service"
+        bundle = self.extract([("release.json", b"{}", tarfile.REGTYPE),
+                               ("./" + template, b"[Unit]\n", tarfile.REGTYPE)])
+        self.assertEqual((bundle / template).read_bytes(), b"[Unit]\n")
+        self.assertEqual((bundle / template).stat().st_mode & 0o777, 0o600)
+        self.clear_result()
+        for name in ("infra/systemd/other@.service", "../" + template, "/" + template,
+                     "infra/systemd/../systemd/itsm-deploy-approved@.service"):
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                self.extract([("release.json", b"{}", tarfile.REGTYPE), (name, b"no", tarfile.REGTYPE)])
+            self.clear_result()
+
     def clear_result(self):
         import shutil
         shutil.rmtree(self.root / "result", ignore_errors=True)

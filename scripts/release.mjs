@@ -60,7 +60,8 @@ export async function validateRelease(directory, expected, { requireBusinessAcce
   if (!Array.isArray(manifest.files) || !manifest.files.length) throw new Error('EMPTY_RELEASE');
   const seen = new Set();
   for (const file of manifest.files) {
-    if (typeof file.path !== 'string' || !/^[A-Za-z0-9_./-]+$/.test(file.path)
+    if (typeof file.path !== 'string' || (!/^[A-Za-z0-9_./-]+$/.test(file.path)
+      && file.path !== 'infra/systemd/itsm-deploy-approved@.service')
       || file.path.startsWith('/') || file.path.split('/').includes('..') || seen.has(file.path)) throw new Error('INVALID_RELEASE_PATH');
     seen.add(file.path);
     const path = resolve(directory, file.path);

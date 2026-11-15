@@ -58,7 +58,7 @@ test('bundle verifies exact SHA, file contents and migration fingerprint',async 
   const directory=await mkdtemp(resolve(tmpdir(),'itsm-release-'));
   try {
     const files=[];
-    for (const path of requiredReleaseFiles) {
+    for (const path of [...requiredReleaseFiles,'infra/systemd/itsm-deploy-approved@.service']) {
       await mkdir(resolve(directory,path,'..'),{recursive:true}); await writeFile(resolve(directory,path),'fixture');
       files.push({path,sha256:createHash('sha256').update(await readFile(resolve(directory,path))).digest('hex')});
     }
@@ -66,6 +66,13 @@ test('bundle verifies exact SHA, file contents and migration fingerprint',async 
     const sha='a'.repeat(40), manifest={sha,repository:'gomi95932/ITSM',ref:'refs/heads/main',files,schemaFingerprint:schemaFingerprint(files),images};
     await writeFile(resolve(directory,'release.json'),JSON.stringify(manifest));
     assert.equal((await validateRelease(directory,sha)).sha,sha);
+    for (const path of ['infra/systemd/other@.service','scripts/../infra/systemd/itsm-deploy-approved@.service',
+      '/infra/systemd/itsm-deploy-approved@.service']) {
+      await writeFile(resolve(directory,'release.json'),JSON.stringify({...manifest,
+        files:[...files,{path,sha256:'b'.repeat(64)}]}));
+      await assert.rejects(validateRelease(directory,sha),/INVALID_RELEASE_PATH/);
+    }
+    await writeFile(resolve(directory,'release.json'),JSON.stringify(manifest));
     await assert.rejects(validateRelease(directory,sha,{requireBusinessAcceptance:true}),/HASHED_BUSINESS_ACCEPTANCE_TOOL_REQUIRED/);
     for (const required of requiredReleaseFiles) {
       const incomplete=files.filter(file => file.path !== required);
