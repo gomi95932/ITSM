@@ -68,7 +68,8 @@ def extract_release(artifact, destination, sha):
                 name = name[2:]
             if name.endswith("/"):
                 name = name[:-1]
-            require(re.fullmatch(r"[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*", name) is not None)
+            require(re.fullmatch(r"[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*", name) is not None
+                    or name == "infra/systemd/itsm-deploy-approved@.service")
             require(all(part not in (".", "..") for part in name.split("/")))
             require(name not in seen and len(seen) < 512)
             require(not entry.pax_headers and (entry.isdir() or entry.isreg()))
