@@ -31,4 +31,6 @@ The notification list returns a live `canRetry` flag per delivery. The web clien
 
 CI runs the action policy unit tests and `tests/integration/notification-audience.mjs` in the disposable Compose environment. It verifies exact recipients, no group broadcast, stale handover exclusion, idempotent expansion, revocation/expiry/employee checks and API-level retry scope/audits. Do not run fixture tests against the development server's persistent database.
 
+`tests/e2e/notifications.spec.ts` covers desktop and mobile command presentation with a mocked notification-list response: DEAD plus permission shows the command, missing/false permission or a non-DEAD state hides it, and a refreshed revocation removes it. Employee identities have no notification navigation. Screenshots are collected by CI; these mocked cases do not prove backend authorization or real DingTalk delivery.
+
 Before enabling real messages, complete DingTalk identity mappings, application permissions, trusted public URL and real-provider UAT. Check an authorized recipient, a denied recipient, a handover, a provider timeout and dead-letter retry. Monitor SKIPPED/DEAD records and correlate operational audits; do not infer business completion from message acceptance.
