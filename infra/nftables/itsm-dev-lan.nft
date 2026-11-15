@@ -1,0 +1,9 @@
+add table inet itsm_dev_lan
+delete table inet itsm_dev_lan
+
+table inet itsm_dev_lan {
+    chain input {
+        type filter hook input priority -10; policy accept;
+        ip saddr != { 10.10.81.0/24, 10.10.91.0/24 } ip daddr 10.10.81.125 tcp dport 8080 counter drop
+    }
+}

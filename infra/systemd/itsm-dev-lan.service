@@ -1,8 +1,8 @@
 [Unit]
 Description=Forward ITSM development LAN traffic to loopback Web
-Requires=itsm-dev-lan.socket
-After=itsm-dev-lan.socket
-PartOf=itsm-dev-lan.socket
+BindsTo=itsm-dev-lan.socket itsm-dev-lan-firewall.service
+After=itsm-dev-lan.socket itsm-dev-lan-firewall.service
+PartOf=itsm-dev-lan.socket itsm-dev-lan-firewall.service
 
 [Service]
 ExecStart=/usr/lib/systemd/systemd-socket-proxyd --connections-max=128 127.0.0.1:8088

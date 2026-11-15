@@ -40,6 +40,13 @@ jobs:
         run: sudo -n env -i PATH=/usr/bin:/bin "$(command -v node)" tests/integration/approved-deployment.mjs
       - name: Validate fixed approved deployment service template
         run: systemd-analyze verify infra/systemd/itsm-deploy-approved@.service
+      - name: Validate LAN entry service dependencies
+        run: systemd-analyze verify infra/systemd/itsm-dev-lan.socket infra/systemd/itsm-dev-lan.service infra/systemd/itsm-dev-lan-firewall.service
+      - name: Verify real LAN filtering in a disposable network namespace
+        run: |
+          sudo -n apt-get update -qq
+          sudo -n apt-get install --no-install-recommends -y nftables iproute2
+          sudo -n env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin /usr/bin/unshare --net -- /usr/bin/python3 tests/integration/lan-access.py
       - name: Set disposable CI configuration path
         run: echo "ITSM_CI_ENV=$RUNNER_TEMP/itsm-ci.env" >> "$GITHUB_ENV"
       - name: Create private disposable CI configuration

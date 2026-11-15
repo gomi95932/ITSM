@@ -1,5 +1,8 @@
 [Unit]
 Description=ITSM development LAN entry on 10.10.81.125:8080
+BindsTo=itsm-dev-lan-firewall.service
+After=itsm-dev-lan-firewall.service
+PartOf=itsm-dev-lan-firewall.service
 
 [Socket]
 ListenStream=10.10.81.125:8080

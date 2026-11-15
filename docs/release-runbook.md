@@ -167,27 +167,37 @@ ssh -N -L 8088:127.0.0.1:8088 ituser@10.10.81.125
 
 ### 4.1 经批准的局域网测试入口
 
-开发验证入口为 `http://10.10.81.125:8080`，由宿主机已有 `systemd-socket-proxyd` 转发到 `127.0.0.1:8088`。不修改受校验的 Compose、环境文件或镜像，不开放数据库、Redis、API 和 worker 端口。配置源为 `infra/systemd/itsm-dev-lan.socket`、`infra/systemd/itsm-dev-lan.service`，目标为服务器 `/etc/systemd/system/` 下同名文件；它们独立于应用发布包维护，后续应用升级仍需核验该入口。
+开发验证入口为 `http://10.10.81.125:8080`，由宿主机已有 `systemd-socket-proxyd` 转发到 `127.0.0.1:8088`。不修改受校验的 Compose、环境文件或镜像，不开放数据库、Redis、API 和 worker 端口。配置源为 `infra/systemd/itsm-dev-lan.socket`、`infra/systemd/itsm-dev-lan.service`、`infra/systemd/itsm-dev-lan-firewall.service` 和 `infra/nftables/itsm-dev-lan.nft`。前三个安装到服务器 `/etc/systemd/system/`，规则安装到 `/etc/itsm-dev-lan.nft`；它们独立于应用发布包维护，后续应用升级仍需核验该入口。
 
 仅用于虚拟身份及合成数据测试。当前访问者可以选择开发测试用户，不能作为正式人员认证；HTTP 不加密，禁止输入真实敏感数据。不得配置公网端口映射。入口来源仅允许 `10.10.81.0/24` 与 `10.10.91.0/24`；本机代理进程连接 Web 的 `127.0.0.1/32` 规则单独配置。这不是公司人员认证，跨 VLAN 仍取决于企业网络 ACL。服务器的 nftables 与 systemd socket 过滤均须与上述批准网段一致。
 
-首次安装前确认 8080 空闲、两个同名单元不存在，保留原服务基线。将审核后的两个文件传入目标主机并核对 SHA256，再以 root:root、0644 安装；不得覆盖来源不明的既有单元。服务器需要 systemd 255 及实际可用的 cgroup/eBPF 网络过滤，不仅是编译特性显示支持。执行：
+规则只管理 `inet itsm_dev_lan`，不清空宿主规则集、不改 Docker/其他业务表。创建空表、删除本表、重新定义在一个 nft 事务中提交；重复加载不会累积旧规则。失败事务应保留原规则，不使用独立的 `ExecStartPre=nft delete table`。防火墙服务没有删表的停止命令，入口 socket/代理通过 `BindsTo`、`After` 依赖它，通过 `PartOf` 随其重启；停止防火墙服务会关闭入口，但仍保留拒绝规则。不要手工删除该表，也不要让其他规则管理器执行全局 `flush ruleset`。只读检查仍须确认服务状态与实际规则一致，`active` 不保证规则未被其他管理员删除。
+
+首次安装前确认 8080 空闲、同名单元及规则文件不存在，保留原服务基线。对既有主机，先以 `systemctl cat/show`、`nft list table inet itsm_dev_lan` 保存实际内容与属性，并把原配置备份到 root 私有的新目录；不得覆盖来源不明的单元。2026-11-15 现场只读发现：既有入口已经依赖现场手工 nft 服务，但 `IPAddressAllow/Deny` 为空，尚不等于仓库双层过滤配置已安装。此次新增配置和 CI 也不代表已部署或已完成现场验收。
+
+将经过 CI 与审阅的四个文件传入目标主机并逐项核对独立 SHA256，再以 root:root、0644 安装。需要 nftables、systemd 255 及实际可用的 cgroup/eBPF 网络过滤，不仅是编译特性显示支持；不通过删除 IPAddress 规则绕过不支持的平台。既有入口升级须在批准的短暂中断窗口先停止 socket 和代理，保留 nft 规则，再安装审核文件。以下为安装后的验证和启动顺序，不是自动覆盖安装器：
 
 ```sh
-sudo systemd-analyze verify /etc/systemd/system/itsm-dev-lan.socket /etc/systemd/system/itsm-dev-lan.service
+sudo nft --check --file /etc/itsm-dev-lan.nft
+sudo systemd-analyze verify /etc/systemd/system/itsm-dev-lan.socket /etc/systemd/system/itsm-dev-lan.service /etc/systemd/system/itsm-dev-lan-firewall.service
 sudo systemctl daemon-reload
+sudo systemctl restart itsm-dev-lan-firewall.service
 sudo systemctl enable --now itsm-dev-lan.socket
 curl --noproxy '*' --fail --max-time 10 http://10.10.81.125:8080/api/v1/health/ready
-sudo systemctl status --no-pager itsm-dev-lan.socket itsm-dev-lan.service
-sudo journalctl --no-pager -u itsm-dev-lan.socket -u itsm-dev-lan.service -n 30
+sudo systemctl status --no-pager itsm-dev-lan.socket itsm-dev-lan.service itsm-dev-lan-firewall.service
+sudo systemctl show itsm-dev-lan.socket itsm-dev-lan.service -p IPAddressAllow -p IPAddressDeny -p BindsTo -p After -p PartOf
+sudo nft list table inet itsm_dev_lan
+sudo journalctl --no-pager -u itsm-dev-lan.socket -u itsm-dev-lan.service -u itsm-dev-lan-firewall.service -n 30
 ```
 
-验收必须包括：8080 仅绑定目标内网 IP、8088 仍仅绑定回环地址、原服务正常、从另一台内网电脑打开页面及就绪接口。再比较以下两条只读探测：第一条应成功，证明测试源可用；第二条必须超时或拒绝，因为 `127.0.0.2` 不在该入口白名单。第二条成功即访问控制验收失败，应立即停止入口，不得宣称内网限制已生效。检查日志不得有 BPF 不受支持或过滤器安装失败信息。外网来源、交换机 ACL、公网 NAT 未做端到端验证，不能据此宣称整个网络边界已通过验收。
+验收必须包括：8080 仅绑定目标内网 IP、8088 仍仅绑定回环地址、原服务正常、分别从两个允许网段的电脑打开页面及就绪接口，并从一个不允许的网段验证拒绝。再比较以下两条只读探测：第一条应成功，证明测试源可用；第二条必须超时或拒绝，因为 `127.0.0.2` 不在 nft 入口白名单。第二条成功即访问控制验收失败，应立即停止入口，不得宣称内网限制已生效。检查日志不得有 BPF 不受支持或过滤器安装失败信息。外网来源、交换机 ACL、公网 NAT 未做端到端验证，不能据此宣称整个网络边界已通过验收。
 
 ```sh
 curl --noproxy '*' --interface 127.0.0.2 --fail --max-time 3 http://127.0.0.1:8088/api/v1/health/ready
 curl --noproxy '*' --interface 127.0.0.2 --fail --connect-timeout 2 --max-time 3 http://10.10.81.125:8080/api/v1/health/ready
 ```
+
+`Application CI / build-test` 在 GitHub 临时 Runner 的独立网络命名空间中运行 `tests/integration/lan-access.py`：加载真实 nft 规则、验证允许网段和相邻拒绝来源、重复加载无重复规则、不影响无关表以及失败事务保留原过滤。脚本拒绝在 `/proc/1/ns/net` 所在网络命名空间执行；不要在 Mac 或开发机持久环境运行。静态检查还校验三个单元的依赖和固定来源，`systemd-analyze verify` 检查单元有效性；这些 CI 证据不证明开发机已安装配置，也不证明现场 systemd/eBPF 过滤、单元启停传播、跨 VLAN 或重启恢复已经验证。单元启停和防火墙失败时入口关闭的现场测试须有批准的中断窗口，不在日常只读巡检中停止服务。
 
 代理只转发 TCP，不注入 `X-Forwarded-For`，应用看到的是代理连接地址，不能把它当作终端 IP 溯源方案。正式上线需有真实认证、HTTPS 和可信边界代理的来源审计设计。关闭测试入口仅停用本单元，不删除数据或停止 ITSM 容器：
 
@@ -195,7 +205,7 @@ curl --noproxy '*' --interface 127.0.0.2 --fail --connect-timeout 2 --max-time 3
 sudo systemctl disable --now itsm-dev-lan.socket
 ```
 
-`PartOf` 会同时停止代理服务；关闭后检查 8080 不再监听而 8088 仍可用。开机自动启动仅在 enable 成功后成立；未实际重启主机不能宣称重启恢复已验证。
+`PartOf` 会同时停止代理服务；关闭后检查 8080 不再监听而 8088 仍可用。nft 拒绝规则故意保留，不执行全局清理。socket 开机启动会先拉起其防火墙依赖；开机自动启动仅在 enable 成功后成立，未实际重启主机不能宣称重启恢复已验证。配置回退只恢复该入口四个备份文件并按同样的停入口、校验、加载流程执行，不改应用卷和其他服务。
 
 ## 5. 回退与故障处理
 
