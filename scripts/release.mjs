@@ -14,6 +14,12 @@ export const requiredReleaseFiles = Object.freeze([
   'docs/release-runbook.md',
   'db/migrations/001_ticket_core.sql',
 ]);
+export const lanEntryReleaseFiles = Object.freeze([
+  'infra/systemd/itsm-dev-lan.socket',
+  'infra/systemd/itsm-dev-lan.service',
+  'infra/systemd/itsm-dev-lan-firewall.service',
+  'infra/nftables/itsm-dev-lan.nft',
+]);
 
 export function validateConfig(config) {
   if (config.name !== 'itsm-dev') throw new Error('UNEXPECTED_COMPOSE_PROJECT');
@@ -51,7 +57,7 @@ export function validateRuntimeContainer(container, expectedImage, service) {
     throw new Error('RUNNING_CONTAINER_NOT_HEALTHY');
 }
 
-export async function validateRelease(directory, expected, { requireBusinessAcceptance = false } = {}) {
+export async function validateRelease(directory, expected, { requireBusinessAcceptance = false, requireLanEntry = false } = {}) {
   if (!/^[a-f0-9]{40}$/.test(expected ?? '')) throw new Error('FULL_COMMIT_SHA_REQUIRED');
   const base=await realpath(directory);
   if (!(await lstat(resolve(directory,'release.json'))).isFile()) throw new Error('INVALID_RELEASE_MANIFEST');
@@ -71,6 +77,8 @@ export async function validateRelease(directory, expected, { requireBusinessAcce
     if (!seen.has(required)) throw new Error('INCOMPLETE_RELEASE');
   if (requireBusinessAcceptance && !seen.has('scripts/verify-development.mjs'))
     throw new Error('HASHED_BUSINESS_ACCEPTANCE_TOOL_REQUIRED');
+  if (requireLanEntry && lanEntryReleaseFiles.some(path => !seen.has(path)))
+    throw new Error('HASHED_LAN_ENTRY_CONFIGURATION_REQUIRED');
   if (schemaFingerprint(manifest.files) !== manifest.schemaFingerprint) throw new Error('SCHEMA_FINGERPRINT_MISMATCH');
   for (const name of ['api','web','worker','postgres','redis']) {
     if (!new RegExp(`^ghcr\\.io/gomi95932/itsm-${name}@sha256:[a-f0-9]{64}$`).test(manifest.images?.[name] ?? '')) throw new Error('IMMUTABLE_IMAGE_DIGEST_REQUIRED');

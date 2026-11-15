@@ -226,6 +226,12 @@ jobs:
           state="$RUNNER_TEMP/itsm-release-rehearsal-state"
           mkdir "$release_root"
           tar -xzf "$archive" -C "$release_root"
+          node --input-type=module - "$release_root" "$GITHUB_SHA" <<'NODE'
+          import { pathToFileURL } from 'node:url';
+          const [root,sha]=process.argv.slice(2);
+          const { validateRelease }=await import(pathToFileURL(`${root}/scripts/release.mjs`));
+          await validateRelease(root,sha,{requireBusinessAcceptance:true,requireLanEntry:true});
+          NODE
           node "$release_root/scripts/create-development-env.mjs" "$private_env" --seed-development-fixtures
           release() {
             node "$release_root/scripts/release.mjs" "$@" --env "$private_env" --state "$state"

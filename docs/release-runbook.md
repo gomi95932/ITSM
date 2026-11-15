@@ -87,7 +87,7 @@ sudo -H /usr/bin/node /opt/itsm/tools/release/promote-release.mjs "$SHA" "$RUN_I
 - 已存在同 SHA 的 `approved-root-promoted` 发布目录及证明，且与本次批准的 run、attempt、artifact 和镜像清单一致。
 - 管理员明确本次为合成数据开发验证。实际发布工具仍校验开发身份、虚拟人员和 fake 通知配置；不得对生产或真实业务数据执行该验收模式。
 
-截至 2026-11-15 的只读核验发现 `/opt/itsm`、`releases`、`shared` 仍由 `ituser` 持有，可信工具及批准目录尚未安装；固定入口应拒绝该状态。目录归属调整是独立管理员变更：先暂停人工发布、记录文件及权限、备份现有私密配置和状态，核对其他服务依赖，再对精确路径逐项迁移及复核。禁止递归盲目 chown、清空 shared 或以本工具顺便修复权限。
+2026-11-15 早先只读核验曾发现 `/opt/itsm`、`releases`、`shared` 由 `ituser` 持有且工具未安装；随后单独批准的管理员安装已返回 `trusted-tools-installed`。复核六个固定工具、部署模板及祖先 root 管理权限成功，`deploymentPerformed=false`，运行 SHA 仍为 `4759163954ebf7d06e22f6979d97cf14baa832d3`。独立 GitHub 只读凭据尚不存在，不能宣称真实提升或部署通过。不要因旧等待记录重复安装；后续操作先检查实际状态。其他主机的目录归属调整仍须独立管理员变更，禁止递归盲目 chown、清空 shared 或以本工具顺便修复权限。
 
 实际部署批准与“允许提升发布包”是两件事。管理员在 `deployment-approvals/<requestId>.json` 保存 2.1 节全部来源字段，增加以下字段；以下值仍只是夹具，不能直接用作服务器批准：
 
@@ -167,7 +167,9 @@ ssh -N -L 8088:127.0.0.1:8088 ituser@10.10.81.125
 
 ### 4.1 经批准的局域网测试入口
 
-开发验证入口为 `http://10.10.81.125:8080`，由宿主机已有 `systemd-socket-proxyd` 转发到 `127.0.0.1:8088`。不修改受校验的 Compose、环境文件或镜像，不开放数据库、Redis、API 和 worker 端口。配置源为 `infra/systemd/itsm-dev-lan.socket`、`infra/systemd/itsm-dev-lan.service`、`infra/systemd/itsm-dev-lan-firewall.service` 和 `infra/nftables/itsm-dev-lan.nft`。前三个安装到服务器 `/etc/systemd/system/`，规则安装到 `/etc/itsm-dev-lan.nft`；它们独立于应用发布包维护，后续应用升级仍需核验该入口。
+开发验证入口为 `http://10.10.81.125:8080`，由宿主机已有 `systemd-socket-proxyd` 转发到 `127.0.0.1:8088`。不修改受校验的 Compose、环境文件或镜像，不开放数据库、Redis、API 和 worker 端口。配置源为 `infra/systemd/itsm-dev-lan.socket`、`infra/systemd/itsm-dev-lan.service`、`infra/systemd/itsm-dev-lan-firewall.service` 和 `infra/nftables/itsm-dev-lan.nft`。新发布包包含这四个文件并在 `release.json` 中记录逐文件 SHA256；打包和最终归档演练都强制校验完整名单及哈希。旧发布包仍可作为原有回退目标，不伪称其包含新增配置。
+
+前三个安装到服务器 `/etc/systemd/system/`，规则安装到 `/etc/itsm-dev-lan.nft`。应用部署脚本不会安装或加载这些主机级配置，必须单独批准并执行下述安装与现场验收；应用回退也不会自动回退主机入口。后续应用升级仍需核验该入口。
 
 仅用于虚拟身份及合成数据测试。当前访问者可以选择开发测试用户，不能作为正式人员认证；HTTP 不加密，禁止输入真实敏感数据。不得配置公网端口映射。入口来源仅允许 `10.10.81.0/24` 与 `10.10.91.0/24`；本机代理进程连接 Web 的 `127.0.0.1/32` 规则单独配置。这不是公司人员认证，跨 VLAN 仍取决于企业网络 ACL。服务器的 nftables 与 systemd socket 过滤均须与上述批准网段一致。
 

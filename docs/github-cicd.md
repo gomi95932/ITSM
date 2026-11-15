@@ -24,7 +24,7 @@
 - 部署：人工批准后在内网运行同版本 `scripts/release.mjs`，步骤见 [发布手册](release-runbook.md)。目前没有声称 GitHub 托管 Runner 可直连内网，也未启用内网自动部署 job。确认网络、目录、备份和回退后再扩展受控 CD。不要把任意 PR 自托管 Runner 放在现有服务主机。
 - 部署前备份数据库；升级迁移需注明向前兼容性。启动后检查 API/队列/数据库健康、关键用例及日志；失败时停止发布并按回退手册处理，不能假设数据库迁移可逆。
 - 开发环境标准发布使用 `deploy <SHA> --verify-development`，在写入成功记录前自动执行合成工单闭环并再次核对五个运行镜像，记录与 SHA 绑定的验收证据；真实身份或真实通知环境在修改服务前拒绝该选项。不带此选项仅标记 `readiness-only`。main 的最终发布包演练校验这些证据字段，不以健康接口替代业务验收。该门禁仍不代替钉钉/OA 真实集成或受限无人值守发布通道。
-- LAN 配置也纳入 `build-test`：三个 systemd 单元语法检查，以及临时独立网络命名空间中的真实 nft 允许/拒绝、幂等加载、无关表保留和失败事务回归；依赖只安装在临时 GitHub Runner。它不修改开发机网络，也不替代现场 eBPF、单元启停、跨网段与重启验收。入口配置仍须与应用部署分开批准，步骤见发布手册 4.1。
+- LAN 配置也纳入 `build-test`：三个 systemd 单元语法检查，以及临时独立网络命名空间中的真实 nft 允许/拒绝、幂等加载、无关表保留和失败事务回归；依赖只安装在临时 GitHub Runner。新发布包携带三个单元及 nft 规则并记录哈希，打包和最终归档演练均拒绝缺失或篡改的配置；旧包仍保留原回退兼容性。它不修改开发机网络，也不替代现场 eBPF、单元启停、跨网段与重启验收。入口配置仍须与应用部署分开批准，步骤见发布手册 4.1。
 
 ## 开发机隔离原则
 
@@ -50,9 +50,9 @@
 
 成功时输出 `artifact-verified` 证明；包位于 `<目标目录>/verified/bundle`，同层保留来源与预备证明。失败不会生成 `verified`，可能留下空的预留目录；保留现场，人工核对后另选新目录重试，不覆盖。它不调用 Docker、sudo、容器、迁移或包内代码，不等于批准、部署、权限提升或业务验收。
 
-`scripts/promote-release.mjs` 补充受控提升代码，安装和现场验收仍待管理员变更。它不相信普通用户 staging 中的文件或 JSON，而以固定 root 工具和只读身份重新查验 GitHub、重新下载实际制品，只把已批准的精确版本放入 root 管理目录。命令只接收 SHA 与 run ID，不接收目录、命令、配置文件或凭据路径；固定路径和安装要求见发布手册。批准文件须 root 私有、绑定 artifact ID/digest/attempt，最长有效 24 小时；发布前再查批准和来源。完成提升仍不执行 Docker、迁移或新包代码，不等于自动部署。
+`scripts/promote-release.mjs` 补充受控提升代码；2026-11-15 已完成固定工具和部署模板安装及祖先权限复核，独立 GitHub 只读凭据和真实提升/部署验收仍待完成。它不相信普通用户 staging 中的文件或 JSON，而以固定 root 工具和只读身份重新查验 GitHub、重新下载实际制品，只把已批准的精确版本放入 root 管理目录。命令只接收 SHA 与 run ID，不接收目录、命令、配置文件或凭据路径；固定路径和安装要求见发布手册。批准文件须 root 私有、绑定 artifact ID/digest/attempt，最长有效 24 小时；发布前再查批准和来源。完成提升仍不执行 Docker、迁移或新包代码，不等于自动部署。
 
-GitHub 临时 Linux Runner 增加 root 自有 `/run/itsm-promotion-test-*` 夹具测试，通过独立模拟来源验证提升与拒绝路径。模拟 API 不证明服务器 GitHub 身份、真实下载、sudo 入口或现场权限已经生效。禁止直接 `sudo node <普通用户可改写目录>/scripts/release.mjs`，不能仅凭预备证明绕过批准或信任边界。服务器上的部署身份、可信工具安装、批准机制接入、实际 main 制品提升与发布、备份恢复和回退证据仍待完成；不提供通用 Node 或 Docker 的免密 sudo 权限。
+GitHub 临时 Linux Runner 增加 root 自有 `/run/itsm-promotion-test-*` 夹具测试，通过独立模拟来源验证提升与拒绝路径。模拟 API 不证明服务器 GitHub 身份、真实下载、sudo 入口或现场权限已经生效。禁止直接 `sudo node <普通用户可改写目录>/scripts/release.mjs`，不能仅凭预备证明绕过批准或信任边界。服务器上的发布身份、批准机制接入、实际 main 制品提升与发布、备份恢复和回退证据仍待完成；不提供通用 Node 或 Docker 的免密 sudo 权限。
 
 Compose 项目名为 `itsm-dev`，数据库和 Redis 仅在独立内部网络中访问，使用独立命名卷；没有宿主机端口映射。Web 仅绑定 `127.0.0.1:8088`，须经 SSH 隧道访问。不要执行 `docker compose down -v`、全局 `docker system prune` 或修改宿主机已有 PostgreSQL、Redis、OpenClaw。启动前单独确认 HTTP 端口、磁盘、备份目标与访问控制。
 

@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { createHash } from 'node:crypto';
-import { main, requiredReleaseFiles, schemaFingerprint, validateBusinessAcceptanceConfig, validateConfig, validateRelease, validateRuntimeContainer } from '../../scripts/release.mjs';
+import { lanEntryReleaseFiles, main, requiredReleaseFiles, schemaFingerprint, validateBusinessAcceptanceConfig, validateConfig, validateRelease, validateRuntimeContainer } from '../../scripts/release.mjs';
 
 test('release business checks require seeded development identities and fake-only notifications', () => {
   const config=() => ({services:{api:{environment:{NODE_ENV:'development',ENABLE_DEV_AUTH:'true',NOTIFICATION_MODE:'fake'}},
@@ -106,5 +106,45 @@ test('business acceptance tool must be covered by the verified release manifest'
     assert.equal((await validateRelease(directory,sha,{requireBusinessAcceptance:true})).sha,sha);
     await writeFile(resolve(directory,'scripts/verify-development.mjs'),'tampered');
     await assert.rejects(validateRelease(directory,sha,{requireBusinessAcceptance:true}),/RELEASE_CHECKSUM_MISMATCH/);
+  } finally { await rm(directory,{recursive:true,force:true}); }
+});
+
+test('new bundles cover all LAN configuration hashes without invalidating legacy rollback bundles', async () => {
+  const directory=await mkdtemp(resolve(tmpdir(),'itsm-release-lan-'));
+  try {
+    assert.deepEqual([...lanEntryReleaseFiles].sort(),[
+      'infra/nftables/itsm-dev-lan.nft',
+      'infra/systemd/itsm-dev-lan-firewall.service',
+      'infra/systemd/itsm-dev-lan.service',
+      'infra/systemd/itsm-dev-lan.socket',
+    ]);
+    const files=[];
+    for (const path of [...requiredReleaseFiles,...lanEntryReleaseFiles]) {
+      const content=`fixture:${path}`;
+      await mkdir(resolve(directory,path,'..'),{recursive:true});
+      await writeFile(resolve(directory,path),content);
+      files.push({path,sha256:createHash('sha256').update(content).digest('hex')});
+    }
+    const sha='a'.repeat(40),images=Object.fromEntries(['api','web','worker','postgres','redis']
+      .map(name=>[name,`ghcr.io/gomi95932/itsm-${name}@sha256:${'b'.repeat(64)}`]));
+    const manifestFor=items => ({sha,repository:'gomi95932/ITSM',ref:'refs/heads/main',
+      files:items,schemaFingerprint:schemaFingerprint(items),images});
+    const writeManifest=items => writeFile(resolve(directory,'release.json'),JSON.stringify(manifestFor(items)));
+    await writeManifest(files);
+    assert.equal((await validateRelease(directory,sha,{requireLanEntry:true})).sha,sha);
+    for (const path of lanEntryReleaseFiles) {
+      await writeManifest(files.filter(file => file.path !== path));
+      await assert.rejects(validateRelease(directory,sha,{requireLanEntry:true}),/HASHED_LAN_ENTRY_CONFIGURATION_REQUIRED/);
+    }
+    const legacy=files.filter(file => !lanEntryReleaseFiles.includes(file.path));
+    await writeManifest(legacy);
+    assert.equal((await validateRelease(directory,sha)).sha,sha);
+    await assert.rejects(validateRelease(directory,sha,{requireLanEntry:true}),/HASHED_LAN_ENTRY_CONFIGURATION_REQUIRED/);
+    await writeManifest(files);
+    for (const path of lanEntryReleaseFiles) {
+      await writeFile(resolve(directory,path),'tampered');
+      await assert.rejects(validateRelease(directory,sha,{requireLanEntry:true}),/RELEASE_CHECKSUM_MISMATCH/);
+      await writeFile(resolve(directory,path),`fixture:${path}`);
+    }
   } finally { await rm(directory,{recursive:true,force:true}); }
 });
