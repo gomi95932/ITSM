@@ -6,6 +6,7 @@ import { maintainRequestApprovals } from './request-approval.js';
 import { maintainRequestFulfillments } from './request-fulfillment.js';
 import { shouldAutoClose } from './auto-close.js';
 import { notificationLink } from './notification-message.js';
+import { expandNotification, notificationRecipients } from './notification-audience.js';
 
 const db = new Pool({ host:process.env.DB_HOST ?? 'db',database:process.env.DB_NAME ?? 'itsm',user:process.env.DB_USER ?? 'itsm',password:process.env.DB_PASSWORD,
   connectionTimeoutMillis:5000,statement_timeout:30000 });
@@ -40,15 +41,9 @@ async function provider(path:string,body?:object):Promise<any> {
 
 async function expand() {
   await transaction(async client => {
-    const result = await client.query("SELECT id,ticket_id,kind FROM outbox_events WHERE expanded_at IS NULL ORDER BY (kind='P1_ALERT') DESC,created_at LIMIT 20 FOR UPDATE SKIP LOCKED");
+    const result = await client.query("SELECT id,event_id FROM outbox_events WHERE expanded_at IS NULL ORDER BY (kind='P1_ALERT') DESC,created_at LIMIT 20 FOR UPDATE SKIP LOCKED");
     for (const event of result.rows) {
-      await client.query(`INSERT INTO notification_deliveries(outbox_id,employee_id)
-        SELECT $1,e.id FROM employees e JOIN tickets t ON t.id=$2 WHERE e.active AND (e.id=t.requester_id OR
-          (e.id=t.pending_assignee_id AND EXISTS (SELECT 1 FROM group_memberships m WHERE m.employee_id=e.id AND m.group_id=t.pending_group_id)) OR EXISTS
-          (SELECT 1 FROM group_memberships m WHERE m.employee_id=e.id AND m.group_id=t.owner_group_id) OR
-          ($3='P1_ALERT' AND EXISTS(SELECT 1 FROM priority_reviewers r WHERE r.employee_id=e.id AND r.group_id=t.owner_group_id)))
-        ON CONFLICT DO NOTHING`,[event.id,event.ticket_id,event.kind]);
-      await client.query("UPDATE outbox_events SET expanded_at=now(),state='EXPANDED' WHERE id=$1",[event.id]);
+      await expandNotification(client,event.id,event.event_id);
     }
   });
 }
@@ -60,12 +55,11 @@ async function deliver() {
       FROM notification_deliveries d JOIN outbox_events o ON o.id=d.outbox_id JOIN ticket_events e ON e.id=o.event_id JOIN tickets t ON t.id=o.ticket_id
       WHERE d.state IN ('PENDING','SENDING') AND d.next_at<=now() ORDER BY (o.kind='P1_ALERT') DESC,d.next_at,d.id LIMIT 1 FOR UPDATE OF d SKIP LOCKED`);
     const row = result.rows[0]; if (!row) return;
-    const recipient = await client.query(`SELECT e.active,l.ding_user_id,EXISTS(SELECT 1 FROM group_memberships WHERE employee_id=e.id AND
-      (group_id=$3 OR (e.id=$4 AND group_id=$5))) OR EXISTS
-      (SELECT 1 FROM priority_reviewers r WHERE r.employee_id=e.id AND r.group_id=$3) AS member
-      FROM employees e LEFT JOIN identity_links l ON l.employee_id=e.id AND l.corp_id=$2 WHERE e.id=$1`,[row.employee_id,process.env.DINGTALK_CORP_ID ?? '',row.owner_group_id,row.pending_assignee_id,row.pending_group_id]);
+    const permitted = await notificationRecipients(client,row.event_id,row.employee_id);
+    const recipient = await client.query(`SELECT e.active,l.ding_user_id FROM employees e
+      LEFT JOIN identity_links l ON l.employee_id=e.id AND l.corp_id=$2 WHERE e.id=$1`,[row.employee_id,process.env.DINGTALK_CORP_ID ?? '']);
     const user = recipient.rows[0];
-    if (!user?.active || (row.employee_id !== row.requester_id && !user.member)) {
+    if (!user?.active || !permitted.length) {
       await client.query("UPDATE notification_deliveries SET state='SKIPPED',last_error='RECIPIENT_NO_LONGER_AUTHORIZED',updated_at=now() WHERE id=$1",[row.id]); return;
     }
     if (mode === 'fake' && process.env.NODE_ENV !== 'production') {
