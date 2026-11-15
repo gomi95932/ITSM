@@ -22,6 +22,17 @@ export async function api<T>(path: string,options: { method?: string; body?: unk
   return data as T;
 }
 export const messages: Record<string,string> = {
+  INVALID_GROUP_CHANGE:'请核对支持组、人员、变更类型、版本和处理依据。',GROUP_EXISTS:'该支持组编码已存在，请刷新核对。',
+  GROUP_PEOPLE_SEARCH_REQUIRED:'请输入至少 2 个字符查找工程师。',GROUP_SELF_CHANGE_DENIED:'不能提交自己的成员变更，请由其他管理人员发起。',
+  GROUP_INDEPENDENT_REVIEW_REQUIRED:'须由另一名平台管理员复核，复核人不能是提案人或变更对象。',
+  GROUP_VERSION_CONFLICT:'支持组已更新，请拒绝过期提案，刷新后按当前版本重新发起。',
+  GROUP_SUBJECT_UNAVAILABLE:'新增成员须为在职员工。',GROUP_MEMBERSHIP_CONFLICT:'成员关系已经变化，请刷新后核对。',
+  GROUP_CHANGE_ID_CONFLICT:'此变更编号已有不同内容，请重新发起。',GROUP_CHANGE_PENDING:'该员工已有待复核的成员变更。',
+  GROUP_CHANGE_VERSION_CONFLICT:'变更已经处理或版本变化，请刷新后核对。',
+  GROUP_RESPONSIBILITY_TRANSFER_REQUIRED:'该成员仍有在办工单、待接收交接、未结交付或知识草稿，请先完成责任移交及收尾。',
+  GROUP_STALE_ROLE_REVIEW_REQUIRED:'该员工仍有未撤销的旧组角色，请先在角色授权中复核并撤销，再重新入组。',
+  GROUP_LAST_MEMBER_REQUIRED:'不能移除最后一名在职成员，请先完成接替人员入组。',GROUP_LAST_LEAD_REQUIRED:'不能移除最后一名有效组长，请先完成接替组长授权。',
+  GROUP_SPECIALIST_CONTINUITY_REQUIRED:'请先为该组的 P1 确认、知识复核或知识编辑配置接替人员。',
   DISPATCH_ROLE_REQUIRED:'未接单工单的派人和分类须由本组有效调度员或组长操作；工程师可先领取再处理。',
   INVALID_ROLE_BINDING:'请核对角色、人员、支持组、有效期和处理依据。',ROLE_SELF_GRANT_DENIED:'不能给自己提交角色授权。',
   ROLE_INDEPENDENT_REVIEW_REQUIRED:'复核人须是其他平台管理员，且不能是申请人或被授权人。',

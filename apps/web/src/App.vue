@@ -9,10 +9,11 @@ import DelegationsPanel from './components/DelegationsPanel.vue';
 import KnowledgePanel from './components/KnowledgePanel.vue';
 import ReportsPanel from './components/ReportsPanel.vue';
 import RolesPanel from './components/RolesPanel.vue';
+import SupportGroupsPanel from './components/SupportGroupsPanel.vue';
 import { api,ApiError,devUser,errorText,setUser,useDevelopment } from './api';
 import { formatDate,statuses } from './labels';
 
-type View='mine'|'catalog'|'queue'|'notifications'|'delegations'|'knowledge'|'reports'|'roles';
+type View='mine'|'catalog'|'queue'|'notifications'|'delegations'|'knowledge'|'reports'|'roles'|'groups';
 type Delivery={id:string;state:string;attempts:number;lastError:string|null;updatedAt:string;number:string;canRetry:boolean};
 const user=ref<SessionUser>(),booting=ref(true),error=ref(''),loading=ref(false),development=ref(false),identity=ref(devUser());
 const view=ref<View>('mine'),catalog=ref<CatalogItem[]>([]),tickets=ref<TicketView[]>([]),counts=ref<Record<string,number>>({}),total=ref(0),page=ref(1),filter=ref('');
@@ -20,7 +21,7 @@ const selected=ref(''),creating=ref(false),initialCode=ref(''),notices=ref<Deliv
 const pages=computed(()=>Math.max(1,Math.ceil(total.value/20)));
 const openCount=computed(()=>Object.entries(counts.value).filter(([status])=>!['CLOSED','CANCELLED','REJECTED'].includes(status)).reduce((sum,[,count])=>sum+count,0));
 const noticeLabels:Record<string,string>={PENDING:'待发送',SENDING:'平台受理，待确认',DELIVERED:'平台确认发送成功',SIMULATED:'开发模拟',DEAD:'失败待处理',SKIPPED:'已跳过'};
-const title=computed(()=>({mine:'我的工单',catalog:'服务目录',queue:'IT 工作台',notifications:'消息通知',delegations:'代报授权',knowledge:'知识库',reports:'服务报表',roles:'角色授权'})[view.value]);
+const title=computed(()=>({mine:'我的工单',catalog:'服务目录',queue:'IT 工作台',notifications:'消息通知',delegations:'代报授权',knowledge:'知识库',reports:'服务报表',roles:'角色授权',groups:'支持组管理'})[view.value]);
 let refreshTimer:ReturnType<typeof setInterval>|undefined;
 let generation=0;
 let bootGeneration=0;
@@ -59,7 +60,7 @@ async function load(quiet=false){
     if(view.value==='notifications'){
       const result=await api<{items:Delivery[];mode:string}>('/notifications');if(current!==generation)return;
       notices.value=result.items;notificationMode.value=result.mode;
-    }else if(!['catalog','delegations','knowledge','reports','roles'].includes(view.value)){
+    }else if(!['catalog','delegations','knowledge','reports','roles','groups'].includes(view.value)){
       const result=await api<{items:TicketView[];total:number;counts:Record<string,number>}>(`/tickets?mine=${view.value!=='queue'}&page=${page.value}&size=20${filter.value?`&status=${filter.value}`:''}`);
       if(current!==generation)return;tickets.value=result.items;total.value=result.total;counts.value=result.counts;
     }
@@ -82,7 +83,25 @@ onBeforeUnmount(()=>{window.removeEventListener('hashchange',syncHash);if(refres
   <div v-if="booting" class="boot-state"><Headphones :size="32"/><LoaderCircle class="spin" :size="20"/><p>正在打开 IT 服务台</p></div>
   <div v-else-if="!user" class="boot-state"><Headphones :size="36"/><h1>IT 服务台</h1><p role="alert">{{error}}</p><button class="primary" @click="boot"><RefreshCw :size="17"/>重新进入</button></div>
   <div v-else class="app-shell">
-    <aside class="sidebar"><a class="brand" href="#" @click.prevent="navigate('mine')"><span class="brand-icon"><Headphones :size="23"/></span><span>IT 服务台<small>祥承科技</small></span></a><p class="nav-caption">员工服务</p><nav aria-label="主要导航"><button :class="{active:view==='mine'}" @click="navigate('mine')"><ClipboardList :size="19"/>我的工单</button><button :class="{active:view==='catalog'}" @click="navigate('catalog')"><LayoutGrid :size="19"/>服务目录</button><button :class="{active:view==='knowledge'}" @click="navigate('knowledge')"><BookOpen :size="19"/>知识库</button><button :class="{active:view==='delegations'}" @click="navigate('delegations')"><UserRound :size="19"/>代报授权</button><template v-if="user.groups.length"><p class="nav-caption">支持中心</p><button :class="{active:view==='queue'}" @click="navigate('queue')"><Activity :size="19"/>IT 工作台</button><button :class="{active:view==='reports'}" @click="navigate('reports')"><BarChart3 :size="19"/>服务报表</button><button :class="{active:view==='notifications'}" @click="navigate('notifications')"><Bell :size="19"/>消息通知</button></template><button v-if="user.canManageRoles" :class="{active:view==='roles'}" @click="navigate('roles')"><ShieldCheck :size="19"/>角色授权</button></nav><div class="sidebar-bottom"><span class="avatar"><UserRound :size="18"/></span><div><strong>{{user.name}}</strong><small>{{user.groups.length?'IT 支持人员':'员工'}}</small></div><button v-if="!development" class="icon-button" title="退出登录" aria-label="退出登录" @click="logout"><LogOut :size="17"/></button></div></aside>
+    <aside class="sidebar">
+      <a class="brand" href="#" @click.prevent="navigate('mine')"><span class="brand-icon"><Headphones :size="23"/></span><span>IT 服务台<small>祥承科技</small></span></a><p class="nav-caption">员工服务</p>
+      <nav aria-label="主要导航">
+        <button :class="{active:view==='mine'}" @click="navigate('mine')"><ClipboardList :size="19"/>我的工单</button>
+        <button :class="{active:view==='catalog'}" @click="navigate('catalog')"><LayoutGrid :size="19"/>服务目录</button>
+        <button :class="{active:view==='knowledge'}" @click="navigate('knowledge')"><BookOpen :size="19"/>知识库</button>
+        <button :class="{active:view==='delegations'}" @click="navigate('delegations')"><UserRound :size="19"/>代报授权</button>
+        <template v-if="user.groups.length"><p class="nav-caption">支持中心</p>
+          <button :class="{active:view==='queue'}" @click="navigate('queue')"><Activity :size="19"/>IT 工作台</button>
+          <button :class="{active:view==='reports'}" @click="navigate('reports')"><BarChart3 :size="19"/>服务报表</button>
+          <button :class="{active:view==='notifications'}" @click="navigate('notifications')"><Bell :size="19"/>消息通知</button>
+        </template>
+        <template v-if="user.canManageRoles">
+          <button :class="{active:view==='groups'}" @click="navigate('groups')"><Network :size="19"/>支持组管理</button>
+          <button :class="{active:view==='roles'}" @click="navigate('roles')"><ShieldCheck :size="19"/>角色授权</button>
+        </template>
+      </nav>
+      <div class="sidebar-bottom"><span class="avatar"><UserRound :size="18"/></span><div><strong>{{user.name}}</strong><small>{{user.groups.length?'IT 支持人员':'员工'}}</small></div><button v-if="!development" class="icon-button" title="退出登录" aria-label="退出登录" @click="logout"><LogOut :size="17"/></button></div>
+    </aside>
     <div class="main-shell"><header class="topbar"><span class="breadcrumb">服务中心 <ChevronRight :size="14"/> {{title}}</span><label v-if="development" class="dev-switch">开发身份<select v-model="identity" aria-label="开发身份" @change="switchIdentity"><option value="employee-1">演示员工一</option><option value="employee-2">演示员工二</option><option value="agent-1">服务台工程师</option><option value="agent-2">应用支持工程师</option><option value="agent-3">服务台值班主管（演示）</option><option value="demo-admin-1">演示配置管理员一</option><option value="demo-admin-2">演示配置管理员二</option></select></label><span v-else class="connection-state"><span></span>钉钉已连接</span></header>
       <main class="content"><p v-if="error" class="error-banner" role="alert">{{error}}<button class="text-button" @click="load()">重试</button></p>
         <EmployeeForm v-if="creating" :catalog="catalog" :initial-code="initialCode" @close="back" @created="openTicket"/>
@@ -94,6 +113,7 @@ onBeforeUnmount(()=>{window.removeEventListener('hashchange',syncHash);if(refres
           <KnowledgePanel v-else-if="view==='knowledge'" :key="user.id" :user="user"/>
           <ReportsPanel v-else-if="view==='reports'" :key="user.id" :user="user" @open="openTicket"/>
           <RolesPanel v-else-if="view==='roles'" :key="user.id" :user="user"/>
+          <SupportGroupsPanel v-else-if="view==='groups'" :key="user.id" :user="user"/>
           <template v-else-if="view==='notifications'"><div class="section-heading"><p class="muted">最近 100 条消息 · {{notificationMode==='fake'?'开发模拟':notificationMode==='dingtalk'?'钉钉通知':'发送未启用'}}</p><span class="count-badge danger">{{notices.filter(item=>item.state==='DEAD').length}} 条待处理</span></div><div class="table-wrap"><table><thead><tr><th>工单</th><th>发送状态</th><th>尝试次数</th><th>异常代码</th><th>更新时间</th><th>操作</th></tr></thead><tbody><tr v-for="item in notices" :key="item.id"><td>{{item.number}}</td><td><span class="status" :class="{failed:item.state==='DEAD'}">{{noticeLabels[item.state]??item.state}}</span></td><td>{{item.attempts}}</td><td class="mono">{{item.lastError??'—'}}</td><td>{{formatDate(item.updatedAt)}}</td><td><button v-if="item.state==='DEAD' && item.canRetry" class="icon-button" title="重试发送" aria-label="重试发送" :disabled="!!retrying" @click="retry(item.id)"><RefreshCw :size="17" :class="{spin:retrying===item.id}"/></button></td></tr></tbody></table><div v-if="!notices.length" class="empty-state"><Bell :size="28"/><p>暂无消息记录</p></div></div></template>
           <template v-else><section class="summary-strip" aria-label="工单概况"><div><span>进行中</span><strong>{{openCount}}</strong></div><div><span>{{view==='queue'?'待接单':'排队中'}}</span><strong>{{counts.QUEUED??0}}</strong></div><div><span>{{view==='queue'?'等待员工补充':'待我补充'}}</span><strong class="amber-text">{{counts.WAITING_USER??0}}</strong></div><div><span>{{view==='queue'?'等待确认':'待我确认'}}</span><strong class="teal-text">{{counts.PENDING_CONFIRMATION??0}}</strong></div></section><div class="list-toolbar"><div class="segmented"><button :class="{selected:!filter}" @click="filter=''">全部</button><button :class="{selected:filter==='QUEUED'}" @click="filter='QUEUED'">待接单</button><button :class="{selected:filter==='IN_PROGRESS'}" @click="filter='IN_PROGRESS'">处理中</button></div><label class="filter-label">状态<select v-model="filter" aria-label="工单状态"><option value="">全部状态</option><option v-for="(label,status) in statuses" :key="status" :value="status">{{label}}</option></select></label></div><div class="table-wrap ticket-table" :aria-busy="loading"><table><thead><tr><th>工单 / 标题</th><th>状态</th><th>优先级</th><th>服务</th><th>更新时间</th><th></th></tr></thead><tbody><tr v-for="ticket in tickets" :key="ticket.id"><td><button class="ticket-link" @click="openTicket(ticket.id)"><span>{{ticket.number}}</span><strong>{{ticket.subject}}</strong></button></td><td><span class="status" :data-status="ticket.status">{{statuses[ticket.status]}}</span></td><td><span class="priority" :data-priority="ticket.priority">{{ticket.priority}}</span></td><td>{{catalog.find(item=>item.code===ticket.serviceCode)?.name??ticket.serviceCode}}</td><td>{{formatDate(ticket.updatedAt)}}</td><td><button class="icon-button" :aria-label="`查看${ticket.number}`" title="查看工单" @click="openTicket(ticket.id)"><ChevronRight :size="18"/></button></td></tr></tbody></table><div v-if="!tickets.length" class="empty-state"><LoaderCircle v-if="loading" class="spin" :size="28"/><ClipboardList v-else :size="32"/><h2>{{loading?'正在加载工单':'暂无工单'}}</h2><p v-if="!loading">{{filter?'当前状态没有工单。':view==='queue'?'所属支持组暂时没有工单。':'有 IT 问题，随时提交给服务台。'}}</p><button v-if="!loading&&view==='mine'&&!filter" class="primary" @click="create()"><Plus :size="17"/>提交报障</button></div></div><footer class="pagination"><span>共 {{total}} 条</span><div><button class="icon-button" title="上一页" aria-label="上一页" :disabled="page<=1||loading" @click="page--"><ChevronLeft :size="18"/></button><span>{{page}} / {{pages}}</span><button class="icon-button" title="下一页" aria-label="下一页" :disabled="page>=pages||loading" @click="page++"><ChevronRight :size="18"/></button></div></footer></template>
         </template>

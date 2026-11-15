@@ -77,6 +77,19 @@ export interface RoleBindingInput {
   validFrom:string; validTo:string; reason:string; contentClass:'GENERAL';
 }
 export interface RoleDecisionInput { expectedVersion:number; reason:string; decision?:'APPROVE'|'REJECT'; contentClass:'GENERAL' }
+export interface SupportGroupInput { id:string; name:string; reason:string; contentClass:'GENERAL' }
+export interface SupportGroupUpdateInput { name:string; expectedVersion:number; reason:string; contentClass:'GENERAL' }
+export interface MembershipChangeInput {
+  id:string; employeeId:string; operation:'ADD'|'REMOVE'; expectedGroupVersion:number; reason:string; contentClass:'GENERAL';
+}
+export interface MembershipReviewInput { expectedVersion:number; decision:'APPROVE'|'REJECT'; reason:string; contentClass:'GENERAL' }
+export interface SupportGroupView { id:string; name:string; version:number; activeMembers:number; pendingChanges:number }
+export interface MembershipChangeView {
+  id:string; groupId:string; employeeId:string; employeeName:string; operation:'ADD'|'REMOVE'; groupVersion:number;
+  status:'PENDING'|'APPROVED'|'REJECTED'; requestedBy:string; reviewedBy:string|null; reason:string; reviewReason:string|null;
+  version:number; createdAt:string;
+}
+export interface SupportGroupMemberView { id:string; name:string; active:boolean; roles:string[] }
 export interface RoleBindingView extends Omit<RoleBindingInput,'contentClass'> {
   employeeName:string; groupName:string|null; status:'PENDING'|'ACTIVE'|'REJECTED'|'REVOKED'; source:'REVIEW'|'BOOTSTRAP';
   requestedBy:string; reviewedBy:string|null; revokedBy:string|null; reviewReason:string|null; revokeReason:string|null;

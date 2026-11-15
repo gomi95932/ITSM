@@ -86,6 +86,8 @@ jobs:
         run: node tests/integration/ownership.mjs
       - name: Verify scoped roles, independent review and immediate dispatch revocation
         run: node tests/integration/roles.mjs
+      - name: Verify governed support-group membership and responsibility continuity
+        run: node tests/integration/support-groups.mjs
       - name: Verify targeted notification audiences, live revocation and scoped retries
         run: node tests/integration/notification-audience.mjs
       - name: Verify resolution-based confirmation auto-close
