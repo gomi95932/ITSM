@@ -38,6 +38,19 @@ export class WorkspaceController {
       WHERE t.owner_group_id=ANY($1::text[]) ORDER BY d.updated_at DESC LIMIT 100`,[actor.groups,actor.id]);
     return { mode: process.env.NOTIFICATION_MODE ?? 'disabled', items:result.rows };
   }
+  @Get('routing-alerts') async routingAlerts(@Headers() h: H) {
+    const actor = await this.identity.identity(auth(h));
+    const result = await this.db.pool.query(`SELECT t.id AS "ticketId",t.number,a.owner_group_id AS "ownerGroupId",
+      a.reason,a.opened_at AS "openedAt"
+      FROM ticket_routing_alerts a JOIN tickets t ON t.id=a.ticket_id
+      WHERE a.resolved_at IS NULL AND (
+        EXISTS(SELECT 1 FROM role_bindings r WHERE r.employee_id=$1 AND r.role_code='PLATFORM_ADMIN'
+          AND ${ROLE_EFFECTIVE_SQL}) OR
+        EXISTS(SELECT 1 FROM role_bindings r WHERE r.employee_id=$1 AND r.group_id=a.owner_group_id
+          AND r.role_code IN ('DISPATCHER','GROUP_LEAD') AND ${ROLE_EFFECTIVE_SQL}))
+      ORDER BY a.opened_at,a.ticket_id LIMIT 100`,[actor.id]);
+    return { items:result.rows };
+  }
   @Post('notifications/:id/retry') @HttpCode(200) async retry(@Headers() h: H,@Param('id') id: string) {
     const actor = await this.identity.identity(auth(h),true); if (!actor.groups.length) throw new NotFoundException();
     if (!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(id)) throw new NotFoundException();

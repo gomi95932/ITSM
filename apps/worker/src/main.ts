@@ -121,26 +121,64 @@ async function priorityReviewTimers() {
 
 async function recoverOwnership() {
   await transaction(async client => {
-    const rows = await client.query(`SELECT t.* FROM tickets t WHERE t.status NOT IN ('CLOSED','CANCELLED','REJECTED') AND
+    await client.query(`UPDATE ticket_routing_alerts a SET resolved_at=now() FROM tickets t
+      WHERE a.ticket_id=t.id AND a.resolved_at IS NULL AND t.status IN ('CLOSED','CANCELLED','REJECTED')`);
+    const rows = await client.query(`SELECT t.* FROM tickets t LEFT JOIN ticket_routing_alerts a ON a.ticket_id=t.id AND a.resolved_at IS NULL
+      WHERE t.status NOT IN ('CLOSED','CANCELLED','REJECTED') AND
       ((t.assignee_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM employees e JOIN group_memberships m ON m.employee_id=e.id
         WHERE e.id=t.assignee_id AND e.active AND m.group_id=t.owner_group_id)) OR
        (t.pending_assignee_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM employees e JOIN group_memberships m ON m.employee_id=e.id
-        WHERE e.id=t.pending_assignee_id AND e.active AND m.group_id=t.pending_group_id)))
-      ORDER BY t.updated_at,t.id LIMIT 100 FOR UPDATE OF t SKIP LOCKED`);
+        WHERE e.id=t.pending_assignee_id AND e.active AND m.group_id=t.pending_group_id)) OR
+       a.ticket_id IS NOT NULL OR
+       NOT EXISTS (SELECT 1 FROM employees e JOIN group_memberships m ON m.employee_id=e.id
+        WHERE e.active AND m.group_id=t.owner_group_id))
+      ORDER BY COALESCE(a.last_checked_at,t.updated_at),t.id LIMIT 100 FOR UPDATE OF t SKIP LOCKED`);
     for (const row of rows.rows) {
       const valid = async (employee:string|null,group:string|null) => !employee || !!(await client.query(`SELECT e.id FROM employees e
         JOIN group_memberships m ON m.employee_id=e.id WHERE e.id=$1 AND e.active AND m.group_id=$2 FOR SHARE OF e,m`,[employee,group])).rowCount;
+      const groupAvailable = async (group:string) => !!(await client.query(`SELECT e.id FROM employees e
+        JOIN group_memberships m ON m.employee_id=e.id WHERE e.active AND m.group_id=$1
+        ORDER BY e.id LIMIT 1 FOR SHARE OF e,m`,[group])).rowCount;
       const ownerValid = await valid(row.assignee_id,row.owner_group_id);
       const targetValid = await valid(row.pending_assignee_id,row.pending_group_id);
-      if (ownerValid && targetValid) continue;
-      const updated = await client.query(`UPDATE tickets SET assignee_id=$2,pending_group_id=NULL,pending_assignee_id=NULL,
+      let group = row.owner_group_id as string;
+      const available = await groupAvailable(group);
+      if (!available) {
+        const visited = new Set<string>([group]);
+        while (true) {
+          const next = (await client.query<{ fallback_group_id:string|null }>(
+            'SELECT fallback_group_id FROM support_groups WHERE id=$1',[group])).rows[0]?.fallback_group_id;
+          if (!next || visited.has(next)) break;
+          visited.add(next);
+          group = next;
+          if (await groupAvailable(group)) break;
+        }
+        if (!(await groupAvailable(group))) {
+          const existing = await client.query<{ resolved_at:Date|null }>(
+            'SELECT resolved_at FROM ticket_routing_alerts WHERE ticket_id=$1 FOR UPDATE',[row.id]);
+          if (existing.rowCount) await client.query(`UPDATE ticket_routing_alerts SET owner_group_id=$2,
+            opened_at=CASE WHEN resolved_at IS NOT NULL THEN now() ELSE opened_at END,
+            last_checked_at=now(),resolved_at=NULL WHERE ticket_id=$1`,[row.id,row.owner_group_id]);
+          else await client.query(`INSERT INTO ticket_routing_alerts(ticket_id,reason,owner_group_id)
+            VALUES ($1,'NO_ACTIVE_FALLBACK',$2)`,[row.id,row.owner_group_id]);
+          if (!existing.rowCount || existing.rows[0]?.resolved_at) await record(client,row,'OWNERSHIP_ESCALATION_REQUIRED',{
+            reason:'NO_ACTIVE_FALLBACK',ownerGroupId:row.owner_group_id,
+          },row.status,row.status);
+          group = row.owner_group_id;
+        }
+      }
+      const moved = group !== row.owner_group_id;
+      if (!moved && available) await client.query('UPDATE ticket_routing_alerts SET resolved_at=now() WHERE ticket_id=$1 AND resolved_at IS NULL',[row.id]);
+      if (!moved && ownerValid && targetValid) continue;
+      const updated = await client.query(`UPDATE tickets SET owner_group_id=$2,assignee_id=$3,pending_group_id=NULL,pending_assignee_id=NULL,
         assignment_kind=NULL,assignment_state=CASE WHEN pending_assignee_id IS NOT NULL THEN 'INVALIDATED' ELSE assignment_state END,
         assignment_due_at=NULL,assignment_offered_at=NULL,assignment_policy_version_id=NULL,
-        version=version+1,updated_at=now() WHERE id=$1 RETURNING *`,[row.id,ownerValid ? row.assignee_id : null]);
+        version=version+1,updated_at=now() WHERE id=$1 RETURNING *`,[row.id,group,moved ? null : ownerValid ? row.assignee_id : null]);
       await record(client,updated.rows[0],'OWNERSHIP_RECOVERED',{
-        reason:ownerValid ? 'HANDOVER_TARGET_UNAVAILABLE' : 'ASSIGNEE_UNAVAILABLE',
-        oldAssigneeId:row.assignee_id,oldPendingAssigneeId:row.pending_assignee_id,
+        reason:moved ? 'OWNER_GROUP_UNAVAILABLE' : ownerValid ? 'HANDOVER_TARGET_UNAVAILABLE' : 'ASSIGNEE_UNAVAILABLE',
+        oldOwnerGroupId:row.owner_group_id,oldAssigneeId:row.assignee_id,oldPendingAssigneeId:row.pending_assignee_id,
       },row.status,row.status,row);
+      if (moved) await client.query('UPDATE ticket_routing_alerts SET resolved_at=now() WHERE ticket_id=$1 AND resolved_at IS NULL',[row.id]);
     }
     await client.query('DELETE FROM auth_sessions WHERE employee_id IN (SELECT id FROM employees WHERE NOT active)');
   });

@@ -28,6 +28,7 @@ const audiences: Readonly<Record<string, Audience>> = {
   P1_REVIEW_ROUTED: { owner:true, escalation:true, reviewer:true },
   SLA_BREACH: { owner:true, escalation:true },
   OWNERSHIP_RECOVERED: { owner:true, escalation:true },
+  OWNERSHIP_ESCALATION_REQUIRED: { escalation:true },
   FEEDBACK_SUBMITTED: { owner:true },
 };
 
