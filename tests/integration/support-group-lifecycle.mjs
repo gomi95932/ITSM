@@ -75,10 +75,10 @@ await sql(`INSERT INTO service_catalog(code,type,form_version,group_id,name) VAL
     VALUES(${q(reqTicket)},${q('REQ-'+suffix)},'employee-1',${q(group)},${q(code+'-req')},'REQ',1,'Lifecycle request','Synthetic fixture','{}','INDIVIDUAL','LOW','P4','CLOSED');
   INSERT INTO request_approvals(id,ticket_id,corp_id,snapshot,expires_at,state)
     VALUES(${q(approval)},${q(reqTicket)},'ci-lifecycle','{}',now()+interval '1 day','BLOCKED');
-  INSERT INTO request_fulfillments(id,approval_id,ticket_id,assignee_id,ready_until)
-    VALUES(${q(fulfillment)},${q(approval)},${q(reqTicket)},${q(member)},now()+interval '1 day');`);
+  INSERT INTO request_fulfillments(id,approval_id,ticket_id,assignee_id,ready_until,state,delivered_at,access_expires_at)
+    VALUES(${q(fulfillment)},${q(approval)},${q(reqTicket)},${q(member)},now()+interval '1 day','REVOKE_DUE',now(),now()+interval '1 day');`);
 assert.ok((await dependencies()).items.some(item=>item.kind==='FULFILLMENT'),'closed tickets can still have unresolved entitlements');
-await sql(`UPDATE request_fulfillments SET state='BLOCKED' WHERE id=${q(fulfillment)}`);
+await sql(`UPDATE request_fulfillments SET state='REVOKED',revoked_at=now() WHERE id=${q(fulfillment)}`);
 const queuedCount=await sql(`BEGIN; UPDATE request_approvals SET state='QUEUED' WHERE id=${q(approval)};
   SELECT count(*) FROM support_group_dependencies(${q(group)}) WHERE kind='APPROVAL'; ROLLBACK;`);
 assert.ok(queuedCount.split('\n').includes('1'));
