@@ -1,5 +1,6 @@
 export const API_PREFIX = 'api/v1';
 export { DEFAULT_CALENDAR, SLA_TARGETS, serviceMinutes, type ServiceCalendar } from './sla.js';
+export { assignmentDeadline } from './assignment.js';
 
 export interface HealthResponse {
   status: 'ok';
@@ -19,7 +20,7 @@ export interface TicketListResponse {
   counts: Partial<Record<TicketStatus, number>>;
   workQueues?: WorkQueueCounts;
 }
-export const TICKET_ACTIONS = ['ACCEPT', 'REQUEST_INFO', 'ADD_INFO', 'WAIT_VENDOR', 'RESOLVE', 'CONFIRM', 'REOPEN', 'CANCEL', 'REASSIGN', 'ACCEPT_HANDOVER', 'DECLINE_HANDOVER', 'CANCEL_HANDOVER'] as const;
+export const TICKET_ACTIONS = ['ACCEPT', 'REQUEST_INFO', 'ADD_INFO', 'WAIT_VENDOR', 'RESOLVE', 'CONFIRM', 'REOPEN', 'CANCEL', 'REASSIGN', 'ACCEPT_HANDOVER', 'DECLINE_HANDOVER', 'CANCEL_HANDOVER', 'ASSIGN_OFFER', 'ACCEPT_OFFER', 'DECLINE_OFFER', 'CANCEL_OFFER'] as const;
 export type TicketAction = typeof TICKET_ACTIONS[number];
 export type TicketType = 'INC' | 'REQ' | 'GEN';
 export type Impact = 'COMPANY' | 'DEPARTMENT' | 'INDIVIDUAL';
@@ -101,6 +102,7 @@ export interface TicketView extends TicketReceipt {
   submittedById: string; originalServiceCode: string;
   canCorrectClassification?: boolean; canAddInfo?: boolean;
   canDispatchQueued?: boolean;
+  canAssignOffer?: boolean;
   priorityReviewState: PriorityReviewState;
   priorityCandidateAt: string | null;
   priorityReviewedAt: string | null;
@@ -130,4 +132,8 @@ export interface TicketReceipt {
   pendingGroupId: string | null;
   pendingAssigneeId: string | null;
   pendingAssigneeName?: string | null;
+  assignmentKind?: 'OFFER' | 'HANDOVER' | null;
+  assignmentState?: 'PENDING' | 'ACCEPTED' | 'DECLINED' | 'CANCELLED' | 'EXPIRED' | 'INVALIDATED' | null;
+  assignmentDueAt?: string | null;
+  assignmentPolicyVersionId?: string | null;
 }

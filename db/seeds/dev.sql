@@ -6,6 +6,12 @@ INSERT INTO support_groups(id, name) VALUES ('service-desk', 'IT 服务台'),('a
 INSERT INTO group_memberships(employee_id, group_id) VALUES ('agent-1', 'service-desk'),('agent-2','applications'),('agent-3','service-desk') ON CONFLICT DO NOTHING;
 -- Disposable demonstration identities only; never bootstrap real administrators from seeds.
 INSERT INTO employees(id,display_name) VALUES ('demo-admin-1','演示配置管理员一'),('demo-admin-2','演示配置管理员二') ON CONFLICT DO NOTHING;
+-- Disposable approval for the candidate-offer CI path, not a production SLA commitment.
+INSERT INTO assignment_policy_versions(id,group_id,priority,receive_minutes,calendar_snapshot,valid_from,valid_to,proposed_by,approved_by,approved_at,active)
+VALUES ('dc000000-0000-4000-8000-000000000013','service-desk','P3',60,
+  '{"timeZone":"Asia/Shanghai","startHour":9,"endHour":18,"holidays":[],"workdays":[]}',
+  now()-interval '1 day',now()+interval '30 days','demo-admin-1','demo-admin-2',now(),true)
+ON CONFLICT (id) DO NOTHING;
 WITH inserted AS (
   INSERT INTO role_bindings(id,employee_id,role_code,group_id,valid_from,valid_to,status,source,requested_by,reviewed_by,reason,reviewed_at) VALUES
     ('dc000000-0000-4000-8000-000000000001','demo-admin-1','PLATFORM_ADMIN',NULL,now(),now()+interval '365 days','ACTIVE','BOOTSTRAP','demo-admin-1','demo-admin-2','Disposable CI bootstrap',now()),

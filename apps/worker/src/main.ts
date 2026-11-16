@@ -93,7 +93,9 @@ async function deliver() {
 async function record(client:PoolClient,row:any,action:string,detail:object,from:string,to:string,previous?:any) {
   const event = randomUUID(), request = randomUUID();
   await client.query('INSERT INTO ticket_events(id,ticket_id,actor_id,action,from_status,to_status,detail,request_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)',[event,row.id,'system:scheduler',action,from,to,JSON.stringify(detail),request]);
-  const ownership=(value:any)=>({ ownerGroupId:value.owner_group_id,assigneeId:value.assignee_id,pendingGroupId:value.pending_group_id,pendingAssigneeId:value.pending_assignee_id });
+  const ownership=(value:any)=>({ ownerGroupId:value.owner_group_id,assigneeId:value.assignee_id,pendingGroupId:value.pending_group_id,pendingAssigneeId:value.pending_assignee_id,
+    assignmentKind:value.assignment_kind,assignmentState:value.assignment_state,assignmentDueAt:value.assignment_due_at,
+    assignmentPolicyVersionId:value.assignment_policy_version_id });
   await client.query('INSERT INTO audit_logs(ticket_id,event_id,actor_id,request_id,action,before_value,after_value) VALUES ($1,$2,$3,$4,$5,$6,$7)',[row.id,event,'system:scheduler',request,action,JSON.stringify({ status:from,...(previous ? ownership(previous) : {}) }),JSON.stringify({ status:to,version:row.version,...ownership(row) })]);
   await client.query('INSERT INTO outbox_events(ticket_id,event_id,kind,payload) VALUES ($1,$2,$3,$4)',[row.id,event,action.startsWith('P1_') ? 'P1_ALERT' : 'TICKET_CHANGED',JSON.stringify({ ticketId:row.id,eventId:event })]);
 }
@@ -132,6 +134,8 @@ async function recoverOwnership() {
       const targetValid = await valid(row.pending_assignee_id,row.pending_group_id);
       if (ownerValid && targetValid) continue;
       const updated = await client.query(`UPDATE tickets SET assignee_id=$2,pending_group_id=NULL,pending_assignee_id=NULL,
+        assignment_kind=NULL,assignment_state=CASE WHEN pending_assignee_id IS NOT NULL THEN 'INVALIDATED' ELSE assignment_state END,
+        assignment_due_at=NULL,assignment_offered_at=NULL,assignment_policy_version_id=NULL,
         version=version+1,updated_at=now() WHERE id=$1 RETURNING *`,[row.id,ownerValid ? row.assignee_id : null]);
       await record(client,updated.rows[0],'OWNERSHIP_RECOVERED',{
         reason:ownerValid ? 'HANDOVER_TARGET_UNAVAILABLE' : 'ASSIGNEE_UNAVAILABLE',
@@ -139,6 +143,24 @@ async function recoverOwnership() {
       },row.status,row.status,row);
     }
     await client.query('DELETE FROM auth_sessions WHERE employee_id IN (SELECT id FROM employees WHERE NOT active)');
+  });
+}
+
+async function expireAssignments() {
+  await transaction(async client=>{
+    const rows=await client.query(`SELECT * FROM tickets WHERE pending_assignee_id IS NOT NULL
+      AND assignment_due_at<=now() AND status NOT IN ('CLOSED','CANCELLED','REJECTED')
+      ORDER BY assignment_due_at,id LIMIT 100 FOR UPDATE SKIP LOCKED`);
+    for (const row of rows.rows) {
+      const updated=await client.query(`UPDATE tickets SET pending_group_id=NULL,pending_assignee_id=NULL,
+        assignment_kind=NULL,assignment_state='EXPIRED',assignment_due_at=NULL,assignment_offered_at=NULL,
+        assignment_policy_version_id=NULL,version=version+1,updated_at=now() WHERE id=$1 RETURNING *`,[row.id]);
+      await record(client,updated.rows[0],'ASSIGNMENT_EXPIRED',{
+        reason:'CANDIDATE_DID_NOT_ACCEPT',assignmentKind:row.assignment_kind,
+        targetGroupId:row.pending_group_id,targetAssigneeId:row.pending_assignee_id,
+        assignmentPolicyVersionId:row.assignment_policy_version_id,assignmentDueAt:row.assignment_due_at,
+      },row.status,row.status,row);
+    }
   });
 }
 
@@ -151,7 +173,7 @@ async function timers() {
       await client.query('UPDATE tickets SET sla_checked_at=now() WHERE id=$1',[row.id]);
       const closeHours = Number(process.env.AUTO_CLOSE_HOURS ?? 72);
       if (shouldAutoClose(row.status,row.completed_at,row.clock,closeHours)) {
-        const updated = await client.query("UPDATE tickets SET status='CLOSED',pending_group_id=NULL,pending_assignee_id=NULL,version=version+1,updated_at=now() WHERE id=$1 RETURNING *",[row.id]);
+        const updated = await client.query("UPDATE tickets SET status='CLOSED',pending_group_id=NULL,pending_assignee_id=NULL,assignment_kind=NULL,assignment_state=CASE WHEN pending_assignee_id IS NOT NULL THEN 'CANCELLED' ELSE assignment_state END,assignment_offered_at=NULL,assignment_due_at=NULL,assignment_policy_version_id=NULL,version=version+1,updated_at=now() WHERE id=$1 RETURNING *",[row.id]);
         await record(client,updated.rows[0],'AUTO_CLOSE',{ reason:`待确认超过 ${closeHours} 小时自动关闭` },row.status,'CLOSED',row);
         continue;
       }
@@ -173,7 +195,7 @@ async function timers() {
 let ticks = 0;
 async function tick() {
   try {
-    if (ticks++ % 15 === 0) { await recoverOwnership(); await priorityReviewTimers(); await maintainRequestApprovals(db); await maintainRequestFulfillments(db); await timers(); }
+    if (ticks++ % 15 === 0) { await recoverOwnership(); await expireAssignments(); await priorityReviewTimers(); await maintainRequestApprovals(db); await maintainRequestFulfillments(db); await timers(); }
     await expand();
     for (let i=0;i<10 && !stopped;i++) await deliver();
     await writeFile('/tmp/itsm-worker-heartbeat', String(Date.now()), { mode:0o600 });

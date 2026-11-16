@@ -40,18 +40,21 @@ const available=computed<TicketAction[]>(()=>{
   if(mine.value){if(['NEW','QUEUED'].includes(state))result.push('CANCEL');if(state==='WAITING_USER')result.push('ADD_INFO');if(state==='PENDING_CONFIRMATION')result.push('CONFIRM','REOPEN');}
   if(!mine.value&&ticket.value.canAddInfo&&state==='WAITING_USER')result.push('ADD_INFO');
   const active=['QUEUED','IN_PROGRESS','WAITING_USER','WAITING_VENDOR','PENDING_CONFIRMATION'].includes(state);
-  if(active&&ticket.value.pendingAssigneeId===props.user.id)result.push('ACCEPT_HANDOVER','DECLINE_HANDOVER');
+  if(active&&ticket.value.pendingAssigneeId===props.user.id)result.push(ticket.value.assignmentKind==='OFFER'?'ACCEPT_OFFER':'ACCEPT_HANDOVER',ticket.value.assignmentKind==='OFFER'?'DECLINE_OFFER':'DECLINE_HANDOVER');
   if(isAgent.value&&active){
     const owner=ticket.value.assigneeId===props.user.id;
     if(!ticket.value.assigneeId&&!ticket.value.pendingAssigneeId)result.push('ACCEPT');
     if(owner){if(state==='IN_PROGRESS')result.push('REQUEST_INFO','WAIT_VENDOR','RESOLVE');if(state==='WAITING_VENDOR')result.push('RESOLVE');}
-    if(owner||(!ticket.value.assigneeId&&state==='QUEUED'&&ticket.value.canDispatchQueued))result.push(ticket.value.pendingAssigneeId?'CANCEL_HANDOVER':'REASSIGN');
+    if(owner||(!ticket.value.assigneeId&&state==='QUEUED'&&ticket.value.canDispatchQueued)){
+      if(ticket.value.pendingAssigneeId)result.push(ticket.value.assignmentKind==='OFFER'?'CANCEL_OFFER':'CANCEL_HANDOVER');
+      else {result.push('REASSIGN');if(ticket.value.canAssignOffer)result.push('ASSIGN_OFFER');}
+    }
   }
   return result;
 });
-const commands:Record<string,string>={ACCEPT:'接单并回复',REQUEST_INFO:'请求补充',ADD_INFO:'补充信息',WAIT_VENDOR:'等待厂商',RESOLVE:'提交解决方案',CONFIRM:'确认已解决',REOPEN:'仍未解决',CANCEL:'撤销报障',REASSIGN:'发起交接',ACCEPT_HANDOVER:'确认接收',DECLINE_HANDOVER:'退回交接',CANCEL_HANDOVER:'撤回交接'};
+const commands:Record<string,string>={ACCEPT:'接单并回复',REQUEST_INFO:'请求补充',ADD_INFO:'补充信息',WAIT_VENDOR:'等待厂商',RESOLVE:'提交解决方案',CONFIRM:'确认已解决',REOPEN:'仍未解决',CANCEL:'撤销报障',REASSIGN:'发起交接',ACCEPT_HANDOVER:'确认接收',DECLINE_HANDOVER:'退回交接',CANCEL_HANDOVER:'撤回交接',ASSIGN_OFFER:'指定候选人',ACCEPT_OFFER:'确认接单并回复',DECLINE_OFFER:'拒绝接单',CANCEL_OFFER:'撤回派单'};
 async function load(){loading.value=true;error.value='';try{ticket.value=await api<TicketView>(`/tickets/${props.id}`);catalog.value=(await api<{items:CatalogItem[]}>('/catalog')).items;if(props.user.groups.length)groups.value=(await api<{items:{id:string;name:string}[]}>('/support-groups')).items;}catch(e){error.value=errorText(e);}finally{loading.value=false;}}
-function choose(value:TicketAction){correcting.value=false;action.value=value;comment.value='';reason.value='';dueAt.value='';vendorReference.value='';vendorOwner.value='';category.value='';evidence.value='';target.value='';targetPerson.value='';contentSafe.value=false;key.value=createRequestKey();error.value='';}
+function choose(value:TicketAction){correcting.value=false;action.value=value;comment.value='';reason.value='';dueAt.value='';vendorReference.value='';vendorOwner.value='';category.value='';evidence.value='';target.value=value==='ASSIGN_OFFER'?ticket.value?.ownerGroupId??'':'';targetPerson.value='';contentSafe.value=false;key.value=createRequestKey();error.value='';}
 async function submitClassification(){
   if(!ticket.value||!classificationService.value||!classificationSafe.value||busy.value)return;busy.value=true;error.value='';
   try{await api(`/tickets/${props.id}/classification`,{method:'POST',key:classificationKey.value,body:{contentClass:'GENERAL',expectedVersion:ticket.value.version,serviceCode:classificationCode.value,formVersion:classificationService.value.formVersion,fields:classificationFields.value,reason:classificationReason.value}});
@@ -64,7 +67,7 @@ async function submit(){
   if(comment.value)body.comment=comment.value;if(reason.value)body.reason=reason.value;
   if(dueAt.value)body.dueAt=new Date(dueAt.value).toISOString();
   if(vendorReference.value)body.vendorReference=vendorReference.value;if(vendorOwner.value)body.vendorOwner=vendorOwner.value;
-  if(category.value)body.resolutionCategory=category.value;if(evidence.value)body.evidence=evidence.value;if(target.value)body.targetGroupId=target.value;if(targetPerson.value)body.targetAssigneeId=targetPerson.value;
+  if(category.value)body.resolutionCategory=category.value;if(evidence.value)body.evidence=evidence.value;if(target.value&&action.value==='REASSIGN')body.targetGroupId=target.value;if(targetPerson.value)body.targetAssigneeId=targetPerson.value;
   try{await api(`/tickets/${props.id}/actions`,{method:'POST',body,key:key.value});action.value=undefined;await load();emit('changed');}
   catch(e){if(e instanceof ApiError&&e.status===409){await load();key.value=createRequestKey();}error.value=errorText(e);}finally{busy.value=false;}
 }
@@ -88,7 +91,7 @@ onMounted(load);
 </script>
 <template>
   <section class="detail-page"><button class="text-button" @click="emit('back')"><ArrowLeft :size="17"/> 返回工单列表</button><div v-if="loading&&!ticket" class="empty-state"><LoaderCircle class="spin"/> 正在加载</div><p v-if="error" class="error-banner" role="alert">{{error}}</p>
-    <template v-if="ticket"><div class="page-title"><div><p class="eyebrow">{{ticket.number}}</p><h1>{{ticket.subject}}</h1></div><button class="icon-button" title="刷新" aria-label="刷新工单" :disabled="loading" @click="load"><RefreshCw :size="18" :class="{spin:loading}"/></button></div><div class="ticket-meta"><span class="status" :data-status="ticket.status">{{statuses[ticket.status]}}</span><span class="priority" :data-priority="ticket.priority">{{ticket.priority}}</span><span>{{formatDate(ticket.createdAt)}}</span><span>责任组：{{groups.find(g=>g.id===ticket?.ownerGroupId)?.name??ticket.ownerGroupId}}</span><span>处理人：{{ticket.assigneeName??ticket.assigneeId??'组内待认领'}}</span><span v-if="ticket.pendingAssigneeId" class="amber-text">待交接：{{ticket.pendingAssigneeName??ticket.pendingAssigneeId}}</span></div>
+    <template v-if="ticket"><div class="page-title"><div><p class="eyebrow">{{ticket.number}}</p><h1>{{ticket.subject}}</h1></div><button class="icon-button" title="刷新" aria-label="刷新工单" :disabled="loading" @click="load"><RefreshCw :size="18" :class="{spin:loading}"/></button></div><div class="ticket-meta"><span class="status" :data-status="ticket.status">{{statuses[ticket.status]}}</span><span class="priority" :data-priority="ticket.priority">{{ticket.priority}}</span><span>{{formatDate(ticket.createdAt)}}</span><span>责任组：{{groups.find(g=>g.id===ticket?.ownerGroupId)?.name??ticket.ownerGroupId}}</span><span>处理人：{{ticket.assigneeName??ticket.assigneeId??'组内待认领'}}</span><span v-if="ticket.pendingAssigneeId" class="amber-text">{{ticket.assignmentKind==='OFFER'?'待候选确认':'待交接'}}：{{ticket.pendingAssigneeName??ticket.pendingAssigneeId}}<template v-if="ticket.assignmentDueAt"> · 截止 {{formatDate(ticket.assignmentDueAt)}}</template></span></div>
       <section v-if="ticket.priorityReviewState!=='NOT_REQUIRED'" class="detail-section priority-review" aria-label="P1 优先级确认">
         <div class="section-heading"><h2>P1 优先级确认</h2><span class="status">{{reviewLabels[ticket.priorityReviewState]}}</span></div>
         <p v-if="ticket.priorityReviewedAt" class="muted">{{formatDate(ticket.priorityReviewedAt)}} · {{ticket.priorityReviewedBy}} · 当前 {{ticket.priority}}</p>
@@ -138,16 +141,16 @@ onMounted(load);
         <section class="detail-section sla-section"><h2><Clock3 :size="17"/> 服务时效</h2><div v-for="sla in ticket.sla??[]" :key="sla.cycle" class="sla-cycle"><div class="section-heading"><strong>第 {{sla.cycle}} 轮</strong><span :class="sla.breached?'danger-text':'muted'">{{sla.completed?'已停止':sla.paused?'等待补充，解决计时暂停':sla.breached?'已超时':'计时中'}}</span></div><p>首次响应 <strong>{{duration(sla.responseMinutes)}}</strong> / {{duration(sla.responseTarget)}}</p><p>解决耗时 <strong>{{duration(sla.resolutionMinutes)}}</strong> / {{duration(sla.resolutionTarget)}}</p><p v-if="!sla.responded&&!sla.completed" class="muted">等待人工回复送达</p></div><p v-if="!ticket.sla?.length" class="muted">此工单暂无 SLA 周期。</p><p class="caption">当前使用试点服务日历</p></section>
         <section v-if="available.length" class="detail-section"><h2>处理操作</h2><div class="action-list"><button v-for="value in available" :key="value" class="secondary" :class="{selected:action===value}" @click="choose(value)">{{commands[value]}}</button></div>
           <form v-if="action" class="action-form" @submit.prevent="submit">
-            <label v-if="['ACCEPT','ACCEPT_HANDOVER','REQUEST_INFO','ADD_INFO','WAIT_VENDOR','RESOLVE'].includes(action)">{{action==='RESOLVE'?'解决说明':action==='REQUEST_INFO'?'需要补充的内容':'回复内容'}}<textarea v-model="comment" required maxlength="2000" rows="3"/></label>
-            <label v-if="['REOPEN','REASSIGN','DECLINE_HANDOVER','CANCEL_HANDOVER'].includes(action)">原因<textarea v-model="reason" required maxlength="2000" rows="3"/></label>
-            <template v-if="action==='REASSIGN'">
-              <label>目标支持组<select v-model="target" required><option value="">请选择</option><option v-for="group in groups" :key="group.id" :value="group.id">{{group.name}}</option></select></label>
+            <label v-if="['ACCEPT','ACCEPT_HANDOVER','ACCEPT_OFFER','REQUEST_INFO','ADD_INFO','WAIT_VENDOR','RESOLVE'].includes(action)">{{action==='RESOLVE'?'解决说明':action==='REQUEST_INFO'?'需要补充的内容':'回复内容'}}<textarea v-model="comment" required maxlength="2000" rows="3"/></label>
+            <label v-if="['REOPEN','REASSIGN','ASSIGN_OFFER','DECLINE_HANDOVER','CANCEL_HANDOVER','DECLINE_OFFER','CANCEL_OFFER'].includes(action)">原因<textarea v-model="reason" required maxlength="2000" rows="3"/></label>
+            <template v-if="['REASSIGN','ASSIGN_OFFER'].includes(action)">
+              <label v-if="action==='REASSIGN'">目标支持组<select v-model="target" required><option value="">请选择</option><option v-for="group in groups" :key="group.id" :value="group.id">{{group.name}}</option></select></label>
               <label>接收人<select v-model="targetPerson" required :disabled="!target||membersLoading"><option value="">{{membersLoading?'正在加载':members.length?'请选择':'暂无可选人员'}}</option><option v-for="person in members" :key="person.id" :value="person.id">{{person.name}}</option></select></label>
             </template>
             <label v-if="action==='REQUEST_INFO'">补充截止时间<input v-model="dueAt" required type="datetime-local"/></label>
             <template v-if="action==='WAIT_VENDOR'"><label>厂商工单号<input v-model="vendorReference" required maxlength="200"/></label><label>跟进负责人<input v-model="vendorOwner" required maxlength="200"/></label></template>
             <template v-if="action==='RESOLVE'"><label>解决分类<select v-model="category" required><option value="">请选择</option><option>配置调整</option><option>故障恢复</option><option>操作指导</option><option>厂商修复</option></select></label><label>验证依据<textarea v-model="evidence" required maxlength="2000" rows="2"/></label></template>
-            <ContentBoundary v-model="contentSafe"/><div class="form-footer"><button type="button" class="text-button" :disabled="busy" @click="action=undefined">取消</button><button type="submit" class="primary" :disabled="busy||membersLoading||(action==='REASSIGN'&&!targetPerson)"><LoaderCircle v-if="busy" :size="16" class="spin"/><Check v-else :size="16"/>{{commands[action]}}</button></div>
+            <ContentBoundary v-model="contentSafe"/><div class="form-footer"><button type="button" class="text-button" :disabled="busy" @click="action=undefined">取消</button><button type="submit" class="primary" :disabled="busy||membersLoading||(['REASSIGN','ASSIGN_OFFER'].includes(action)&&!targetPerson)"><LoaderCircle v-if="busy" :size="16" class="spin"/><Check v-else :size="16"/>{{commands[action]}}</button></div>
           </form></section>
       </aside></div>
     </template>

@@ -16,6 +16,11 @@ const audiences: Readonly<Record<string, Audience>> = {
   ACCEPT_HANDOVER: { requester:true, owner:true },
   DECLINE_HANDOVER: { owner:true, queue:true },
   CANCEL_HANDOVER: { owner:true, queue:true },
+  ASSIGN_OFFER: { pending:true, queue:true },
+  ACCEPT_OFFER: { requester:true, owner:true },
+  DECLINE_OFFER: { queue:true },
+  CANCEL_OFFER: { queue:true },
+  ASSIGNMENT_EXPIRED: { owner:true, queue:true, escalation:true },
   CLASSIFICATION_CORRECTED: { requester:true, owner:true, queue:true },
   PRIORITY_REVIEWED: { requester:true, owner:true },
   P1_CANDIDATE: { owner:true, escalation:true, reviewer:true },
@@ -40,7 +45,8 @@ export async function notificationRecipients(client: Pick<PoolClient,'query'>, e
     JOIN employees e ON e.active WHERE v.id=$1 AND ($2::text IS NULL OR e.id=$2) AND (
       ($3 AND e.id=t.requester_id) OR
       ($4 AND e.id=t.assignee_id AND EXISTS(SELECT 1 FROM group_memberships m WHERE m.employee_id=e.id AND m.group_id=t.owner_group_id)) OR
-      ($5 AND e.id=t.pending_assignee_id AND v.detail->>'targetAssigneeId'=t.pending_assignee_id
+      ($5 AND e.id=t.pending_assignee_id AND v.detail->>'assignmentVersion'=t.version::text
+        AND v.detail->>'targetAssigneeId'=t.pending_assignee_id
         AND v.detail->>'targetGroupId'=t.pending_group_id AND EXISTS
         (SELECT 1 FROM group_memberships m WHERE m.employee_id=e.id AND m.group_id=t.pending_group_id)) OR
       (($6 AND t.assignee_id IS NULL AND t.status NOT IN ('CLOSED','CANCELLED','REJECTED') OR $7) AND EXISTS

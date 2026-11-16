@@ -71,10 +71,12 @@ try {
   await audience('P1_CANDIDATE',['owner','dispatcher','lead','reviewer']);
   await audience('SLA_BREACH',['owner','dispatcher','lead']);
   await audience('INTERNAL_COMMENT',[]);
-  await client.query('UPDATE tickets SET pending_group_id=$2,pending_assignee_id=$3 WHERE id=$1',[ticket,id('target'),id('candidate')]);
-  const handover=await audience('REASSIGN',['owner','candidate'],{targetGroupId:id('target'),targetAssigneeId:id('candidate')});
+  await client.query("UPDATE tickets SET pending_group_id=$2,pending_assignee_id=$3,assignment_kind='HANDOVER',assignment_state='PENDING',assignment_offered_at=now() WHERE id=$1",[ticket,id('target'),id('candidate')]);
+  const handover=await audience('REASSIGN',['owner','candidate'],{targetGroupId:id('target'),targetAssigneeId:id('candidate'),assignmentVersion:1});
   await client.query('UPDATE tickets SET pending_assignee_id=$2 WHERE id=$1',[ticket,id('other-candidate')]);
   assert.deepEqual(await notificationRecipients(client,handover.eventId),[id('owner')],'stale handover cannot notify a replacement candidate');
+  await client.query('UPDATE tickets SET pending_assignee_id=$2,version=version+1 WHERE id=$1',[ticket,id('candidate')]);
+  assert.deepEqual(await notificationRecipients(client,handover.eventId),[id('owner')],'old offer cannot notify the same candidate on a later assignment');
   await expandNotification(client,accepted.outboxId,accepted.eventId);
   await expandNotification(client,accepted.outboxId,accepted.eventId);
   assert.equal((await client.query('SELECT count(*) FROM notification_deliveries WHERE outbox_id=$1',[accepted.outboxId])).rows[0].count,'2');
@@ -82,7 +84,7 @@ try {
   assert.deepEqual(await notificationRecipients(client,accepted.eventId,id('owner')),[],'membership revoked after expansion');
   await client.query('UPDATE employees SET active=false WHERE id=$1',[id('requester')]);
   assert.deepEqual(await notificationRecipients(client,accepted.eventId,id('requester')),[],'disabled requester after expansion');
-  await client.query("UPDATE tickets SET assignee_id=NULL,pending_group_id=NULL,pending_assignee_id=NULL WHERE id=$1",[ticket]);
+  await client.query("UPDATE tickets SET assignee_id=NULL,pending_group_id=NULL,pending_assignee_id=NULL,assignment_kind=NULL,assignment_state='CANCELLED',assignment_offered_at=NULL WHERE id=$1",[ticket]);
   const queue=await event('SUBMIT_AND_ROUTE');
   await expandNotification(client,queue.outboxId,queue.eventId);
   await client.query("UPDATE role_bindings SET status='REVOKED' WHERE employee_id=$1",[id('dispatcher')]);
