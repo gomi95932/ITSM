@@ -22,6 +22,20 @@ export async function api<T>(path: string,options: { method?: string; body?: unk
   return data as T;
 }
 export const messages: Record<string,string> = {
+  INVALID_SERVICE_STRUCTURE:'配置不完整或关联无效，请检查名称、任职有效期和启用关系。',
+  SERVICE_STRUCTURE_DISABLE_REQUIRED:'已发布记录不能删除，请停用并保留历史引用。',
+  SERVICE_STRUCTURE_GROUP_UNAVAILABLE:'岗位所属支持组不存在，请先维护支持组。',
+  SERVICE_STRUCTURE_PERSON_UNAVAILABLE:'启用任职的人员须在职且属于岗位对应的支持组。',
+  SERVICE_STRUCTURE_DING_ID_REQUIRED:'正式钉钉通知模式下，任职人员须先绑定本企业钉钉身份。',
+  SERVICE_STRUCTURE_APPOINTMENT_OVERLAP:'同一人员在同一岗位的有效任职时间不能重叠。',
+  SERVICE_STRUCTURE_SERVICE_UNAVAILABLE:'关联服务不存在，请先维护服务目录。',
+  SERVICE_STRUCTURE_GROUP_MISMATCH:'主办岗位与服务默认支持组不一致，请先核对服务归属。',
+  SERVICE_STRUCTURE_VERSION_CONFLICT:'配置已更新，请刷新后基于最新版本重新提交。',
+  SERVICE_STRUCTURE_ID_CONFLICT:'此提案编号已用于其他内容，请重新提交。',
+  SERVICE_STRUCTURE_INDEPENDENT_REVIEW_REQUIRED:'须由另一名平台管理员复核，且不能复核涉及本人任职的变更。',
+  SERVICE_STRUCTURE_COVERAGE_REQUIRED:'启用的服务映射须至少有一名当前有效任职人员。',
+  POSITION_APPOINTMENT_REQUIRED:'当前人员不具备该工单对应岗位的有效任职，请重新选择合格接收人。',
+  SUPPORT_POSITION_APPOINTMENT_ACTIVE:'请先停用此人员在该组的有效任职，再移除组成员。',
   DISPATCH_ROLE_REQUIRED:'未接单工单的派人和分类须由本组有效调度员或组长操作；工程师可先领取再处理。',
   INVALID_ROLE_BINDING:'请核对角色、人员、支持组、有效期和处理依据。',ROLE_SELF_GRANT_DENIED:'不能给自己提交角色授权。',
   ROLE_INDEPENDENT_REVIEW_REQUIRED:'复核人须是其他平台管理员，且不能是申请人或被授权人。',

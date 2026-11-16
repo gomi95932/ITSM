@@ -35,7 +35,9 @@ export class KnowledgeService {
 
   private async appointed(client: PoolClient, actor: Identity, group: string, role: 'editors'|'reviewers') {
     if (!actor.groups.includes(group)) throw new NotFoundException();
-    const result = await client.query(`SELECT 1 FROM knowledge_${role} WHERE employee_id=$1 AND group_id=$2`,[actor.id,group]);
+    const result = await client.query(`SELECT 1 FROM knowledge_${role} k
+      JOIN group_memberships m ON m.employee_id=k.employee_id AND m.group_id=k.group_id JOIN employees e ON e.id=m.employee_id
+      WHERE k.employee_id=$1 AND k.group_id=$2 AND e.active FOR SHARE OF k,m,e`,[actor.id,group]);
     if (!result.rowCount) throw new ForbiddenException({code:'KNOWLEDGE_ROLE_REQUIRED'});
   }
   private async locked(client: PoolClient, id: string): Promise<Article> {

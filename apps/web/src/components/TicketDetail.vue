@@ -29,7 +29,7 @@ watch([comment,reason,dueAt,vendorReference,vendorOwner,category,evidence,target
 watch(target,async value=>{
   targetPerson.value='';members.value=[];membersLoading.value=!!value;
   if(!value)return;
-  try{const result=await api<{items:{id:string;name:string}[]}>(`/support-groups/${encodeURIComponent(value)}/members`);if(target.value===value)members.value=result.items.filter(person=>person.id!==props.user.id);}
+  try{const result=await api<{items:{id:string;name:string}[]}>(`/tickets/${props.id}/assignment-candidates?groupId=${encodeURIComponent(value)}`);if(target.value===value)members.value=result.items.filter(person=>person.id!==props.user.id);}
   catch(e){if(target.value===value)error.value=errorText(e);}
   finally{if(target.value===value)membersLoading.value=false;}
 });
@@ -43,7 +43,7 @@ const available=computed<TicketAction[]>(()=>{
   if(active&&ticket.value.pendingAssigneeId===props.user.id)result.push(ticket.value.assignmentKind==='OFFER'?'ACCEPT_OFFER':'ACCEPT_HANDOVER',ticket.value.assignmentKind==='OFFER'?'DECLINE_OFFER':'DECLINE_HANDOVER');
   if(isAgent.value&&active){
     const owner=ticket.value.assigneeId===props.user.id;
-    if(!ticket.value.assigneeId&&!ticket.value.pendingAssigneeId)result.push('ACCEPT');
+    if(!ticket.value.assigneeId&&!ticket.value.pendingAssigneeId&&ticket.value.canClaim!==false)result.push('ACCEPT');
     if(owner){if(state==='IN_PROGRESS')result.push('REQUEST_INFO','WAIT_VENDOR','RESOLVE');if(state==='WAITING_VENDOR')result.push('RESOLVE');}
     if(owner||(!ticket.value.assigneeId&&state==='QUEUED'&&ticket.value.canDispatchQueued)){
       if(ticket.value.pendingAssigneeId)result.push(ticket.value.assignmentKind==='OFFER'?'CANCEL_OFFER':'CANCEL_HANDOVER');

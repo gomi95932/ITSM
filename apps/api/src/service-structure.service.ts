@@ -1,0 +1,205 @@
+import { BadRequestException,ConflictException,ForbiddenException,Injectable,NotFoundException,UnauthorizedException } from '@nestjs/common';
+import { createHash } from 'node:crypto';
+import type { PoolClient } from 'pg';
+import type { ServiceStructure,ServiceStructureChange,ServiceStructureOptions,ServiceStructurePreview } from '@itsm/contracts';
+import type { Identity } from './auth.service.js';
+import { Database } from './database.service.js';
+import { IntakePolicyService } from './intake-policy.service.js';
+import { ROLE_AUTHORIZATION_LOCK,ROLE_EFFECTIVE_SQL } from './role-policy.js';
+import { supportDecision } from './support-policy.js';
+import { preserveStructureIds,serviceStructure,structureProposal,structureUuid } from './service-structure-policy.js';
+
+type Client=Pick<PoolClient,'query'>;
+const columns=`id,expected_version AS "expectedVersion",config,proposed_by AS "proposedBy",reviewed_by AS "reviewedBy",
+  status,version,reason,review_reason AS "reviewReason",created_at AS "createdAt",reviewed_at AS "reviewedAt"`;
+
+@Injectable()
+export class ServiceStructureService {
+  constructor(private readonly db:Database,private readonly intake:IntakePolicyService){}
+
+  private async admin(client:Client,actor:string){
+    if(!(await client.query(`SELECT 1 FROM role_bindings r WHERE r.employee_id=$1 AND r.role_code='PLATFORM_ADMIN'
+      AND ${ROLE_EFFECTIVE_SQL}`,[actor])).rowCount)throw new NotFoundException();
+  }
+
+  private async writer(client:PoolClient,actor:string){
+    await client.query('SELECT pg_advisory_xact_lock($1)',[ROLE_AUTHORIZATION_LOCK]);
+    if(!(await client.query('SELECT id FROM employees WHERE id=$1 AND active FOR SHARE',[actor])).rowCount)
+      throw new UnauthorizedException({code:'EMPLOYEE_DISABLED'});
+    await this.admin(client,actor);
+  }
+
+  private async current(client:Client):Promise<{version:number;config:ServiceStructure}>{
+    return (await client.query(`SELECT c.version,v.config FROM service_structure_current c
+      JOIN service_structure_versions v ON v.version=c.version`)).rows[0];
+  }
+
+  private async options(client:Client):Promise<ServiceStructureOptions>{
+    return {groups:(await client.query('SELECT id,name FROM support_groups ORDER BY name,id')).rows,
+      services:(await client.query(`SELECT code,name,group_id AS "groupId",type,published FROM service_catalog ORDER BY code`)).rows,people:[]};
+  }
+
+  async list(actor:Identity){
+    return this.db.transaction(async client=>{
+      await client.query('SELECT pg_advisory_xact_lock_shared($1)',[ROLE_AUTHORIZATION_LOCK]);
+      await this.admin(client,actor.id);
+      const current=await this.current(client),options=await this.options(client);
+      const changes=await client.query<ServiceStructureChange>(`SELECT ${columns} FROM service_structure_proposals ORDER BY created_at DESC,id DESC LIMIT 101`);
+      options.people=(await client.query(`SELECT e.id,e.display_name AS name,e.active,
+        ARRAY(SELECT m.group_id FROM group_memberships m WHERE m.employee_id=e.id) AS groups,
+        EXISTS(SELECT 1 FROM identity_links l WHERE l.employee_id=e.id AND l.corp_id=$2) AS "dingLinked"
+        FROM employees e WHERE e.id=ANY($1::text[]) ORDER BY e.display_name,e.id`,
+        [[...new Set([...current.config.appointments,...changes.rows.flatMap(row=>row.config.appointments)].map(row=>row.employeeId)
+          .concat(changes.rows.flatMap(row=>[row.proposedBy,...(row.reviewedBy?[row.reviewedBy]:[])])))],process.env.DINGTALK_CORP_ID??''])).rows;
+      return {...current,options,items:changes.rows.slice(0,100),hasMore:changes.rows.length>100};
+    });
+  }
+
+  async people(actor:Identity,q:unknown){
+    await this.admin(this.db.pool,actor.id);
+    if(typeof q!=='string'||q.length>100)throw new BadRequestException({code:'INVALID_SERVICE_STRUCTURE'});
+    if(q.trim().length<2)return {items:[],hasMore:false};
+    const people=await this.db.pool.query(`SELECT e.id,e.display_name AS name,
+      ARRAY(SELECT m.group_id FROM group_memberships m WHERE m.employee_id=e.id ORDER BY m.group_id) AS groups,
+      EXISTS(SELECT 1 FROM identity_links l WHERE l.employee_id=e.id AND l.corp_id=$2) AS "dingLinked"
+      FROM employees e WHERE e.active AND (position(lower($1) IN lower(e.id))>0 OR position(lower($1) IN lower(e.display_name))>0)
+      ORDER BY e.display_name,e.id LIMIT 51`,[q.trim(),process.env.DINGTALK_CORP_ID??'']);
+    return {items:people.rows.slice(0,50),hasMore:people.rows.length>50};
+  }
+
+  private async validate(client:Client,config:ServiceStructure,previous:ServiceStructure):Promise<ServiceStructurePreview[]>{
+    preserveStructureIds(previous,config);
+    const options=await this.options(client),groups=new Set(options.groups.map(row=>row.id));
+    if(config.positions.some(row=>!groups.has(row.groupId)))throw new BadRequestException({code:'SERVICE_STRUCTURE_GROUP_UNAVAILABLE'});
+    const employees=await client.query(`SELECT e.id,e.display_name AS name,e.active,
+      ARRAY(SELECT m.group_id FROM group_memberships m WHERE m.employee_id=e.id) AS groups,
+      EXISTS(SELECT 1 FROM identity_links l WHERE l.employee_id=e.id AND l.corp_id=$2) AS "dingLinked"
+      FROM employees e WHERE e.id=ANY($1::text[])`,[[...new Set(config.appointments.map(row=>row.employeeId))],process.env.DINGTALK_CORP_ID??'']);
+    const people=new Map<string,{id:string;name:string;active:boolean;groups:string[];dingLinked:boolean}>(employees.rows.map(row=>[row.id,row]));
+    const positions=new Map(config.positions.map(row=>[row.id,row]));
+    for(const a of config.appointments){
+      const person=people.get(a.employeeId),position=positions.get(a.positionId)!;
+      if(!person||(a.enabled&&(!person.active||!person.groups.includes(position.groupId))))
+        throw new BadRequestException({code:'SERVICE_STRUCTURE_PERSON_UNAVAILABLE'});
+      if(a.enabled&&process.env.NOTIFICATION_MODE==='dingtalk'&&!person.dingLinked)
+        throw new BadRequestException({code:'SERVICE_STRUCTURE_DING_ID_REQUIRED'});
+    }
+    // Appointment periods may touch but cannot overlap for the same person and position.
+    const periods=new Map<string,typeof config.appointments>();
+    for(const a of config.appointments.filter(row=>row.enabled)){
+      const key=JSON.stringify([a.positionId,a.employeeId]),existing=periods.get(key)??[];
+      if(existing.some(row=>Date.parse(row.validFrom)<Date.parse(a.validTo)&&Date.parse(a.validFrom)<Date.parse(row.validTo)))
+        throw new BadRequestException({code:'SERVICE_STRUCTURE_APPOINTMENT_OVERLAP'});
+      existing.push(a);periods.set(key,existing);
+    }
+    const clock=(await client.query<{now:Date}>('SELECT clock_timestamp() AS now')).rows[0].now.getTime();
+    return config.mappings.map(mapping=>{
+      const service=options.services.find(row=>row.code===mapping.serviceCode),position=positions.get(mapping.primaryPositionId)!;
+      if(!service)throw new BadRequestException({code:'SERVICE_STRUCTURE_SERVICE_UNAVAILABLE'});
+      // Catalog ownership is changed through its own reviewed workflow, never as a hidden side effect here.
+      if(mapping.enabled&&position.groupId!==service.groupId)throw new BadRequestException({code:'SERVICE_STRUCTURE_GROUP_MISMATCH'});
+      const candidates=config.appointments.filter(a=>a.enabled&&a.positionId===position.id&&Date.parse(a.validFrom)<=clock&&clock<Date.parse(a.validTo))
+        .map(a=>({id:a.employeeId,name:people.get(a.employeeId)!.name,duty:a.duty,dingLinked:people.get(a.employeeId)!.dingLinked}))
+        .sort((a,b)=>Number(a.duty==='BACKUP')-Number(b.duty==='BACKUP')||a.id.localeCompare(b.id));
+      const warnings:string[]=[];
+      if(mapping.enabled&&!candidates.length)warnings.push('NO_CURRENT_APPOINTEE');
+      if(candidates.some(row=>!row.dingLinked))warnings.push('DING_ID_NOT_LINKED');
+      if(!service.published)warnings.push('CATALOG_NOT_PUBLISHED');
+      return {serviceCode:mapping.serviceCode,groupId:position.groupId,primaryPositionId:position.id,enabled:mapping.enabled,candidates,warnings};
+    });
+  }
+
+  async preview(actor:Identity,body:unknown){
+    const input=structureProposal(body);
+    await this.intake.requireGeneral(actor.id,input as unknown as Record<string,unknown>,'service-structure');
+    return this.db.transaction(async client=>{
+      await client.query('SELECT pg_advisory_xact_lock_shared($1)',[ROLE_AUTHORIZATION_LOCK]);await this.admin(client,actor.id);
+      const current=await this.current(client);
+      if(current.version!==input.expectedVersion)throw new ConflictException({code:'SERVICE_STRUCTURE_VERSION_CONFLICT'});
+      return {items:await this.validate(client,input.config,current.config)};
+    });
+  }
+
+  async propose(actor:Identity,body:unknown){
+    const input=structureProposal(body);
+    await this.intake.requireGeneral(actor.id,input as unknown as Record<string,unknown>,'service-structure');
+    return this.db.transaction(async client=>{
+      await this.writer(client,actor.id);
+      const hash=createHash('sha256').update(JSON.stringify(input)).digest('hex');
+      const old=await client.query(`SELECT ${columns},request_hash FROM service_structure_proposals WHERE id=$1`,[input.id]);
+      if(old.rowCount){
+        if(old.rows[0].request_hash!==hash||old.rows[0].proposedBy!==actor.id)throw new ConflictException({code:'SERVICE_STRUCTURE_ID_CONFLICT'});
+        const {request_hash:_,...result}=old.rows[0];return result;
+      }
+      const current=await this.current(client);
+      if(current.version!==input.expectedVersion)throw new ConflictException({code:'SERVICE_STRUCTURE_VERSION_CONFLICT'});
+      await this.validate(client,input.config,current.config);
+      const row=await client.query(`INSERT INTO service_structure_proposals(id,expected_version,config,request_hash,proposed_by,reason)
+        VALUES($1,$2,$3,$4,$5,$6) RETURNING ${columns}`,[input.id,input.expectedVersion,JSON.stringify(input.config),hash,actor.id,input.reason]);
+      await this.audit(client,input.id,actor.id,'PROPOSED',null,input.reason);
+      return row.rows[0];
+    });
+  }
+
+  private affected(previous:ServiceStructure,next:ServiceStructure):Set<string>{
+    const changedPositions=new Set<string>(),people=new Set<string>();
+    for(const p of next.positions)if(JSON.stringify(p)!==JSON.stringify(previous.positions.find(row=>row.id===p.id)))changedPositions.add(p.id);
+    for(const mapping of next.mappings){
+      const old=previous.mappings.find(row=>row.serviceCode===mapping.serviceCode);
+      if(JSON.stringify(mapping)!==JSON.stringify(old))for(const m of [mapping,old])if(m){
+        changedPositions.add(m.primaryPositionId);m.collaboratingPositionIds.forEach(id=>changedPositions.add(id));
+      }
+    }
+    for(const a of [...previous.appointments,...next.appointments]){
+      const old=previous.appointments.find(row=>row.id===a.id),newer=next.appointments.find(row=>row.id===a.id);
+      if(changedPositions.has(a.positionId)||JSON.stringify(old)!==JSON.stringify(newer))people.add(a.employeeId);
+    }
+    return people;
+  }
+
+  async review(actor:Identity,id:string,body:unknown){
+    if(!structureUuid.test(id))throw new NotFoundException();
+    const input=supportDecision(body);
+    await this.intake.requireGeneral(actor.id,input as unknown as Record<string,unknown>,'service-structure');
+    return this.db.transaction(async client=>{
+      await this.writer(client,actor.id);
+      const result=await client.query<ServiceStructureChange>(`SELECT ${columns} FROM service_structure_proposals WHERE id=$1 FOR UPDATE`,[id]);
+      if(!result.rowCount)throw new NotFoundException();
+      const p=result.rows[0];
+      if(p.proposedBy===actor.id)throw new ForbiddenException({code:'SERVICE_STRUCTURE_INDEPENDENT_REVIEW_REQUIRED'});
+      if(p.status!=='PENDING'){
+        if(p.version===input.expectedVersion+1&&p.reviewedBy===actor.id&&p.status===(input.decision==='APPROVE'?'APPROVED':'REJECTED')&&p.reviewReason===input.reason)return p;
+        throw new ConflictException({code:'SERVICE_STRUCTURE_VERSION_CONFLICT'});
+      }
+      if(p.version!==input.expectedVersion)throw new ConflictException({code:'SERVICE_STRUCTURE_VERSION_CONFLICT'});
+      let published:number|null=null;
+      if(input.decision==='APPROVE'){
+        await this.admin(client,p.proposedBy);
+        const current=await this.current(client),config=serviceStructure(p.config);
+        if(current.version!==p.expectedVersion)throw new ConflictException({code:'SERVICE_STRUCTURE_VERSION_CONFLICT'});
+        if(this.affected(current.config,config).has(actor.id))throw new ForbiddenException({code:'SERVICE_STRUCTURE_INDEPENDENT_REVIEW_REQUIRED'});
+        const preview=await this.validate(client,config,current.config);
+        if(preview.some(row=>row.enabled&&!row.candidates.length))throw new ConflictException({code:'SERVICE_STRUCTURE_COVERAGE_REQUIRED'});
+        published=current.version+1;
+        await client.query('INSERT INTO service_structure_versions(version,config,proposal_id) VALUES($1,$2,$3)',[published,JSON.stringify(config),id]);
+        await client.query('UPDATE service_structure_current SET version=$1 WHERE id=true',[published]);
+      }
+      const updated=await client.query(`UPDATE service_structure_proposals SET status=$2,reviewed_by=$3,review_reason=$4,
+        reviewed_at=now(),version=version+1 WHERE id=$1 RETURNING ${columns}`,[id,input.decision==='APPROVE'?'APPROVED':'REJECTED',actor.id,input.reason]);
+      await this.audit(client,id,actor.id,input.decision==='APPROVE'?'APPROVED':'REJECTED',published,input.reason);
+      return updated.rows[0];
+    });
+  }
+
+  private async audit(client:PoolClient,id:string,actor:string,action:string,version:number|null,reason:string){
+    await client.query(`INSERT INTO service_structure_audits(proposal_id,actor_id,action,published_version,reason) VALUES($1,$2,$3,$4,$5)`,[id,actor,action,version,reason]);
+    await client.query('INSERT INTO operational_audits(actor_id,action,target_id) VALUES($1,$2,$3)',[actor,`SERVICE_STRUCTURE_${action}`,id]);
+  }
+
+  async history(actor:Identity,id:string){
+    await this.admin(this.db.pool,actor.id);
+    if(!structureUuid.test(id))throw new NotFoundException();
+    return {items:(await this.db.pool.query(`SELECT actor_id AS "actorId",action,published_version AS "publishedVersion",reason,
+      created_at AS "createdAt" FROM service_structure_audits WHERE proposal_id=$1 ORDER BY created_at,id`,[id])).rows};
+  }
+}

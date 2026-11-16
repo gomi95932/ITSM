@@ -121,6 +121,7 @@ async function priorityReviewTimers() {
 
 async function recoverOwnership() {
   await transaction(async client => {
+    await client.query('SELECT pg_advisory_xact_lock_shared($1)',[71820512]);
     await client.query(`UPDATE ticket_routing_alerts a SET resolved_at=now() FROM tickets t
       WHERE a.ticket_id=t.id AND a.resolved_at IS NULL AND t.status IN ('CLOSED','CANCELLED','REJECTED')`);
     const rows = await client.query(`SELECT t.* FROM tickets t LEFT JOIN ticket_routing_alerts a ON a.ticket_id=t.id AND a.resolved_at IS NULL
@@ -128,22 +129,36 @@ async function recoverOwnership() {
       ((t.assignee_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM employees e JOIN group_memberships m ON m.employee_id=e.id
         WHERE e.id=t.assignee_id AND e.active AND m.group_id=t.owner_group_id)) OR
        (t.pending_assignee_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM employees e JOIN group_memberships m ON m.employee_id=e.id
-        WHERE e.id=t.pending_assignee_id AND e.active AND m.group_id=t.pending_group_id)) OR
+        WHERE e.id=t.pending_assignee_id AND e.active AND m.group_id=t.pending_group_id
+          AND service_position_eligible(t.service_routing_snapshot,e.id,t.pending_group_id))) OR
        a.ticket_id IS NOT NULL OR
        NOT EXISTS (SELECT 1 FROM employees e JOIN group_memberships m ON m.employee_id=e.id
-        WHERE e.active AND m.group_id=t.owner_group_id))
+        WHERE e.active AND m.group_id=t.owner_group_id AND service_position_eligible(t.service_routing_snapshot,e.id,t.owner_group_id)))
       ORDER BY COALESCE(a.last_checked_at,t.updated_at),t.id LIMIT 100 FOR UPDATE OF t SKIP LOCKED`);
     for (const row of rows.rows) {
       const valid = async (employee:string|null,group:string|null) => !employee || !!(await client.query(`SELECT e.id FROM employees e
         JOIN group_memberships m ON m.employee_id=e.id WHERE e.id=$1 AND e.active AND m.group_id=$2 FOR SHARE OF e,m`,[employee,group])).rowCount;
       const groupAvailable = async (group:string) => !!(await client.query(`SELECT e.id FROM employees e
         JOIN group_memberships m ON m.employee_id=e.id WHERE e.active AND m.group_id=$1
-        ORDER BY e.id LIMIT 1 FOR SHARE OF e,m`,[group])).rowCount;
+        AND service_position_eligible($2,e.id,$1)
+        ORDER BY e.id LIMIT 1 FOR SHARE OF e,m`,[group,JSON.stringify(row.service_routing_snapshot)])).rowCount;
       const ownerValid = await valid(row.assignee_id,row.owner_group_id);
-      const targetValid = await valid(row.pending_assignee_id,row.pending_group_id);
+      const targetValid = await valid(row.pending_assignee_id,row.pending_group_id) && (!row.pending_assignee_id ||
+        (await client.query('SELECT service_position_eligible($1,$2,$3) AS eligible',
+          [JSON.stringify(row.service_routing_snapshot),row.pending_assignee_id,row.pending_group_id])).rows[0].eligible);
       let group = row.owner_group_id as string;
       const available = await groupAvailable(group);
-      if (!available) {
+      const mapped=Object.keys(row.service_routing_snapshot).length>0;
+      if (!available && mapped) {
+        const alert=await client.query(`INSERT INTO ticket_routing_alerts(ticket_id,reason,owner_group_id)
+          VALUES($1,'NO_POSITION_COVERAGE',$2) ON CONFLICT(ticket_id) DO UPDATE SET reason='NO_POSITION_COVERAGE',
+          owner_group_id=EXCLUDED.owner_group_id,opened_at=CASE WHEN ticket_routing_alerts.resolved_at IS NOT NULL THEN now() ELSE ticket_routing_alerts.opened_at END,
+          last_checked_at=now(),resolved_at=NULL
+          WHERE ticket_routing_alerts.resolved_at IS NOT NULL OR ticket_routing_alerts.reason<>'NO_POSITION_COVERAGE' RETURNING ticket_id`,[row.id,group]);
+        if(alert.rowCount)await record(client,row,'OWNERSHIP_ESCALATION_REQUIRED',{reason:'NO_POSITION_COVERAGE',ownerGroupId:group},row.status,row.status);
+        await client.query('UPDATE ticket_routing_alerts SET last_checked_at=now() WHERE ticket_id=$1',[row.id]);
+      }
+      if (!available && !mapped) {
         const visited = new Set<string>([group]);
         while (true) {
           const next = (await client.query<{ fallback_group_id:string|null }>(

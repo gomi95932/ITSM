@@ -49,7 +49,8 @@ export async function notificationRecipients(client: Pick<PoolClient,'query'>, e
       ($5 AND e.id=t.pending_assignee_id AND v.detail->>'assignmentVersion'=t.version::text
         AND v.detail->>'targetAssigneeId'=t.pending_assignee_id
         AND v.detail->>'targetGroupId'=t.pending_group_id AND EXISTS
-        (SELECT 1 FROM group_memberships m WHERE m.employee_id=e.id AND m.group_id=t.pending_group_id)) OR
+        (SELECT 1 FROM group_memberships m WHERE m.employee_id=e.id AND m.group_id=t.pending_group_id)
+        AND service_position_eligible(t.service_routing_snapshot,e.id,t.pending_group_id)) OR
       (($6 AND t.assignee_id IS NULL AND t.status NOT IN ('CLOSED','CANCELLED','REJECTED') OR $7) AND EXISTS
         (SELECT 1 FROM role_bindings r JOIN group_memberships m ON m.employee_id=r.employee_id AND m.group_id=r.group_id
           WHERE r.employee_id=e.id AND r.group_id=t.owner_group_id AND r.role_code IN ('DISPATCHER','GROUP_LEAD')

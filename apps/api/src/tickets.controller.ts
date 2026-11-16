@@ -26,6 +26,12 @@ export class TicketsController {
     return this.tickets.get(await this.tickets.identity({ devUser:user,cookie }), id);
   }
 
+  @Get(':id/assignment-candidates')
+  async candidates(@Headers('x-dev-user') user:string|undefined,@Param('id') id:string,
+    @Query('groupId') group:string|undefined,@Headers('cookie') cookie?:string):Promise<object>{
+    return this.tickets.assignmentCandidates(await this.tickets.identity({devUser:user,cookie}),id,group);
+  }
+
   @Post(':id/actions')
   @HttpCode(200)
   async action(@Headers('x-dev-user') user: string | undefined, @Headers('idempotency-key') key: string | undefined,
