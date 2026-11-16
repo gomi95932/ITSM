@@ -14,11 +14,6 @@ async function event(client:PoolClient,task:Task,action:string,to:string,actor:s
   await client.query(`INSERT INTO request_fulfillment_events(fulfillment_id,actor_id,action,from_state,to_state,evidence_reference,reason_code)
     VALUES ($1,$2,$3,$4,$5,$6,$7)`,[task.id,actor,action,task.state,to,ref,reason]);
 }
-async function requireNewEvidence(client:PoolClient,task:Task,reference:string) {
-  const reused=await client.query(`SELECT 1 FROM request_fulfillment_events
-    WHERE fulfillment_id=$1 AND evidence_reference=$2 LIMIT 1`,[task.id,reference]);
-  if (reused.rowCount) throw new Error('FULFILLMENT_EVIDENCE_REUSED');
-}
 async function locked(client:PoolClient,approvalId:string) {
   const approval=(await client.query('SELECT *,now() AS clock FROM request_approvals WHERE id=$1 FOR UPDATE',[approvalId])).rows[0];
   if (!approval) throw new Error('APPROVAL_NOT_FOUND');
@@ -84,19 +79,7 @@ export async function recordRequestDelivery(db:Pool,provider:RequestApprovalProv
 
 // A second operator checks the actual downstream grant; approval and delivery evidence alone are not a review.
 export async function reviewRequestDelivery(db:Pool,approvalId:string,reviewerId:string,reference:string):Promise<void> {
-  if (!evidence(reference)) throw new Error('FULFILLMENT_EVIDENCE_REQUIRED');
-  await transaction(db,async client=>{
-    const {approval,task}=await locked(client,approvalId);
-    if (!task || !['DELIVERED','REVOKE_DUE'].includes(task.state) || task.reviewed_at)
-      throw new Error('FULFILLMENT_REVIEW_UNAVAILABLE');
-    if (reviewerId === task.assignee_id) throw new Error('FULFILLMENT_OPERATOR_DENIED');
-    await requireNewEvidence(client,task,reference);
-    const ticket=(await client.query('SELECT owner_group_id FROM tickets WHERE id=$1 FOR SHARE',[approval.ticket_id])).rows[0];
-    await operator(client,reviewerId,ticket.owner_group_id,approval,true);
-    await client.query('UPDATE request_fulfillments SET reviewed_at=now(),reviewed_by=$2,updated_at=now() WHERE id=$1',
-      [task.id,reviewerId]);
-    await event(client,task,'DELIVERY_REVIEWED',task.state,reviewerId,reference);
-  });
+  await db.query("SELECT perform_request_fulfillment_action($1,$2,'REVIEW',$3)",[approvalId,reviewerId,reference]);
 }
 
 // Callback hints, withdrawal, termination and time limits all create a human revocation obligation.
@@ -122,14 +105,5 @@ export async function maintainRequestFulfillments(db:Pool):Promise<void> {
 }
 
 export async function recordRequestRevocation(db:Pool,approvalId:string,actorId:string,reference:string):Promise<void> {
-  if (!evidence(reference)) throw new Error('FULFILLMENT_EVIDENCE_REQUIRED');
-  await transaction(db,async client=>{
-    const {approval,task}=await locked(client,approvalId);
-    if (!task || !['DELIVERED','REVOKE_DUE'].includes(task.state)) throw new Error('FULFILLMENT_NOT_DELIVERED');
-    await requireNewEvidence(client,task,reference);
-    const ticket=(await client.query('SELECT owner_group_id FROM tickets WHERE id=$1 FOR SHARE',[approval.ticket_id])).rows[0];
-    await operator(client,actorId,ticket.owner_group_id,approval,false);
-    await client.query("UPDATE request_fulfillments SET state='REVOKED',revoked_at=now(),updated_at=now() WHERE id=$1",[task.id]);
-    await event(client,task,'REVOCATION_RECORDED','REVOKED',actorId,reference);
-  });
+  await db.query("SELECT perform_request_fulfillment_action($1,$2,'REVOKE',$3)",[approvalId,actorId,reference]);
 }

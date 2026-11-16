@@ -146,3 +146,4 @@ export interface TicketReceipt {
   assignmentDueAt?: string | null;
   assignmentPolicyVersionId?: string | null;
 }
+export * from './fulfillment.js';

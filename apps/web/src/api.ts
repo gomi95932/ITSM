@@ -22,6 +22,15 @@ export async function api<T>(path: string,options: { method?: string; body?: unk
   return data as T;
 }
 export const messages: Record<string,string> = {
+  INVALID_FULFILLMENT_FILTER:'任务筛选条件无效，请重新选择。',
+  INVALID_FULFILLMENT_ACTION:'请核对外部记录编号、任务版本及内容声明。',
+  FULFILLMENT_KEY_REQUIRED:'操作标识无效，请刷新后重新提交。',
+  FULFILLMENT_KEY_CONFLICT:'此操作标识已用于其他内容，请刷新核对后重试。',
+  FULFILLMENT_OPERATOR_DENIED:'当前人员不具备此任务的有效任职资格，或不满足独立复核要求。',
+  FULFILLMENT_VERSION_CONFLICT:'任务已更新，已重新读取当前状态，请核对后重试。',
+  FULFILLMENT_REVIEW_UNAVAILABLE:'该任务已复核或不再允许复核，请核对当前状态。',
+  FULFILLMENT_NOT_DELIVERED:'当前任务不允许登记回收，请核对实际交付状态。',
+  FULFILLMENT_EVIDENCE_REUSED:'该外部记录编号已用于此任务，请提供本次执行的独立记录。',
   TICKET_CONTINUITY_REQUIRED:'当前岗位任职已失效，请完成工单交接或取得独立复核的限期处理授权。',
   CONTINUITY_MANAGER_REQUIRED:'仅当前支持组的有效组长可管理交接和限期授权。',
   CONTINUATION_OWNER_REQUIRED:'工单须有明确的当前负责人才能申请限期授权。',
