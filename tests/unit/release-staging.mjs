@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
@@ -12,7 +12,7 @@ const source={sha,runId:123,runAttempt:2,artifactId:456,artifactSize:bytes.lengt
   artifactDigest:`sha256:${createHash('sha256').update(bytes).digest('hex')}`,
   downloadApiUrl:'https://api.github.com/repos/gomi95932/ITSM/actions/artifacts/456/zip'};
 async function temporary(t) {
-  const path=await mkdtemp(join(tmpdir(),'itsm-stage-test-'));
+  const path=await mkdtemp(join(await realpath(tmpdir()),'itsm-stage-test-'));
   t.after(() => rm(path,{recursive:true,force:true}));
   return path;
 }
