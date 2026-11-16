@@ -13,6 +13,11 @@ const audiences: Readonly<Record<string, Audience>> = {
   CANCEL: { requester:true, owner:true },
   AUTO_CLOSE: { requester:true, owner:true },
   REASSIGN: { owner:true, pending:true, queue:true },
+  INITIATE_HANDOVER: { owner:true, pending:true, escalation:true },
+  CONTINUATION_PROPOSE: { owner:true, escalation:true },
+  CONTINUATION_APPROVE: { owner:true, escalation:true },
+  CONTINUATION_REJECT: { owner:true, escalation:true },
+  CONTINUATION_REVOKE: { owner:true, escalation:true },
   ACCEPT_HANDOVER: { requester:true, owner:true },
   DECLINE_HANDOVER: { owner:true, queue:true },
   CANCEL_HANDOVER: { owner:true, queue:true },
@@ -28,7 +33,7 @@ const audiences: Readonly<Record<string, Audience>> = {
   P1_REVIEW_ROUTED: { owner:true, escalation:true, reviewer:true },
   SLA_BREACH: { owner:true, escalation:true },
   OWNERSHIP_RECOVERED: { owner:true, escalation:true },
-  OWNERSHIP_ESCALATION_REQUIRED: { escalation:true, platformAdmin:true },
+  OWNERSHIP_ESCALATION_REQUIRED: { owner:true, escalation:true, platformAdmin:true },
   FEEDBACK_SUBMITTED: { owner:true },
 };
 

@@ -4,14 +4,15 @@ import { ArrowLeft,Check,Clock3,LoaderCircle,RefreshCw,Tags } from 'lucide-vue-n
 import type { CatalogItem,Priority,SessionUser,TicketAction,TicketActionInput,TicketView } from '@itsm/contracts';
 import { api,errorText,ApiError } from '../api';
 import { createRequestKey } from '../request-key';
-import { actions as ticketActions,priorityActions,duration,formatDate,statuses } from '../labels';
+import { actions as ticketActions,priorityActions,continuityActions,duration,formatDate,statuses } from '../labels';
 import ContentBoundary from './ContentBoundary.vue';
 const props=defineProps<{id:string;user:SessionUser}>();
-const actions={...ticketActions,...priorityActions};
+const actions={...ticketActions,...priorityActions,...continuityActions};
 const emit=defineEmits<{back:[];changed:[]}>();
 const ticket=ref<TicketView>(),loading=ref(false),busy=ref(false),error=ref(''),action=ref<TicketAction>(),comment=ref(''),reason=ref(''),dueAt=ref(''),vendorReference=ref(''),vendorOwner=ref(''),category=ref(''),evidence=ref(''),target=ref('');
 const groups=ref<{id:string;name:string}[]>([]),key=ref(createRequestKey());
 const members=ref<{id:string;name:string}[]>([]),targetPerson=ref(''),membersLoading=ref(false);
+const continuationId=ref('');
 const contentSafe=ref(false);
 const catalog=ref<CatalogItem[]>([]),correcting=ref(false),classificationCode=ref(''),classificationReason=ref(''),classificationFields=ref<Record<string,string>>({}),classificationSafe=ref(false),classificationKey=ref(createRequestKey());
 const classificationService=computed(()=>catalog.value.find(item=>item.code===classificationCode.value));
@@ -25,11 +26,11 @@ watch([reviewPriority,reviewReason],()=>{reviewKey.value=createRequestKey();revi
 const fieldLabels:Record<string,string>={system:'业务系统',module:'模块 / 页面',location:'所在地点',device:'设备编号'};
 const approvalLabels:Record<string,string>={QUEUED:'等待发起',CREATING:'正在发起',CREATE_UNCERTAIN:'发起结果待核实',PENDING:'审批中',APPROVED:'审批已通过',REJECTED:'审批未通过',WITHDRAWN:'已撤回',EXPIRED:'已过期',BLOCKED:'受阻待处理'};
 const fulfillmentLabels:Record<string,string>={READY:'待人工交付',DELIVERED:'已交付',REVOKE_DUE:'待回收',REVOKED:'已回收',BLOCKED:'交付受阻'};
-watch([comment,reason,dueAt,vendorReference,vendorOwner,category,evidence,target,targetPerson],()=>{key.value=createRequestKey();contentSafe.value=false;});
+watch([comment,reason,dueAt,vendorReference,vendorOwner,category,evidence,target,targetPerson,continuationId],()=>{key.value=createRequestKey();contentSafe.value=false;});
 watch(target,async value=>{
   targetPerson.value='';members.value=[];membersLoading.value=!!value;
   if(!value)return;
-  try{const result=await api<{items:{id:string;name:string}[]}>(`/tickets/${props.id}/assignment-candidates?groupId=${encodeURIComponent(value)}`);if(target.value===value)members.value=result.items.filter(person=>person.id!==props.user.id);}
+  try{const result=await api<{items:{id:string;name:string}[]}>(`/tickets/${props.id}/assignment-candidates?groupId=${encodeURIComponent(value)}`);if(target.value===value)members.value=result.items.filter(person=>person.id!==props.user.id&&person.id!==ticket.value?.assigneeId);}
   catch(e){if(target.value===value)error.value=errorText(e);}
   finally{if(target.value===value)membersLoading.value=false;}
 });
@@ -44,17 +45,27 @@ const available=computed<TicketAction[]>(()=>{
   if(isAgent.value&&active){
     const owner=ticket.value.assigneeId===props.user.id;
     if(!ticket.value.assigneeId&&!ticket.value.pendingAssigneeId&&ticket.value.canClaim!==false)result.push('ACCEPT');
-    if(owner){if(state==='IN_PROGRESS')result.push('REQUEST_INFO','WAIT_VENDOR','RESOLVE');if(state==='WAITING_VENDOR')result.push('RESOLVE');}
+    if(owner&&ticket.value.canProcess){if(state==='IN_PROGRESS')result.push('REQUEST_INFO','WAIT_VENDOR','RESOLVE');if(state==='WAITING_VENDOR')result.push('RESOLVE');}
     if(owner||(!ticket.value.assigneeId&&state==='QUEUED'&&ticket.value.canDispatchQueued)){
       if(ticket.value.pendingAssigneeId)result.push(ticket.value.assignmentKind==='OFFER'?'CANCEL_OFFER':'CANCEL_HANDOVER');
       else {result.push('REASSIGN');if(ticket.value.canAssignOffer)result.push('ASSIGN_OFFER');}
     }
+    const current=ticket.value.continuations?.filter(item=>item.current)??[];
+    if(ticket.value.assigneeId&&(owner||ticket.value.canManageContinuity)&&!current.some(item=>item.status==='PENDING'||item.effective))result.push('CONTINUATION_PROPOSE');
+    if(ticket.value.canManageContinuity){
+      if(ticket.value.assigneeId&&!owner&&!ticket.value.pendingAssigneeId)result.push('INITIATE_HANDOVER');
+      if(current.some(item=>item.status==='PENDING'&&item.proposedBy!==props.user.id&&item.employeeId!==props.user.id))result.push('CONTINUATION_APPROVE','CONTINUATION_REJECT');
+      if(current.some(item=>item.effective))result.push('CONTINUATION_REVOKE');
+    }
   }
   return result;
 });
-const commands:Record<string,string>={ACCEPT:'接单并回复',REQUEST_INFO:'请求补充',ADD_INFO:'补充信息',WAIT_VENDOR:'等待厂商',RESOLVE:'提交解决方案',CONFIRM:'确认已解决',REOPEN:'仍未解决',CANCEL:'撤销报障',REASSIGN:'发起交接',ACCEPT_HANDOVER:'确认接收',DECLINE_HANDOVER:'退回交接',CANCEL_HANDOVER:'撤回交接',ASSIGN_OFFER:'指定候选人',ACCEPT_OFFER:'确认接单并回复',DECLINE_OFFER:'拒绝接单',CANCEL_OFFER:'撤回派单'};
+const commands:Record<string,string>={ACCEPT:'接单并回复',REQUEST_INFO:'请求补充',ADD_INFO:'补充信息',WAIT_VENDOR:'等待厂商',RESOLVE:'提交解决方案',CONFIRM:'确认已解决',REOPEN:'仍未解决',CANCEL:'撤销报障',REASSIGN:'发起交接',INITIATE_HANDOVER:'主管发起交接',CONTINUATION_PROPOSE:'申请限期处理',CONTINUATION_APPROVE:'批准限期处理',CONTINUATION_REJECT:'拒绝限期处理',CONTINUATION_REVOKE:'立即撤销授权',ACCEPT_HANDOVER:'确认接收',DECLINE_HANDOVER:'退回交接',CANCEL_HANDOVER:'撤回交接',ASSIGN_OFFER:'指定候选人',ACCEPT_OFFER:'确认接单并回复',DECLINE_OFFER:'拒绝接单',CANCEL_OFFER:'撤回派单'};
+const continuationLabels:Record<string,string>={PENDING:'待独立复核',APPROVED:'已批准',REJECTED:'已拒绝',REVOKED:'已撤销'};
+const selectableContinuations=computed(()=>ticket.value?.continuations?.filter(item=>item.current&&
+  (action.value==='CONTINUATION_REVOKE'?item.effective:item.status==='PENDING'&&item.proposedBy!==props.user.id&&item.employeeId!==props.user.id))??[]);
 async function load(){loading.value=true;error.value='';try{ticket.value=await api<TicketView>(`/tickets/${props.id}`);catalog.value=(await api<{items:CatalogItem[]}>('/catalog')).items;if(props.user.groups.length)groups.value=(await api<{items:{id:string;name:string}[]}>('/support-groups')).items;}catch(e){error.value=errorText(e);}finally{loading.value=false;}}
-function choose(value:TicketAction){correcting.value=false;action.value=value;comment.value='';reason.value='';dueAt.value='';vendorReference.value='';vendorOwner.value='';category.value='';evidence.value='';target.value=value==='ASSIGN_OFFER'?ticket.value?.ownerGroupId??'':'';targetPerson.value='';contentSafe.value=false;key.value=createRequestKey();error.value='';}
+function choose(value:TicketAction){correcting.value=false;action.value=value;comment.value='';reason.value='';dueAt.value='';vendorReference.value='';vendorOwner.value='';category.value='';evidence.value='';target.value=value==='ASSIGN_OFFER'?ticket.value?.ownerGroupId??'':'';targetPerson.value='';continuationId.value=selectableContinuations.value[0]?.id??'';contentSafe.value=false;key.value=createRequestKey();error.value='';}
 async function submitClassification(){
   if(!ticket.value||!classificationService.value||!classificationSafe.value||busy.value)return;busy.value=true;error.value='';
   try{await api(`/tickets/${props.id}/classification`,{method:'POST',key:classificationKey.value,body:{contentClass:'GENERAL',expectedVersion:ticket.value.version,serviceCode:classificationCode.value,formVersion:classificationService.value.formVersion,fields:classificationFields.value,reason:classificationReason.value}});
@@ -67,7 +78,8 @@ async function submit(){
   if(comment.value)body.comment=comment.value;if(reason.value)body.reason=reason.value;
   if(dueAt.value)body.dueAt=new Date(dueAt.value).toISOString();
   if(vendorReference.value)body.vendorReference=vendorReference.value;if(vendorOwner.value)body.vendorOwner=vendorOwner.value;
-  if(category.value)body.resolutionCategory=category.value;if(evidence.value)body.evidence=evidence.value;if(target.value&&action.value==='REASSIGN')body.targetGroupId=target.value;if(targetPerson.value)body.targetAssigneeId=targetPerson.value;
+  if(category.value)body.resolutionCategory=category.value;if(evidence.value)body.evidence=evidence.value;if(target.value&&['REASSIGN','INITIATE_HANDOVER'].includes(action.value))body.targetGroupId=target.value;if(targetPerson.value)body.targetAssigneeId=targetPerson.value;
+  if(continuationId.value&&action.value.startsWith('CONTINUATION_')&&action.value!=='CONTINUATION_PROPOSE')body.continuationId=continuationId.value;
   try{await api(`/tickets/${props.id}/actions`,{method:'POST',body,key:key.value});action.value=undefined;await load();emit('changed');}
   catch(e){if(e instanceof ApiError&&e.status===409){await load();key.value=createRequestKey();}error.value=errorText(e);}finally{busy.value=false;}
 }
@@ -92,6 +104,10 @@ onMounted(load);
 <template>
   <section class="detail-page"><button class="text-button" @click="emit('back')"><ArrowLeft :size="17"/> 返回工单列表</button><div v-if="loading&&!ticket" class="empty-state"><LoaderCircle class="spin"/> 正在加载</div><p v-if="error" class="error-banner" role="alert">{{error}}</p>
     <template v-if="ticket"><div class="page-title"><div><p class="eyebrow">{{ticket.number}}</p><h1>{{ticket.subject}}</h1></div><button class="icon-button" title="刷新" aria-label="刷新工单" :disabled="loading" @click="load"><RefreshCw :size="18" :class="{spin:loading}"/></button></div><div class="ticket-meta"><span class="status" :data-status="ticket.status">{{statuses[ticket.status]}}</span><span class="priority" :data-priority="ticket.priority">{{ticket.priority}}</span><span>{{formatDate(ticket.createdAt)}}</span><span>责任组：{{groups.find(g=>g.id===ticket?.ownerGroupId)?.name??ticket.ownerGroupId}}</span><span>处理人：{{ticket.assigneeName??ticket.assigneeId??'组内待认领'}}</span><span v-if="ticket.pendingAssigneeId" class="amber-text">{{ticket.assignmentKind==='OFFER'?'待候选确认':'待交接'}}：{{ticket.pendingAssigneeName??ticket.pendingAssigneeId}}<template v-if="ticket.assignmentDueAt"> · 截止 {{formatDate(ticket.assignmentDueAt)}}</template></span></div>
+      <section v-if="isAgent&&(ticket.ownerContinuityRequired||ticket.continuations?.length)" class="detail-section" aria-label="责任连续性">
+        <h2>责任连续性</h2><p v-if="ticket.ownerContinuityRequired" class="danger-text" role="status">当前负责人任职已失效，待交接或独立复核限期处理；负责人及 SLA 保持不变。</p>
+        <ul class="timeline"><li v-for="item in ticket.continuations" :key="item.id"><strong>{{continuationLabels[item.status]??item.status}}</strong><span v-if="!item.current" class="muted"> · 历史责任</span><span v-else-if="item.status==='APPROVED'&&!item.effective" class="muted"> · 已失效</span><p>截止 {{formatDate(item.expiresAt)}} · {{item.employeeId}}</p><p class="multiline">{{item.reason}}</p></li></ul>
+      </section>
       <section v-if="ticket.priorityReviewState!=='NOT_REQUIRED'" class="detail-section priority-review" aria-label="P1 优先级确认">
         <div class="section-heading"><h2>P1 优先级确认</h2><span class="status">{{reviewLabels[ticket.priorityReviewState]}}</span></div>
         <p v-if="ticket.priorityReviewedAt" class="muted">{{formatDate(ticket.priorityReviewedAt)}} · {{ticket.priorityReviewedBy}} · 当前 {{ticket.priority}}</p>
@@ -142,15 +158,17 @@ onMounted(load);
         <section v-if="available.length" class="detail-section"><h2>处理操作</h2><div class="action-list"><button v-for="value in available" :key="value" class="secondary" :class="{selected:action===value}" @click="choose(value)">{{commands[value]}}</button></div>
           <form v-if="action" class="action-form" @submit.prevent="submit">
             <label v-if="['ACCEPT','ACCEPT_HANDOVER','ACCEPT_OFFER','REQUEST_INFO','ADD_INFO','WAIT_VENDOR','RESOLVE'].includes(action)">{{action==='RESOLVE'?'解决说明':action==='REQUEST_INFO'?'需要补充的内容':'回复内容'}}<textarea v-model="comment" required maxlength="2000" rows="3"/></label>
-            <label v-if="['REOPEN','REASSIGN','ASSIGN_OFFER','DECLINE_HANDOVER','CANCEL_HANDOVER','DECLINE_OFFER','CANCEL_OFFER'].includes(action)">原因<textarea v-model="reason" required maxlength="2000" rows="3"/></label>
-            <template v-if="['REASSIGN','ASSIGN_OFFER'].includes(action)">
-              <label v-if="action==='REASSIGN'">目标支持组<select v-model="target" required><option value="">请选择</option><option v-for="group in groups" :key="group.id" :value="group.id">{{group.name}}</option></select></label>
+            <label v-if="action.startsWith('CONTINUATION_')||['REOPEN','REASSIGN','INITIATE_HANDOVER','ASSIGN_OFFER','DECLINE_HANDOVER','CANCEL_HANDOVER','DECLINE_OFFER','CANCEL_OFFER'].includes(action)">原因<textarea v-model="reason" required maxlength="2000" rows="3"/></label>
+            <label v-if="action.startsWith('CONTINUATION_')&&action!=='CONTINUATION_PROPOSE'">授权记录<select v-model="continuationId" required><option value="">请选择</option><option v-for="item in selectableContinuations" :key="item.id" :value="item.id">{{formatDate(item.expiresAt)}} · {{item.employeeId}}</option></select></label>
+            <label v-if="action==='CONTINUATION_PROPOSE'">处理授权截止时间<input v-model="dueAt" required type="datetime-local"/></label>
+            <template v-if="['REASSIGN','INITIATE_HANDOVER','ASSIGN_OFFER'].includes(action)">
+              <label v-if="action!=='ASSIGN_OFFER'">目标支持组<select v-model="target" required><option value="">请选择</option><option v-for="group in groups" :key="group.id" :value="group.id">{{group.name}}</option></select></label>
               <label>接收人<select v-model="targetPerson" required :disabled="!target||membersLoading"><option value="">{{membersLoading?'正在加载':members.length?'请选择':'暂无可选人员'}}</option><option v-for="person in members" :key="person.id" :value="person.id">{{person.name}}</option></select></label>
             </template>
             <label v-if="action==='REQUEST_INFO'">补充截止时间<input v-model="dueAt" required type="datetime-local"/></label>
             <template v-if="action==='WAIT_VENDOR'"><label>厂商工单号<input v-model="vendorReference" required maxlength="200"/></label><label>跟进负责人<input v-model="vendorOwner" required maxlength="200"/></label></template>
             <template v-if="action==='RESOLVE'"><label>解决分类<select v-model="category" required><option value="">请选择</option><option>配置调整</option><option>故障恢复</option><option>操作指导</option><option>厂商修复</option></select></label><label>验证依据<textarea v-model="evidence" required maxlength="2000" rows="2"/></label></template>
-            <ContentBoundary v-model="contentSafe"/><div class="form-footer"><button type="button" class="text-button" :disabled="busy" @click="action=undefined">取消</button><button type="submit" class="primary" :disabled="busy||membersLoading||(['REASSIGN','ASSIGN_OFFER'].includes(action)&&!targetPerson)"><LoaderCircle v-if="busy" :size="16" class="spin"/><Check v-else :size="16"/>{{commands[action]}}</button></div>
+            <ContentBoundary v-model="contentSafe"/><div class="form-footer"><button type="button" class="text-button" :disabled="busy" @click="action=undefined">取消</button><button type="submit" class="primary" :disabled="busy||membersLoading||(['REASSIGN','INITIATE_HANDOVER','ASSIGN_OFFER'].includes(action)&&!targetPerson)"><LoaderCircle v-if="busy" :size="16" class="spin"/><Check v-else :size="16"/>{{commands[action]}}</button></div>
           </form></section>
       </aside></div>
     </template>

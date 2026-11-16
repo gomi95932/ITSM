@@ -20,12 +20,13 @@ export function transition(status: TicketStatus, role: ActorRole, input: Omit<Ti
         WAITING_USER: { ADD_INFO: 'IN_PROGRESS' },
         PENDING_CONFIRMATION: { CONFIRM: 'CLOSED', REOPEN: 'IN_PROGRESS' },
       };
-  const handover = ['ACCEPT_HANDOVER','DECLINE_HANDOVER','CANCEL_HANDOVER','ACCEPT_OFFER','DECLINE_OFFER','CANCEL_OFFER'].includes(action);
+  const handover = ['INITIATE_HANDOVER','CONTINUATION_PROPOSE','CONTINUATION_APPROVE','CONTINUATION_REJECT','CONTINUATION_REVOKE','ACCEPT_HANDOVER','DECLINE_HANDOVER','CANCEL_HANDOVER','ACCEPT_OFFER','DECLINE_OFFER','CANCEL_OFFER'].includes(action);
   const active = ['QUEUED','IN_PROGRESS','WAITING_USER','WAITING_VENDOR','PENDING_CONFIRMATION'].includes(status);
   const next = agent && handover && active ? ['ACCEPT_HANDOVER','ACCEPT_OFFER'].includes(action) && status === 'QUEUED' ? 'IN_PROGRESS' : status : allowed[status]?.[action];
   if (!next) throw new ConflictException({ code: 'INVALID_TRANSITION' });
   if (action === 'ACCEPT' && !input.comment?.trim()) throw new BadRequestException({ code: 'HUMAN_RESPONSE_REQUIRED' });
-  if (action === 'REASSIGN' && (!input.targetGroupId || !input.targetAssigneeId || !input.reason?.trim())) throw new BadRequestException({ code: 'REASSIGN_DETAILS_REQUIRED' });
+  if (['REASSIGN','INITIATE_HANDOVER'].includes(action) && (!input.targetGroupId || !input.targetAssigneeId || !input.reason?.trim())) throw new BadRequestException({ code: 'REASSIGN_DETAILS_REQUIRED' });
+  if (action.startsWith('CONTINUATION_') && !input.reason?.trim()) throw new BadRequestException({code:'CONTINUATION_REASON_REQUIRED'});
   if (action === 'ASSIGN_OFFER' && (!input.targetAssigneeId || !input.reason?.trim())) throw new BadRequestException({ code: 'ASSIGN_OFFER_DETAILS_REQUIRED' });
   if (action === 'ACCEPT_HANDOVER' && !input.comment?.trim()) throw new BadRequestException({ code: 'HUMAN_RESPONSE_REQUIRED' });
   if (action === 'ACCEPT_OFFER' && !input.comment?.trim()) throw new BadRequestException({ code: 'HUMAN_RESPONSE_REQUIRED' });

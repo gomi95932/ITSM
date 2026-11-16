@@ -102,6 +102,8 @@ jobs:
         run: node tests/integration/priority-review.mjs
       - name: Verify GEN intake, classification and revocable proxy boundaries
         run: node tests/integration/intake-triage.mjs
+      - name: Verify appointment withdrawal, supervised continuity and expiring per-ticket exceptions
+        run: node tests/integration/ticket-continuity.mjs
       - name: Install CI browser
         run: npx playwright install --with-deps chromium
       - name: Exercise desktop and mobile employee and agent flows

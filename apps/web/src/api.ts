@@ -22,6 +22,15 @@ export async function api<T>(path: string,options: { method?: string; body?: unk
   return data as T;
 }
 export const messages: Record<string,string> = {
+  TICKET_CONTINUITY_REQUIRED:'当前岗位任职已失效，请完成工单交接或取得独立复核的限期处理授权。',
+  CONTINUITY_MANAGER_REQUIRED:'仅当前支持组的有效组长可管理交接和限期授权。',
+  CONTINUATION_OWNER_REQUIRED:'工单须有明确的当前负责人才能申请限期授权。',
+  CONTINUATION_SUBJECT_UNAVAILABLE:'人员、支持组、提案人权限或有效期已失效，请重新核对。',
+  CONTINUATION_VALIDITY_INVALID:'请选择未来的截止时间，最长为 7 天。',
+  CONTINUATION_STATE_CONFLICT:'授权记录已变化、责任归属已改变或已有待复核授权，请刷新核对。',
+  CONTINUATION_INDEPENDENT_REVIEW_REQUIRED:'复核人须为其他有效组长，且不能是提案人或被授权人。',
+  CONTINUATION_REASON_REQUIRED:'请填写申请、复核或撤销依据。',
+  INVALID_CONTINUATION:'请选择有效的限期授权记录。',
   INVALID_SUPPORT_CHANGE:'请核对支持组、人员、版本及变更依据；组编码只能使用字母、数字、下划线和连字符。',
   INVALID_SUPPORT_SEARCH:'查询条件无效，请缩短查询内容并重新搜索。',
   SUPPORT_VERSION_CONFLICT:'支持组或提案已更新，请取消当前操作、刷新后基于最新版本重新提交。',

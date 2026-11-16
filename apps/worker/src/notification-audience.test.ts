@@ -2,6 +2,15 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { notificationAudience } from './notification-audience.js';
 
+test('continuity and supervisor handover notify named owner and escalation without leaking to requester',()=>{
+  for(const action of ['CONTINUATION_PROPOSE','CONTINUATION_APPROVE','CONTINUATION_REJECT','CONTINUATION_REVOKE','INITIATE_HANDOVER']){
+    assert.equal(notificationAudience(action).owner,true);
+    assert.equal(notificationAudience(action).escalation,true);
+    assert.equal(notificationAudience(action).requester,undefined);
+  }
+  assert.equal(notificationAudience('INITIATE_HANDOVER').pending,true);
+});
+
 test('only named public progress events include the requester', () => {
   for (const action of ['SUBMIT_AND_ROUTE','ACCEPT','REQUEST_INFO','ADD_INFO','RESOLVE','CONFIRM','REOPEN','CANCEL','AUTO_CLOSE','ACCEPT_HANDOVER','ACCEPT_OFFER','CLASSIFICATION_CORRECTED','PRIORITY_REVIEWED'])
     assert.equal(notificationAudience(action).requester,true,action);

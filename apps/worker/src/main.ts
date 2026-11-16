@@ -131,6 +131,7 @@ async function recoverOwnership() {
        (t.pending_assignee_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM employees e JOIN group_memberships m ON m.employee_id=e.id
         WHERE e.id=t.pending_assignee_id AND e.active AND m.group_id=t.pending_group_id
           AND service_position_eligible(t.service_routing_snapshot,e.id,t.pending_group_id))) OR
+       (t.assignee_id IS NOT NULL AND NOT ticket_processing_eligible(t.id,t.assignee_id)) OR
        a.ticket_id IS NOT NULL OR
        NOT EXISTS (SELECT 1 FROM employees e JOIN group_memberships m ON m.employee_id=e.id
         WHERE e.active AND m.group_id=t.owner_group_id AND service_position_eligible(t.service_routing_snapshot,e.id,t.owner_group_id)))
@@ -143,12 +144,24 @@ async function recoverOwnership() {
         AND service_position_eligible($2,e.id,$1)
         ORDER BY e.id LIMIT 1 FOR SHARE OF e,m`,[group,JSON.stringify(row.service_routing_snapshot)])).rowCount;
       const ownerValid = await valid(row.assignee_id,row.owner_group_id);
+      const ownerQualified=!row.assignee_id||(await client.query<{eligible:boolean}>(
+        'SELECT ticket_processing_eligible($1,$2) AS eligible',[row.id,row.assignee_id])).rows[0].eligible;
       const targetValid = await valid(row.pending_assignee_id,row.pending_group_id) && (!row.pending_assignee_id ||
         (await client.query('SELECT service_position_eligible($1,$2,$3) AS eligible',
           [JSON.stringify(row.service_routing_snapshot),row.pending_assignee_id,row.pending_group_id])).rows[0].eligible);
       let group = row.owner_group_id as string;
       const available = await groupAvailable(group);
       const mapped=Object.keys(row.service_routing_snapshot).length>0;
+      if(row.assignee_id&&ownerValid&&!ownerQualified&&available){
+        const alert=await client.query(`INSERT INTO ticket_routing_alerts(ticket_id,reason,owner_group_id)
+          VALUES($1,'OWNER_APPOINTMENT_REQUIRED',$2) ON CONFLICT(ticket_id) DO UPDATE SET reason=EXCLUDED.reason,
+          owner_group_id=EXCLUDED.owner_group_id,opened_at=CASE WHEN ticket_routing_alerts.resolved_at IS NOT NULL THEN now() ELSE ticket_routing_alerts.opened_at END,
+          last_checked_at=now(),resolved_at=NULL WHERE ticket_routing_alerts.resolved_at IS NOT NULL
+            OR ticket_routing_alerts.reason<>'OWNER_APPOINTMENT_REQUIRED' RETURNING ticket_id`,[row.id,group]);
+        if(alert.rowCount)await record(client,row,'OWNERSHIP_ESCALATION_REQUIRED',
+          {reason:'OWNER_APPOINTMENT_REQUIRED',ownerGroupId:group},row.status,row.status);
+        await client.query('UPDATE ticket_routing_alerts SET last_checked_at=now() WHERE ticket_id=$1',[row.id]);
+      }
       if (!available && mapped) {
         const alert=await client.query(`INSERT INTO ticket_routing_alerts(ticket_id,reason,owner_group_id)
           VALUES($1,'NO_POSITION_COVERAGE',$2) ON CONFLICT(ticket_id) DO UPDATE SET reason='NO_POSITION_COVERAGE',
@@ -183,7 +196,7 @@ async function recoverOwnership() {
         }
       }
       const moved = group !== row.owner_group_id;
-      if (!moved && available) await client.query('UPDATE ticket_routing_alerts SET resolved_at=now() WHERE ticket_id=$1 AND resolved_at IS NULL',[row.id]);
+      if (!moved && available && ownerQualified) await client.query('UPDATE ticket_routing_alerts SET resolved_at=now() WHERE ticket_id=$1 AND resolved_at IS NULL',[row.id]);
       if (!moved && ownerValid && targetValid) continue;
       const updated = await client.query(`UPDATE tickets SET owner_group_id=$2,assignee_id=$3,pending_group_id=NULL,pending_assignee_id=NULL,
         assignment_kind=NULL,assignment_state=CASE WHEN pending_assignee_id IS NOT NULL THEN 'INVALIDATED' ELSE assignment_state END,

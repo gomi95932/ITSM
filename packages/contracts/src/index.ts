@@ -23,7 +23,7 @@ export interface TicketListResponse {
   counts: Partial<Record<TicketStatus, number>>;
   workQueues?: WorkQueueCounts;
 }
-export const TICKET_ACTIONS = ['ACCEPT', 'REQUEST_INFO', 'ADD_INFO', 'WAIT_VENDOR', 'RESOLVE', 'CONFIRM', 'REOPEN', 'CANCEL', 'REASSIGN', 'ACCEPT_HANDOVER', 'DECLINE_HANDOVER', 'CANCEL_HANDOVER', 'ASSIGN_OFFER', 'ACCEPT_OFFER', 'DECLINE_OFFER', 'CANCEL_OFFER'] as const;
+export const TICKET_ACTIONS = ['ACCEPT', 'REQUEST_INFO', 'ADD_INFO', 'WAIT_VENDOR', 'RESOLVE', 'CONFIRM', 'REOPEN', 'CANCEL', 'REASSIGN', 'INITIATE_HANDOVER', 'ACCEPT_HANDOVER', 'DECLINE_HANDOVER', 'CANCEL_HANDOVER', 'ASSIGN_OFFER', 'ACCEPT_OFFER', 'DECLINE_OFFER', 'CANCEL_OFFER', 'CONTINUATION_PROPOSE', 'CONTINUATION_APPROVE', 'CONTINUATION_REJECT', 'CONTINUATION_REVOKE'] as const;
 export type TicketAction = typeof TICKET_ACTIONS[number];
 export type TicketType = 'INC' | 'REQ' | 'GEN';
 export type Impact = 'COMPANY' | 'DEPARTMENT' | 'INDIVIDUAL';
@@ -69,6 +69,7 @@ export interface TicketActionInput {
   evidence?: string;
   targetGroupId?: string;
   targetAssigneeId?: string;
+  continuationId?: string;
 }
 
 export interface TicketFeedbackInput {
@@ -107,6 +108,10 @@ export interface TicketView extends TicketReceipt {
   canDispatchQueued?: boolean;
   canAssignOffer?: boolean;
   canClaim?: boolean;
+  canProcess?: boolean;
+  ownerContinuityRequired?: boolean;
+  canManageContinuity?: boolean;
+  continuations?: {id:string;employeeId:string;proposedBy:string;status:string;expiresAt:string;reason:string;current:boolean;effective:boolean}[];
   priorityReviewState: PriorityReviewState;
   priorityCandidateAt: string | null;
   priorityReviewedAt: string | null;
