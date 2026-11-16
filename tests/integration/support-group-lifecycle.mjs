@@ -70,8 +70,8 @@ assert.ok((await dependencies()).items.some(item=>item.kind==='ASSIGNMENT_POLICY
 await sql(`UPDATE assignment_policy_versions SET active=false WHERE group_id=${q(group)}`);
 
 const ticket=randomUUID(),knowledge=randomUUID();
-await sql(`INSERT INTO tickets(id,number,requester_id,owner_group_id,service_code,service_type,form_version,subject,description,fields,impact,urgency,priority,status)
-  VALUES(${q(ticket)},${q(`LIFE-${suffix}`)},'employee-1',${q(group)},${q(code)},'INC',1,'Lifecycle fixture','Synthetic fixture','{}','INDIVIDUAL','LOW','P4','REGISTERED');
+await sql(`INSERT INTO tickets(id,number,requester_id,submitted_by_id,owner_group_id,service_code,service_type,form_version,subject,description,fields,impact,urgency,priority,status)
+  VALUES(${q(ticket)},${q(`LIFE-${suffix}`)},'employee-1','employee-1',${q(group)},${q(code)},'INC',1,'Lifecycle fixture','Synthetic fixture','{}','INDIVIDUAL','LOW','P4','REGISTERED');
   INSERT INTO knowledge_articles(id,owner_group_id,author_id,title,body,audience,review_due_at)
     VALUES(${q(knowledge)},${q(group)},${q(member)},'Lifecycle knowledge','Synthetic fixture','SUPPORT_GROUP',now()+interval '1 day');`);
 assert.ok((await dependencies()).items.some(item=>item.kind==='TICKET'));
@@ -80,8 +80,8 @@ await sql(`UPDATE tickets SET status='CLOSED' WHERE id=${q(ticket)}; UPDATE know
 const historical=await sql(`SELECT row_to_json(t)::text FROM tickets t WHERE id=${q(ticket)}`);
 const reqTicket=randomUUID(),approval=randomUUID(),fulfillment=randomUUID();
 await sql(`INSERT INTO service_catalog(code,type,form_version,group_id,name) VALUES(${q(code+'-req')},'REQ',1,${q(group)},'Lifecycle request');
-  INSERT INTO tickets(id,number,requester_id,owner_group_id,service_code,service_type,form_version,subject,description,fields,impact,urgency,priority,status)
-    VALUES(${q(reqTicket)},${q('REQ-'+suffix)},'employee-1',${q(group)},${q(code+'-req')},'REQ',1,'Lifecycle request','Synthetic fixture','{}','INDIVIDUAL','LOW','P4','CLOSED');
+  INSERT INTO tickets(id,number,requester_id,submitted_by_id,owner_group_id,service_code,service_type,form_version,subject,description,fields,impact,urgency,priority,status)
+    VALUES(${q(reqTicket)},${q('REQ-'+suffix)},'employee-1','employee-1',${q(group)},${q(code+'-req')},'REQ',1,'Lifecycle request','Synthetic fixture','{}','INDIVIDUAL','LOW','P4','CLOSED');
   INSERT INTO request_approvals(id,ticket_id,corp_id,snapshot,expires_at,state)
     VALUES(${q(approval)},${q(reqTicket)},'ci-lifecycle','{}',now()+interval '1 day','BLOCKED');
   INSERT INTO request_fulfillments(id,approval_id,ticket_id,assignee_id,ready_until,state,delivered_at,access_expires_at)
