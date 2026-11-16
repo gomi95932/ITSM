@@ -73,7 +73,7 @@ async function deliver() {
         const sent = status.send_result?.sent_userid_list ?? [];
         if (!Array.isArray(sent) || !sent.includes(user.ding_user_id)) throw new Error('DELIVERY_NOT_CONFIRMED');
         await client.query("UPDATE notification_deliveries SET state='DELIVERED',last_error=NULL,updated_at=now() WHERE id=$1",[row.id]);
-        if (['ACCEPT','ACCEPT_HANDOVER'].includes(row.action) && row.employee_id === row.requester_id)
+        if (['ACCEPT','ACCEPT_HANDOVER','ACCEPT_OFFER'].includes(row.action) && row.employee_id === row.requester_id)
           await client.query('UPDATE sla_cycles SET responded_at=now() WHERE ticket_id=$1 AND cycle=1 AND responded_at IS NULL',[row.ticket_id]);
       } else {
         const data = await provider('asyncsend_v2',{ agent_id:process.env.DINGTALK_AGENT_ID,userid_list:user.ding_user_id,to_all_user:false,
@@ -93,7 +93,9 @@ async function deliver() {
 async function record(client:PoolClient,row:any,action:string,detail:object,from:string,to:string,previous?:any) {
   const event = randomUUID(), request = randomUUID();
   await client.query('INSERT INTO ticket_events(id,ticket_id,actor_id,action,from_status,to_status,detail,request_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)',[event,row.id,'system:scheduler',action,from,to,JSON.stringify(detail),request]);
-  const ownership=(value:any)=>({ ownerGroupId:value.owner_group_id,assigneeId:value.assignee_id,pendingGroupId:value.pending_group_id,pendingAssigneeId:value.pending_assignee_id });
+  const ownership=(value:any)=>({ ownerGroupId:value.owner_group_id,assigneeId:value.assignee_id,pendingGroupId:value.pending_group_id,pendingAssigneeId:value.pending_assignee_id,
+    assignmentKind:value.assignment_kind,assignmentState:value.assignment_state,assignmentDueAt:value.assignment_due_at,
+    assignmentPolicyVersionId:value.assignment_policy_version_id });
   await client.query('INSERT INTO audit_logs(ticket_id,event_id,actor_id,request_id,action,before_value,after_value) VALUES ($1,$2,$3,$4,$5,$6,$7)',[row.id,event,'system:scheduler',request,action,JSON.stringify({ status:from,...(previous ? ownership(previous) : {}) }),JSON.stringify({ status:to,version:row.version,...ownership(row) })]);
   await client.query('INSERT INTO outbox_events(ticket_id,event_id,kind,payload) VALUES ($1,$2,$3,$4)',[row.id,event,action.startsWith('P1_') ? 'P1_ALERT' : 'TICKET_CHANGED',JSON.stringify({ ticketId:row.id,eventId:event })]);
 }
@@ -119,26 +121,84 @@ async function priorityReviewTimers() {
 
 async function recoverOwnership() {
   await transaction(async client => {
-    const rows = await client.query(`SELECT t.* FROM tickets t WHERE t.status NOT IN ('CLOSED','CANCELLED','REJECTED') AND
+    await client.query(`UPDATE ticket_routing_alerts a SET resolved_at=now() FROM tickets t
+      WHERE a.ticket_id=t.id AND a.resolved_at IS NULL AND t.status IN ('CLOSED','CANCELLED','REJECTED')`);
+    const rows = await client.query(`SELECT t.* FROM tickets t LEFT JOIN ticket_routing_alerts a ON a.ticket_id=t.id AND a.resolved_at IS NULL
+      WHERE t.status NOT IN ('CLOSED','CANCELLED','REJECTED') AND
       ((t.assignee_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM employees e JOIN group_memberships m ON m.employee_id=e.id
         WHERE e.id=t.assignee_id AND e.active AND m.group_id=t.owner_group_id)) OR
        (t.pending_assignee_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM employees e JOIN group_memberships m ON m.employee_id=e.id
-        WHERE e.id=t.pending_assignee_id AND e.active AND m.group_id=t.pending_group_id)))
-      ORDER BY t.updated_at,t.id LIMIT 100 FOR UPDATE OF t SKIP LOCKED`);
+        WHERE e.id=t.pending_assignee_id AND e.active AND m.group_id=t.pending_group_id)) OR
+       a.ticket_id IS NOT NULL OR
+       NOT EXISTS (SELECT 1 FROM employees e JOIN group_memberships m ON m.employee_id=e.id
+        WHERE e.active AND m.group_id=t.owner_group_id))
+      ORDER BY COALESCE(a.last_checked_at,t.updated_at),t.id LIMIT 100 FOR UPDATE OF t SKIP LOCKED`);
     for (const row of rows.rows) {
       const valid = async (employee:string|null,group:string|null) => !employee || !!(await client.query(`SELECT e.id FROM employees e
         JOIN group_memberships m ON m.employee_id=e.id WHERE e.id=$1 AND e.active AND m.group_id=$2 FOR SHARE OF e,m`,[employee,group])).rowCount;
+      const groupAvailable = async (group:string) => !!(await client.query(`SELECT e.id FROM employees e
+        JOIN group_memberships m ON m.employee_id=e.id WHERE e.active AND m.group_id=$1
+        ORDER BY e.id LIMIT 1 FOR SHARE OF e,m`,[group])).rowCount;
       const ownerValid = await valid(row.assignee_id,row.owner_group_id);
       const targetValid = await valid(row.pending_assignee_id,row.pending_group_id);
-      if (ownerValid && targetValid) continue;
-      const updated = await client.query(`UPDATE tickets SET assignee_id=$2,pending_group_id=NULL,pending_assignee_id=NULL,
-        version=version+1,updated_at=now() WHERE id=$1 RETURNING *`,[row.id,ownerValid ? row.assignee_id : null]);
+      let group = row.owner_group_id as string;
+      const available = await groupAvailable(group);
+      if (!available) {
+        const visited = new Set<string>([group]);
+        while (true) {
+          const next = (await client.query<{ fallback_group_id:string|null }>(
+            'SELECT fallback_group_id FROM support_groups WHERE id=$1',[group])).rows[0]?.fallback_group_id;
+          if (!next || visited.has(next)) break;
+          visited.add(next);
+          group = next;
+          if (await groupAvailable(group)) break;
+        }
+        if (!(await groupAvailable(group))) {
+          const existing = await client.query<{ resolved_at:Date|null }>(
+            'SELECT resolved_at FROM ticket_routing_alerts WHERE ticket_id=$1 FOR UPDATE',[row.id]);
+          if (existing.rowCount) await client.query(`UPDATE ticket_routing_alerts SET owner_group_id=$2,
+            opened_at=CASE WHEN resolved_at IS NOT NULL THEN now() ELSE opened_at END,
+            last_checked_at=now(),resolved_at=NULL WHERE ticket_id=$1`,[row.id,row.owner_group_id]);
+          else await client.query(`INSERT INTO ticket_routing_alerts(ticket_id,reason,owner_group_id)
+            VALUES ($1,'NO_ACTIVE_FALLBACK',$2)`,[row.id,row.owner_group_id]);
+          if (!existing.rowCount || existing.rows[0]?.resolved_at) await record(client,row,'OWNERSHIP_ESCALATION_REQUIRED',{
+            reason:'NO_ACTIVE_FALLBACK',ownerGroupId:row.owner_group_id,
+          },row.status,row.status);
+          group = row.owner_group_id;
+        }
+      }
+      const moved = group !== row.owner_group_id;
+      if (!moved && available) await client.query('UPDATE ticket_routing_alerts SET resolved_at=now() WHERE ticket_id=$1 AND resolved_at IS NULL',[row.id]);
+      if (!moved && ownerValid && targetValid) continue;
+      const updated = await client.query(`UPDATE tickets SET owner_group_id=$2,assignee_id=$3,pending_group_id=NULL,pending_assignee_id=NULL,
+        assignment_kind=NULL,assignment_state=CASE WHEN pending_assignee_id IS NOT NULL THEN 'INVALIDATED' ELSE assignment_state END,
+        assignment_due_at=NULL,assignment_offered_at=NULL,assignment_policy_version_id=NULL,
+        version=version+1,updated_at=now() WHERE id=$1 RETURNING *`,[row.id,group,moved ? null : ownerValid ? row.assignee_id : null]);
       await record(client,updated.rows[0],'OWNERSHIP_RECOVERED',{
-        reason:ownerValid ? 'HANDOVER_TARGET_UNAVAILABLE' : 'ASSIGNEE_UNAVAILABLE',
-        oldAssigneeId:row.assignee_id,oldPendingAssigneeId:row.pending_assignee_id,
+        reason:moved ? 'OWNER_GROUP_UNAVAILABLE' : ownerValid ? 'HANDOVER_TARGET_UNAVAILABLE' : 'ASSIGNEE_UNAVAILABLE',
+        oldOwnerGroupId:row.owner_group_id,oldAssigneeId:row.assignee_id,oldPendingAssigneeId:row.pending_assignee_id,
       },row.status,row.status,row);
+      if (moved) await client.query('UPDATE ticket_routing_alerts SET resolved_at=now() WHERE ticket_id=$1 AND resolved_at IS NULL',[row.id]);
     }
     await client.query('DELETE FROM auth_sessions WHERE employee_id IN (SELECT id FROM employees WHERE NOT active)');
+  });
+}
+
+async function expireAssignments() {
+  await transaction(async client=>{
+    const rows=await client.query(`SELECT * FROM tickets WHERE pending_assignee_id IS NOT NULL
+      AND assignment_due_at<=now() AND status NOT IN ('CLOSED','CANCELLED','REJECTED')
+      ORDER BY assignment_due_at,id LIMIT 100 FOR UPDATE SKIP LOCKED`);
+    for (const row of rows.rows) {
+      const updated=await client.query(`UPDATE tickets SET pending_group_id=NULL,pending_assignee_id=NULL,
+        assignment_kind=NULL,assignment_state='EXPIRED',assignment_due_at=NULL,assignment_offered_at=NULL,
+        assignment_policy_version_id=NULL,version=version+1,updated_at=now() WHERE id=$1 RETURNING *`,[row.id]);
+      await record(client,updated.rows[0],'ASSIGNMENT_EXPIRED',{
+        reason:'CANDIDATE_DID_NOT_ACCEPT',assignmentKind:row.assignment_kind,
+        targetGroupId:row.pending_group_id,targetAssigneeId:row.pending_assignee_id,
+        assignmentPolicyVersionId:row.assignment_policy_version_id,assignmentDueAt:row.assignment_due_at,
+      },row.status,row.status,row);
+    }
   });
 }
 
@@ -151,7 +211,7 @@ async function timers() {
       await client.query('UPDATE tickets SET sla_checked_at=now() WHERE id=$1',[row.id]);
       const closeHours = Number(process.env.AUTO_CLOSE_HOURS ?? 72);
       if (shouldAutoClose(row.status,row.completed_at,row.clock,closeHours)) {
-        const updated = await client.query("UPDATE tickets SET status='CLOSED',pending_group_id=NULL,pending_assignee_id=NULL,version=version+1,updated_at=now() WHERE id=$1 RETURNING *",[row.id]);
+        const updated = await client.query("UPDATE tickets SET status='CLOSED',pending_group_id=NULL,pending_assignee_id=NULL,assignment_kind=NULL,assignment_state=CASE WHEN pending_assignee_id IS NOT NULL THEN 'CANCELLED' ELSE assignment_state END,assignment_offered_at=NULL,assignment_due_at=NULL,assignment_policy_version_id=NULL,version=version+1,updated_at=now() WHERE id=$1 RETURNING *",[row.id]);
         await record(client,updated.rows[0],'AUTO_CLOSE',{ reason:`待确认超过 ${closeHours} 小时自动关闭` },row.status,'CLOSED',row);
         continue;
       }
@@ -173,7 +233,7 @@ async function timers() {
 let ticks = 0;
 async function tick() {
   try {
-    if (ticks++ % 15 === 0) { await recoverOwnership(); await priorityReviewTimers(); await maintainRequestApprovals(db); await maintainRequestFulfillments(db); await timers(); }
+    if (ticks++ % 15 === 0) { await recoverOwnership(); await expireAssignments(); await priorityReviewTimers(); await maintainRequestApprovals(db); await maintainRequestFulfillments(db); await timers(); }
     await expand();
     for (let i=0;i<10 && !stopped;i++) await deliver();
     await writeFile('/tmp/itsm-worker-heartbeat', String(Date.now()), { mode:0o600 });

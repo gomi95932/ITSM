@@ -21,3 +21,11 @@ test('P1 reminders retain urgency without exposing ticket content', () => {
   assert.match(message.text, /主管确认逾期/);
   assert.match(message.title, /^P1 候选/);
 });
+
+test('unroutable tickets link administrators to the alert list, not an inaccessible ticket', () => {
+  const message = notificationLink('https://itsm.example.test/', {
+    ticket_id:'ticket-3',number:'INC-0003',action:'OWNERSHIP_ESCALATION_REQUIRED',to_status:'QUEUED',
+  });
+  assert.equal(message.messageUrl,'https://itsm.example.test/#/routing-alerts');
+  assert.match(message.text,/无人可接/);
+});

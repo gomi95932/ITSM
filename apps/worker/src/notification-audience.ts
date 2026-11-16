@@ -1,6 +1,6 @@
 import type { PoolClient } from 'pg';
 
-type Audience = { requester?: boolean; owner?: boolean; pending?: boolean; queue?: boolean; escalation?: boolean; reviewer?: boolean };
+type Audience = { requester?: boolean; owner?: boolean; pending?: boolean; queue?: boolean; escalation?: boolean; reviewer?: boolean; platformAdmin?: boolean };
 const audiences: Readonly<Record<string, Audience>> = {
   SUBMIT_AND_ROUTE: { requester:true, owner:true, queue:true },
   ACCEPT: { requester:true, owner:true },
@@ -16,6 +16,11 @@ const audiences: Readonly<Record<string, Audience>> = {
   ACCEPT_HANDOVER: { requester:true, owner:true },
   DECLINE_HANDOVER: { owner:true, queue:true },
   CANCEL_HANDOVER: { owner:true, queue:true },
+  ASSIGN_OFFER: { pending:true, queue:true },
+  ACCEPT_OFFER: { requester:true, owner:true },
+  DECLINE_OFFER: { queue:true },
+  CANCEL_OFFER: { queue:true },
+  ASSIGNMENT_EXPIRED: { owner:true, queue:true, escalation:true },
   CLASSIFICATION_CORRECTED: { requester:true, owner:true, queue:true },
   PRIORITY_REVIEWED: { requester:true, owner:true },
   P1_CANDIDATE: { owner:true, escalation:true, reviewer:true },
@@ -23,6 +28,7 @@ const audiences: Readonly<Record<string, Audience>> = {
   P1_REVIEW_ROUTED: { owner:true, escalation:true, reviewer:true },
   SLA_BREACH: { owner:true, escalation:true },
   OWNERSHIP_RECOVERED: { owner:true, escalation:true },
+  OWNERSHIP_ESCALATION_REQUIRED: { escalation:true, platformAdmin:true },
   FEEDBACK_SUBMITTED: { owner:true },
 };
 
@@ -40,15 +46,18 @@ export async function notificationRecipients(client: Pick<PoolClient,'query'>, e
     JOIN employees e ON e.active WHERE v.id=$1 AND ($2::text IS NULL OR e.id=$2) AND (
       ($3 AND e.id=t.requester_id) OR
       ($4 AND e.id=t.assignee_id AND EXISTS(SELECT 1 FROM group_memberships m WHERE m.employee_id=e.id AND m.group_id=t.owner_group_id)) OR
-      ($5 AND e.id=t.pending_assignee_id AND v.detail->>'targetAssigneeId'=t.pending_assignee_id
+      ($5 AND e.id=t.pending_assignee_id AND v.detail->>'assignmentVersion'=t.version::text
+        AND v.detail->>'targetAssigneeId'=t.pending_assignee_id
         AND v.detail->>'targetGroupId'=t.pending_group_id AND EXISTS
         (SELECT 1 FROM group_memberships m WHERE m.employee_id=e.id AND m.group_id=t.pending_group_id)) OR
       (($6 AND t.assignee_id IS NULL AND t.status NOT IN ('CLOSED','CANCELLED','REJECTED') OR $7) AND EXISTS
         (SELECT 1 FROM role_bindings r JOIN group_memberships m ON m.employee_id=r.employee_id AND m.group_id=r.group_id
           WHERE r.employee_id=e.id AND r.group_id=t.owner_group_id AND r.role_code IN ('DISPATCHER','GROUP_LEAD')
           AND r.status='ACTIVE' AND r.valid_from<=clock_timestamp() AND r.valid_to>clock_timestamp())) OR
-      ($8 AND EXISTS(SELECT 1 FROM priority_reviewers p WHERE p.employee_id=e.id AND p.group_id=t.owner_group_id))
-    ) ORDER BY e.id`,[eventId,employeeId,!!a.requester,!!a.owner,!!a.pending,!!a.queue,!!a.escalation,!!a.reviewer]);
+      ($8 AND EXISTS(SELECT 1 FROM priority_reviewers p WHERE p.employee_id=e.id AND p.group_id=t.owner_group_id)) OR
+      ($9 AND EXISTS(SELECT 1 FROM role_bindings r WHERE r.employee_id=e.id AND r.role_code='PLATFORM_ADMIN'
+        AND r.status='ACTIVE' AND r.valid_from<=clock_timestamp() AND r.valid_to>clock_timestamp()))
+    ) ORDER BY e.id`,[eventId,employeeId,!!a.requester,!!a.owner,!!a.pending,!!a.queue,!!a.escalation,!!a.reviewer,!!a.platformAdmin]);
   return result.rows.map(row=>row.id);
 }
 

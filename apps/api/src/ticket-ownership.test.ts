@@ -14,7 +14,7 @@ test('only an unassigned group ticket can be claimed; a peer cannot act for its 
   assert.equal(ownershipDenial(owned,'a',true,'RESOLVE'),undefined);
 });
 test('handover is explicit and only its named recipient accepts or declines',()=>{
-  const pending:Ownership={...queued,pending_assignee_id:'b'};
+  const pending:Ownership={...queued,pending_assignee_id:'b',assignment_kind:'HANDOVER'};
   assert.equal(ownershipDenial(pending,'a',true,'ACCEPT'),'HANDOVER_PENDING');
   assert.equal(ownershipDenial(pending,'a',true,'REASSIGN'),'HANDOVER_PENDING');
   assert.equal(ownershipDenial(pending,'a',true,'CANCEL_HANDOVER'),undefined);
@@ -22,6 +22,16 @@ test('handover is explicit and only its named recipient accepts or declines',()=
   assert.equal(ownershipDenial(pending,'b',false,'ACCEPT_HANDOVER'),undefined);
   assert.equal(ownershipDenial(pending,'b',false,'DECLINE_HANDOVER'),undefined);
   assert.equal(ownershipDenial(queued,'a',true,'CANCEL_HANDOVER'),'HANDOVER_NOT_PENDING');
+});
+test('candidate offer reserves the unclaimed ticket for one eligible recipient',()=>{
+  const offer:Ownership={...queued,pending_assignee_id:'b',assignment_kind:'OFFER'};
+  assert.equal(ownershipDenial(offer,'a',true,'ACCEPT'),'HANDOVER_PENDING');
+  assert.equal(ownershipDenial(offer,'b',true,'ACCEPT_OFFER'),undefined);
+  assert.equal(ownershipDenial(offer,'a',true,'ACCEPT_OFFER'),'HANDOVER_TARGET_REQUIRED');
+  assert.equal(ownershipDenial(offer,'a',true,'CANCEL_OFFER'),undefined);
+  assert.equal(ownershipDenial(offer,'a',true,'CANCEL_HANDOVER'),'HANDOVER_NOT_PENDING');
+  assert.equal(transition('QUEUED','agent',{action:'ASSIGN_OFFER',expectedVersion:1,targetAssigneeId:'b',reason:'Dispatch'}),'QUEUED');
+  assert.equal(transition('QUEUED','agent',{action:'ACCEPT_OFFER',expectedVersion:1,comment:'Investigating'}),'IN_PROGRESS');
 });
 test('recovery claims and handovers preserve the existing workflow, never reopen terminal tickets',()=>{
   for(const status of ['IN_PROGRESS','WAITING_USER','WAITING_VENDOR','PENDING_CONFIRMATION'] as const){

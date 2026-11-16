@@ -1,7 +1,7 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
 import { createHash, randomUUID } from 'node:crypto';
 import { type PoolClient } from 'pg';
-import { P1_REVIEW_REMINDER_MINUTES, TICKET_ACTIONS, WORK_QUEUES, type ClassificationInput, type CreateTicketInput, type PriorityReviewInput, type PriorityReviewState, type TicketActionInput, type TicketFeedback, type TicketReceipt, type TicketStatus, type WorkQueue, type WorkQueueCounts } from '@itsm/contracts';
+import { assignmentDeadline, serviceMinutes, P1_REVIEW_REMINDER_MINUTES, TICKET_ACTIONS, WORK_QUEUES, type ClassificationInput, type CreateTicketInput, type PriorityReviewInput, type PriorityReviewState, type ServiceCalendar, type TicketActionInput, type TicketFeedback, type TicketReceipt, type TicketStatus, type WorkQueue, type WorkQueueCounts } from '@itsm/contracts';
 import { transition } from './ticket-state.js';
 import { Database } from './database.service.js';
 import { AuthService, type AuthHeaders, type Identity } from './auth.service.js';
@@ -20,6 +20,8 @@ type TicketRow = {
   description: string; fields: Record<string, unknown>; impact: string; urgency: string;
   priority: string; status: TicketStatus; version: number; created_at: Date; updated_at: Date;
   assignee_id: string | null; pending_group_id: string | null; pending_assignee_id: string | null;
+  assignment_kind: 'OFFER' | 'HANDOVER' | null; assignment_state: 'PENDING' | 'ACCEPTED' | 'DECLINED' | 'CANCELLED' | 'EXPIRED' | 'INVALIDATED' | null;
+  assignment_offered_at: Date | null; assignment_due_at: Date | null; assignment_policy_version_id: string | null;
   assignee_name?: string | null; pending_assignee_name?: string | null; owner_group_name?: string | null;
   priority_review_state: PriorityReviewState; priority_candidate_at: Date | null;
   priority_reviewed_at: Date | null; priority_reviewed_by: string | null; priority_review_reason: string | null;
@@ -151,6 +153,39 @@ export class TicketsService {
       [ticket.id, eventId, action.startsWith('P1_') ? 'P1_ALERT' : 'TICKET_CHANGED', JSON.stringify({ ticketId: ticket.id, eventId })]);
   }
 
+  private async assignmentPolicy(client: PoolClient, ticket: TicketRow, required: boolean, group=ticket.owner_group_id): Promise<{ id: string; deadline: Date; offeredAt: Date } | null> {
+    const policy=await client.query<{id:string;receive_minutes:number;calendar_snapshot:ServiceCalendar;clock:Date}>(`SELECT p.*,now() AS clock FROM assignment_policy_versions p
+      WHERE p.group_id=$1 AND p.priority=$2 AND p.active AND p.valid_from<=now() AND p.valid_to>now() FOR SHARE OF p`,
+      [group,ticket.priority]);
+    if (!policy.rowCount) {
+      if (required) throw new ConflictException({code:'ASSIGNMENT_POLICY_NOT_APPROVED'});
+      return null;
+    }
+    const {id,receive_minutes,calendar_snapshot,clock}=policy.rows[0];
+    let deadline=assignmentDeadline(clock,receive_minutes,calendar_snapshot,ticket.priority==='P1');
+    const cycle=await client.query<{started_at:Date;responded_at:Date|null;completed_at:Date|null;paused_at:Date|null;paused_minutes:number;
+      calendar_snapshot:ServiceCalendar;priority:string;response_target:number;resolution_target:number}>(
+      'SELECT * FROM sla_cycles WHERE ticket_id=$1 ORDER BY cycle DESC LIMIT 1', [ticket.id]);
+    if (cycle.rowCount) {
+      const s=cycle.rows[0], elapsed=serviceMinutes(s.started_at,clock,s.calendar_snapshot,s.priority==='P1');
+      const budgets:number[]=[];
+      if (!s.responded_at) budgets.push(s.response_target-elapsed);
+      if (!s.completed_at) budgets.push(s.resolution_target-elapsed+Number(s.paused_minutes)
+        +(s.paused_at ? serviceMinutes(s.paused_at,clock,s.calendar_snapshot,s.priority==='P1') : 0));
+      if (budgets.length) {
+        const remaining=Math.min(...budgets);
+        if (remaining<=0) {
+          if (required) throw new ConflictException({code:'ASSIGNMENT_BUDGET_EXHAUSTED'});
+          return {id,deadline,offeredAt:clock};
+        }
+        const slaDeadline=assignmentDeadline(clock,remaining,s.calendar_snapshot,s.priority==='P1');
+        if (slaDeadline<deadline) deadline=slaDeadline;
+      }
+    }
+    if (deadline<=clock && required) throw new ConflictException({code:'ASSIGNMENT_BUDGET_EXHAUSTED'});
+    return {id,deadline,offeredAt:clock};
+  }
+
   async create(actor: Identity, body: unknown, key: string, requestId: string): Promise<TicketReceipt> {
     validateBody(body);
     await this.intake.requireGeneral(actor.id, body as unknown as Record<string, unknown>, 'ticket-create');
@@ -187,6 +222,8 @@ export class TicketsService {
   private receipt(row: TicketRow): TicketReceipt {
     return { id: row.id, number: row.number, status: row.status, version: row.version, ownerGroupId: row.owner_group_id,
       assigneeId: row.assignee_id, pendingGroupId: row.pending_group_id, pendingAssigneeId: row.pending_assignee_id,
+      assignmentKind:row.assignment_kind,assignmentState:row.assignment_state,assignmentDueAt:row.assignment_due_at?.toISOString()??null,
+      assignmentPolicyVersionId:row.assignment_policy_version_id,
       ...(row.owner_group_name !== undefined ? { ownerGroupName: row.owner_group_name } : {}),
       ...(row.assignee_name !== undefined ? { assigneeName: row.assignee_name } : {}),
       ...(row.pending_assignee_name !== undefined ? { pendingAssigneeName: row.pending_assignee_name } : {}) };
@@ -274,8 +311,17 @@ export class TicketsService {
         : null;
       const progressRow = requestProgress?.rows[0];
       const dispatcher=!!membership.rowCount&&await canDispatch(client,actor.id,ticket.owner_group_id);
+      let canAssignOffer=false;
+      if(dispatcher && !ticket.assignee_id && !ticket.pending_assignee_id && ticket.status==='QUEUED') {
+        try {
+          canAssignOffer=!!await this.assignmentPolicy(client,ticket,true);
+        } catch(error) {
+          if(!(error instanceof ConflictException)) throw error;
+        }
+      }
       return { ...this.publicTicket(ticket),canAddInfo:actor.id===ticket.requester_id||delegated,
         canDispatchQueued:dispatcher,
+        canAssignOffer,
         ...(canViewRequestProgress(actor.id, ticket.requester_id, ticket.service_type) ? { requestProgress: {
           approval: progressRow ? { state: progressRow.approval_state, updatedAt: progressRow.approval_updated_at }
             : null,
@@ -412,7 +458,7 @@ export class TicketsService {
         && await this.delegation(client,actor.id,ticket.delegation_id,false)===ticket.requester_id;
       if(['ADD_INFO','CONFIRM','REOPEN','CANCEL'].includes(body.action) && ticket.requester_id!==actor.id && !delegatedInfo)
         throw new ForbiddenException({code:'TICKET_ACTION_NOT_AUTHORIZED'});
-      if(!ticket.assignee_id&&ticket.status==='QUEUED'&&['REASSIGN','CANCEL_HANDOVER'].includes(body.action)
+      if(!ticket.assignee_id&&ticket.status==='QUEUED'&&['REASSIGN','CANCEL_HANDOVER','ASSIGN_OFFER','CANCEL_OFFER'].includes(body.action)
         &&!await canDispatch(client,actor.id,ticket.owner_group_id))throw new ForbiddenException({code:'DISPATCH_ROLE_REQUIRED'});
       const previous = await this.claim(client, actor.id, `action:${id}`, key, body);
       if (previous) return previous as TicketReceipt;
@@ -426,29 +472,58 @@ export class TicketsService {
       const next = transition(ticket.status, role, body);
       let group = ticket.owner_group_id, assignee = ticket.assignee_id;
       let pendingGroup = ticket.pending_group_id, pendingAssignee = ticket.pending_assignee_id;
+      let assignmentKind=ticket.assignment_kind,assignmentState=ticket.assignment_state;
+      let assignmentOfferedAt=ticket.assignment_offered_at,assignmentDueAt=ticket.assignment_due_at;
+      let assignmentPolicyVersionId=ticket.assignment_policy_version_id;
       if (body.action === 'ACCEPT') assignee = actor.id;
+      if (body.action === 'ASSIGN_OFFER') {
+        if (body.targetGroupId && body.targetGroupId!==group) throw new BadRequestException({code:'INVALID_OFFER_GROUP'});
+        const target=await client.query(`SELECT e.id FROM employees e JOIN group_memberships m ON m.employee_id=e.id
+          WHERE e.id=$1 AND e.active AND m.group_id=$2 FOR SHARE OF e,m`,[body.targetAssigneeId,group]);
+        if (!target.rowCount) throw new BadRequestException({code:'INVALID_OFFER_TARGET'});
+        const policy=await this.assignmentPolicy(client,ticket,true);
+        pendingGroup=group;pendingAssignee=body.targetAssigneeId!;
+        assignmentKind='OFFER';assignmentState='PENDING';assignmentOfferedAt=policy!.offeredAt;
+        assignmentDueAt=policy!.deadline;assignmentPolicyVersionId=policy!.id;
+      }
       if (body.action === 'REASSIGN') {
         const target = await client.query(`SELECT e.id FROM employees e JOIN group_memberships m ON m.employee_id=e.id
           WHERE e.id=$1 AND m.group_id=$2 AND e.active FOR SHARE OF e,m`, [body.targetAssigneeId, body.targetGroupId]);
         if (!target.rowCount || body.targetAssigneeId === actor.id) throw new BadRequestException({ code: 'INVALID_HANDOVER_TARGET' });
         pendingGroup = body.targetGroupId!; pendingAssignee = body.targetAssigneeId!;
+        const policy=await this.assignmentPolicy(client,ticket,false,body.targetGroupId);
+        assignmentKind='HANDOVER';assignmentState='PENDING';assignmentOfferedAt=policy?.offeredAt??new Date();
+        assignmentDueAt=policy?.deadline??null;assignmentPolicyVersionId=policy?.id??null;
       }
-      if (['ACCEPT_HANDOVER','DECLINE_HANDOVER'].includes(body.action)) {
+      if (['ACCEPT_HANDOVER','DECLINE_HANDOVER','ACCEPT_OFFER','DECLINE_OFFER'].includes(body.action)) {
         const target = await client.query('SELECT 1 FROM group_memberships WHERE employee_id=$1 AND group_id=$2 FOR SHARE', [actor.id, pendingGroup]);
         if (!target.rowCount) throw new ConflictException({ code: 'HANDOVER_TARGET_REQUIRED' });
-        if (body.action === 'ACCEPT_HANDOVER') { group = pendingGroup!; assignee = actor.id; }
+        if (assignmentDueAt && (await client.query<{expired:boolean}>(
+          'SELECT $1::timestamptz<=clock_timestamp() AS expired',[assignmentDueAt])).rows[0].expired)
+          throw new ConflictException({code:'HANDOVER_EXPIRED'});
+        if (['ACCEPT_HANDOVER','ACCEPT_OFFER'].includes(body.action)) { group = pendingGroup!; assignee = actor.id; }
       }
-      if (['ACCEPT_HANDOVER','DECLINE_HANDOVER','CANCEL_HANDOVER'].includes(body.action) || ['CLOSED','CANCELLED','REJECTED'].includes(next)) {
+      if (['ACCEPT_HANDOVER','DECLINE_HANDOVER','CANCEL_HANDOVER','ACCEPT_OFFER','DECLINE_OFFER','CANCEL_OFFER'].includes(body.action) || ['CLOSED','CANCELLED','REJECTED'].includes(next)) {
         pendingGroup = null; pendingAssignee = null;
+        if (pendingAssignee || ticket.pending_assignee_id) assignmentState=['ACCEPT_HANDOVER','ACCEPT_OFFER'].includes(body.action)?'ACCEPTED'
+          : ['DECLINE_HANDOVER','DECLINE_OFFER'].includes(body.action)?'DECLINED':'CANCELLED';
+        assignmentKind=null;assignmentDueAt=null;assignmentOfferedAt=null;assignmentPolicyVersionId=null;
       }
       const before = ticket.status;
       const updated = await client.query<TicketRow>(`UPDATE tickets SET status=$2,owner_group_id=$3,assignee_id=$4,pending_group_id=$5,
-        pending_assignee_id=$6,version=version+1,updated_at=now() WHERE id=$1 RETURNING *`, [id, next, group, assignee, pendingGroup, pendingAssignee]);
+        pending_assignee_id=$6,assignment_kind=$7,assignment_state=$8,assignment_offered_at=$9,assignment_due_at=$10,
+        assignment_policy_version_id=$11,version=version+1,updated_at=now() WHERE id=$1 RETURNING *`,
+        [id,next,group,assignee,pendingGroup,pendingAssignee,assignmentKind,assignmentState,assignmentOfferedAt,assignmentDueAt,assignmentPolicyVersionId]);
       await this.sla.action(client,id,body.action,ticket.priority);
       await this.record(client, updated.rows[0], actor.id, body.action, before,
         { comment: body.comment, reason: body.reason, dueAt: body.dueAt, vendorReference: body.vendorReference, vendorOwner: body.vendorOwner, resolutionCategory: body.resolutionCategory, evidence: body.evidence,
-          ...(body.action === 'REASSIGN' || body.action.endsWith('_HANDOVER') ? { oldGroupId: ticket.owner_group_id, oldAssigneeId: ticket.assignee_id,
-            targetGroupId: body.targetGroupId ?? ticket.pending_group_id, targetAssigneeId: body.targetAssigneeId ?? ticket.pending_assignee_id } : {}) }, requestId, ticket);
+          ...(['REASSIGN','ASSIGN_OFFER'].includes(body.action) || body.action.endsWith('_HANDOVER') || body.action.endsWith('_OFFER') ? {
+            oldGroupId:ticket.owner_group_id,oldAssigneeId:ticket.assignee_id,
+            targetGroupId:body.targetGroupId??ticket.pending_group_id??ticket.owner_group_id,
+            targetAssigneeId:body.targetAssigneeId??ticket.pending_assignee_id,
+            assignmentPolicyVersionId:assignmentPolicyVersionId??ticket.assignment_policy_version_id,
+            assignmentDueAt:assignmentDueAt?.toISOString()??ticket.assignment_due_at?.toISOString(),
+            assignmentVersion:['REASSIGN','ASSIGN_OFFER'].includes(body.action)?updated.rows[0].version:undefined } : {}) },requestId,ticket);
       if (body.action==='ACCEPT_HANDOVER' && group!==ticket.owner_group_id && ticket.priority_review_state==='PENDING')
         await this.record(client,updated.rows[0],actor.id,'P1_REVIEW_ROUTED',next,{ oldGroupId:ticket.owner_group_id,targetGroupId:group },requestId,ticket);
       const response = this.receipt(updated.rows[0]);

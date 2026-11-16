@@ -127,4 +127,47 @@ await inQueue(routed,c,'incoming',true);
 routed=await ok(routed,c,'ACCEPT_HANDOVER',{comment:'Taking queued work'});
 await inQueue(routed,c,'assigned',true);
 assert.equal(routed.status,'IN_PROGRESS');assert.equal(routed.assigneeId,c);
+// A vacated owner group moves to the first configured group with active members.
+const vacated=`vacated-${randomUUID()}`,middle=`empty-fallback-${randomUUID()}`,unroutable=`unroutable-${randomUUID()}`;
+await sql(`INSERT INTO support_groups(id,name,fallback_group_id) VALUES
+  (${quote(middle)},'Empty intermediate fallback','service-desk'),
+  (${quote(vacated)},'Vacated support',${quote(middle)}),(${quote(unroutable)},'Unroutable support',NULL);
+  INSERT INTO group_memberships(employee_id,group_id) VALUES (${quote(c)},${quote(vacated)}),(${quote(b)},${quote(unroutable)});`);
+let fallback=await create();fallback=await ok(fallback,owner,'REASSIGN',{targetGroupId:vacated,targetAssigneeId:c,reason:'Specialist group'});
+fallback=await ok(fallback,c,'ACCEPT_HANDOVER',{comment:'Investigating in specialist group'});
+const fallbackSla=await sql(`SELECT row_to_json(s)::text FROM sla_cycles s WHERE ticket_id=${quote(fallback.id)}`);
+await sql(`DELETE FROM group_memberships WHERE employee_id=${quote(c)} AND group_id=${quote(vacated)}`);
+await until(async()=>await sql(`SELECT owner_group_id FROM tickets WHERE id=${quote(fallback.id)}`)==='service-desk');
+const moved=JSON.parse(await sql(`SELECT row_to_json(t)::text FROM tickets t WHERE id=${quote(fallback.id)}`));
+assert.equal(moved.assignee_id,null);assert.equal(moved.status,'IN_PROGRESS');assert.equal(moved.version,fallback.version+1);
+assert.equal(await sql(`SELECT row_to_json(s)::text FROM sla_cycles s WHERE ticket_id=${quote(fallback.id)}`),fallbackSla);
+assert.equal(await sql(`SELECT count(*) FROM ticket_events WHERE ticket_id=${quote(fallback.id)} AND action='OWNERSHIP_RECOVERED'
+  AND detail->>'reason'='OWNER_GROUP_UNAVAILABLE' AND detail->>'oldOwnerGroupId'=${quote(vacated)}`),'1');
+assert.equal(await sql(`SELECT count(*) FROM audit_logs a JOIN outbox_events o ON o.event_id=a.event_id
+  JOIN ticket_events e ON e.id=a.event_id WHERE e.ticket_id=${quote(fallback.id)} AND e.action='OWNERSHIP_RECOVERED'
+  AND a.before_value->>'ownerGroupId'=${quote(vacated)} AND a.after_value->>'ownerGroupId'='service-desk'`),'1');
+await inQueue(fallback,owner,'unassigned',true);
+
+let stranded=await create();stranded=await ok(stranded,owner,'REASSIGN',{targetGroupId:unroutable,targetAssigneeId:b,reason:'Specialist group'});
+stranded=await ok(stranded,b,'ACCEPT_HANDOVER',{comment:'Investigating'});
+await sql(`DELETE FROM group_memberships WHERE employee_id=${quote(b)} AND group_id=${quote(unroutable)}`);
+await until(async()=>await sql(`SELECT count(*) FROM ticket_routing_alerts WHERE ticket_id=${quote(stranded.id)} AND resolved_at IS NULL`)==='1');
+const strandedRow=JSON.parse(await sql(`SELECT row_to_json(t)::text FROM tickets t WHERE id=${quote(stranded.id)}`));
+assert.equal(strandedRow.owner_group_id,unroutable);assert.equal(strandedRow.assignee_id,null);
+assert.equal(await sql(`SELECT count(*) FROM ticket_events WHERE ticket_id=${quote(stranded.id)} AND action='OWNERSHIP_ESCALATION_REQUIRED'`),'1');
+assert.equal((await request('/routing-alerts','employee-1')).data.items.length,0);
+const visibleAlert=(await request('/routing-alerts','demo-admin-1')).data.items.find(row=>row.ticketId===stranded.id);
+assert.ok(visibleAlert);
+assert.equal(visibleAlert.ownerGroupId,unroutable);
+assert.ok(visibleAlert.ownerGroupName);
+assert.equal(visibleAlert.reason,'NO_ACTIVE_FALLBACK');
+assert.equal(visibleAlert.subject,undefined);
+assert.equal(visibleAlert.description,undefined);
+await new Promise(resolve=>setTimeout(resolve,32000));
+assert.equal(await sql(`SELECT count(*) FROM ticket_events WHERE ticket_id=${quote(stranded.id)} AND action='OWNERSHIP_ESCALATION_REQUIRED'`),'1',
+  'an unresolved alert does not create duplicate escalation events on each scan');
+await sql(`UPDATE support_groups SET fallback_group_id='service-desk' WHERE id=${quote(unroutable)}`);
+await until(async()=>await sql(`SELECT owner_group_id FROM tickets WHERE id=${quote(stranded.id)}`)==='service-desk');
+assert.equal(await sql(`SELECT count(*) FROM ticket_routing_alerts WHERE ticket_id=${quote(stranded.id)} AND resolved_at IS NOT NULL`),'1');
+assert.equal((await request('/routing-alerts','demo-admin-1')).data.items.some(row=>row.ticketId===stranded.id),false);
 console.log('Personal ownership verified: concurrent claim, peer denial, confirmed handover, recovery, immutable SLA and audit/outbox');
