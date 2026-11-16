@@ -9,8 +9,8 @@ test('API health response identifies the service', () => {
 
 test('readiness checks the database and required schema without returning errors or credentials',async () => {
   const ready=new HealthController({pool:{query:async (sql: string) => {
-    assert.match(sql, /017_service_structure\.sql/);
-    return {rows:[{migrations:'17'}]};
+    assert.match(sql, /018_service_catalog_bundle\.sql/);
+    return {rows:[{migrations:'18'}]};
   }}} as unknown as Database);
   assert.deepEqual(await ready.ready(),{status:'ok',service:'itsm-api'});
   const broken=new HealthController({pool:{query:async () => { throw new Error('private database failure'); }}} as unknown as Database);
@@ -21,7 +21,7 @@ test('readiness checks the database and required schema without returning errors
   await assert.rejects(previousSchema.ready(), /Service Unavailable/);
   const missingRoutingSchema = new HealthController({pool:{query:async () => ({rows:[{migrations:'14'}]})}} as unknown as Database);
   await assert.rejects(missingRoutingSchema.ready(), /Service Unavailable/);
-  for(const migrations of ['15','16']){
+  for(const migrations of ['15','16','17']){
     const missingStructure=new HealthController({pool:{query:async()=>({rows:[{migrations}]})}} as unknown as Database);
     await assert.rejects(missingStructure.ready(), /Service Unavailable/);
   }

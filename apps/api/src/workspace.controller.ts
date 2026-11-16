@@ -16,7 +16,7 @@ export class WorkspaceController {
   @Get('catalog') async catalog(@Headers() h: H) {
     const actor = await this.identity.identity(auth(h));
     const result = await this.db.pool.query(`SELECT * FROM service_catalog WHERE published=true AND (visible_groups='[]'::jsonb OR EXISTS
-      (SELECT 1 FROM group_memberships WHERE employee_id=$1 AND visible_groups ? group_id)) ORDER BY code`,[actor.id]);
+      (SELECT 1 FROM group_memberships WHERE employee_id=$1 AND visible_groups ? group_id)) ORDER BY sort_order,code`,[actor.id]);
     return { items: result.rows.map(r => ({ code:r.code,name:r.name || r.code,description:r.description,type:r.type,formVersion:r.form_version,fields:r.field_schema,available:['INC','GEN'].includes(r.type) })) };
   }
   @Get('support-groups') async groups(@Headers() h: H) {

@@ -1,5 +1,6 @@
 import { BadRequestException } from '@nestjs/common';
 import type { ServiceStructure,ServiceStructureProposal } from '@itsm/contracts';
+import { serviceCatalogChange } from './service-catalog-policy.js';
 
 const object=(value:unknown):value is Record<string,unknown>=>!!value&&typeof value==='object'&&!Array.isArray(value);
 const exact=(value:Record<string,unknown>,keys:string[])=>Object.keys(value).length===keys.length&&keys.every(key=>Object.hasOwn(value,key));
@@ -62,9 +63,10 @@ export function serviceStructure(value:unknown):ServiceStructure {
 }
 
 export function structureProposal(value:unknown):ServiceStructureProposal {
-  if(!object(value)||!exact(value,['id','expectedVersion','config','reason','contentClass'])||!structureUuid.test(String(value.id))
+  if(!object(value)||!exact(value,['id','expectedVersion','config','reason','contentClass',...(Object.hasOwn(value,'catalogChange')?['catalogChange']:[])])||!structureUuid.test(String(value.id))
     ||!Number.isSafeInteger(value.expectedVersion)||(value.expectedVersion as number)<1||!text(value.reason,500)||value.contentClass!=='GENERAL')invalid();
-  return {id:value.id as string,expectedVersion:value.expectedVersion as number,config:serviceStructure(value.config),reason:(value.reason as string).trim(),contentClass:'GENERAL'};
+  return {id:value.id as string,expectedVersion:value.expectedVersion as number,config:serviceStructure(value.config),reason:(value.reason as string).trim(),contentClass:'GENERAL',
+    ...(Object.hasOwn(value,'catalogChange')?{catalogChange:serviceCatalogChange(value.catalogChange)}:{})};
 }
 
 export function preserveStructureIds(previous:ServiceStructure,next:ServiceStructure):void {

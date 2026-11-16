@@ -122,6 +122,8 @@ jobs:
         run: node tests/integration/support-structure.mjs
       - name: Verify configurable service domains, appointments and historical routing
         run: node tests/integration/service-structure.mjs
+      - name: Verify reviewed service catalog and position routing bundles
+        run: node tests/integration/service-catalog.mjs
       - uses: actions/upload-artifact@v4
         if: always()
         with:

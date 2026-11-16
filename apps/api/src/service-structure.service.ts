@@ -1,17 +1,19 @@
 import { BadRequestException,ConflictException,ForbiddenException,Injectable,NotFoundException,UnauthorizedException } from '@nestjs/common';
 import { createHash } from 'node:crypto';
 import type { PoolClient } from 'pg';
-import type { ServiceStructure,ServiceStructureChange,ServiceStructureOptions,ServiceStructurePreview } from '@itsm/contracts';
+import type { ServiceCatalogChange,ServiceStructure,ServiceStructureChange,ServiceStructureOptions,ServiceStructurePreview } from '@itsm/contracts';
 import type { Identity } from './auth.service.js';
 import { Database } from './database.service.js';
 import { IntakePolicyService } from './intake-policy.service.js';
 import { ROLE_AUTHORIZATION_LOCK,ROLE_EFFECTIVE_SQL } from './role-policy.js';
 import { supportDecision } from './support-policy.js';
 import { preserveStructureIds,serviceStructure,structureProposal,structureUuid } from './service-structure-policy.js';
+import { serviceCatalogChange } from './service-catalog-policy.js';
+import { applyCatalogBundle,catalogAdminRows,validateCatalogBundle } from './service-catalog-store.js';
 
 type Client=Pick<PoolClient,'query'>;
 const columns=`id,expected_version AS "expectedVersion",config,proposed_by AS "proposedBy",reviewed_by AS "reviewedBy",
-  status,version,reason,review_reason AS "reviewReason",created_at AS "createdAt",reviewed_at AS "reviewedAt"`;
+  status,version,reason,review_reason AS "reviewReason",created_at AS "createdAt",reviewed_at AS "reviewedAt",catalog_change AS "catalogChange"`;
 
 @Injectable()
 export class ServiceStructureService {
@@ -67,9 +69,21 @@ export class ServiceStructureService {
     return {items:people.rows.slice(0,50),hasMore:people.rows.length>50};
   }
 
-  private async validate(client:Client,config:ServiceStructure,previous:ServiceStructure):Promise<ServiceStructurePreview[]>{
+  async catalog(actor:Identity){
+    return this.db.transaction(async client=>{
+      await client.query('SELECT pg_advisory_xact_lock_shared($1)',[ROLE_AUTHORIZATION_LOCK]);await this.admin(client,actor.id);
+      const current=await this.current(client),options=await this.options(client),rows=await catalogAdminRows(client,actor.id);
+      return {...current,options,items:rows.slice(0,500),hasMore:rows.length>500};
+    });
+  }
+
+  private async validate(client:Client,config:ServiceStructure,previous:ServiceStructure,catalogChange?:ServiceCatalogChange):Promise<ServiceStructurePreview[]>{
     preserveStructureIds(previous,config);
     const options=await this.options(client),groups=new Set(options.groups.map(row=>row.id));
+    if(catalogChange){
+      options.services=options.services.filter(row=>row.code!==catalogChange.code);
+      options.services.push({code:catalogChange.code,name:catalogChange.name,groupId:catalogChange.groupId,type:catalogChange.type,published:catalogChange.published});
+    }
     if(config.positions.some(row=>!groups.has(row.groupId)))throw new BadRequestException({code:'SERVICE_STRUCTURE_GROUP_UNAVAILABLE'});
     const employees=await client.query(`SELECT e.id,e.display_name AS name,e.active,
       ARRAY(SELECT m.group_id FROM group_memberships m WHERE m.employee_id=e.id) AS groups,
@@ -96,7 +110,7 @@ export class ServiceStructureService {
     return config.mappings.map(mapping=>{
       const service=options.services.find(row=>row.code===mapping.serviceCode),position=positions.get(mapping.primaryPositionId)!;
       if(!service)throw new BadRequestException({code:'SERVICE_STRUCTURE_SERVICE_UNAVAILABLE'});
-      // Catalog ownership is changed through its own reviewed workflow, never as a hidden side effect here.
+      // Catalog ownership may change only through the explicit reviewed bundle.
       if(mapping.enabled&&position.groupId!==service.groupId)throw new BadRequestException({code:'SERVICE_STRUCTURE_GROUP_MISMATCH'});
       const candidates=config.appointments.filter(a=>a.enabled&&a.positionId===position.id&&Date.parse(a.validFrom)<=clock&&clock<Date.parse(a.validTo))
         .map(a=>({id:a.employeeId,name:people.get(a.employeeId)!.name,duty:a.duty,dingLinked:people.get(a.employeeId)!.dingLinked}))
@@ -116,7 +130,8 @@ export class ServiceStructureService {
       await client.query('SELECT pg_advisory_xact_lock_shared($1)',[ROLE_AUTHORIZATION_LOCK]);await this.admin(client,actor.id);
       const current=await this.current(client);
       if(current.version!==input.expectedVersion)throw new ConflictException({code:'SERVICE_STRUCTURE_VERSION_CONFLICT'});
-      return {items:await this.validate(client,input.config,current.config)};
+      if(input.catalogChange)await validateCatalogBundle(client,actor.id,input.catalogChange,input.config);
+      return {items:await this.validate(client,input.config,current.config,input.catalogChange)};
     });
   }
 
@@ -133,9 +148,11 @@ export class ServiceStructureService {
       }
       const current=await this.current(client);
       if(current.version!==input.expectedVersion)throw new ConflictException({code:'SERVICE_STRUCTURE_VERSION_CONFLICT'});
-      await this.validate(client,input.config,current.config);
-      const row=await client.query(`INSERT INTO service_structure_proposals(id,expected_version,config,request_hash,proposed_by,reason)
-        VALUES($1,$2,$3,$4,$5,$6) RETURNING ${columns}`,[input.id,input.expectedVersion,JSON.stringify(input.config),hash,actor.id,input.reason]);
+      const catalogBase=input.catalogChange?await validateCatalogBundle(client,actor.id,input.catalogChange,input.config):undefined;
+      await this.validate(client,input.config,current.config,input.catalogChange);
+      const row=await client.query(`INSERT INTO service_structure_proposals(id,expected_version,config,request_hash,proposed_by,reason,catalog_change,catalog_base)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING ${columns}`,[input.id,input.expectedVersion,JSON.stringify(input.config),hash,actor.id,input.reason,
+          input.catalogChange?JSON.stringify(input.catalogChange):null,catalogBase?JSON.stringify(catalogBase):null]);
       await this.audit(client,input.id,actor.id,'PROPOSED',null,input.reason);
       return row.rows[0];
     });
@@ -178,10 +195,20 @@ export class ServiceStructureService {
         const current=await this.current(client),config=serviceStructure(p.config);
         if(current.version!==p.expectedVersion)throw new ConflictException({code:'SERVICE_STRUCTURE_VERSION_CONFLICT'});
         if(this.affected(current.config,config).has(actor.id))throw new ForbiddenException({code:'SERVICE_STRUCTURE_INDEPENDENT_REVIEW_REQUIRED'});
-        const preview=await this.validate(client,config,current.config);
+        const catalogChange=p.catalogChange?serviceCatalogChange(p.catalogChange):undefined;
+        if(catalogChange){
+          if(catalogChange.initialPublisherId===actor.id||catalogChange.approval?.steps.some(step=>step.approverId===actor.id))
+            throw new ForbiddenException({code:'SERVICE_STRUCTURE_INDEPENDENT_REVIEW_REQUIRED'});
+          await validateCatalogBundle(client,p.proposedBy,catalogChange,config);
+          const unchanged=await client.query(`SELECT catalog_base IS NOT DISTINCT FROM
+            (SELECT to_jsonb(c) FROM service_catalog c WHERE c.code=$2) AS unchanged FROM service_structure_proposals WHERE id=$1`,[id,catalogChange.code]);
+          if(!unchanged.rows[0].unchanged)throw new ConflictException({code:'FORM_VERSION_CONFLICT'});
+        }
+        const preview=await this.validate(client,config,current.config,catalogChange);
         if(preview.some(row=>row.enabled&&!row.candidates.length))throw new ConflictException({code:'SERVICE_STRUCTURE_COVERAGE_REQUIRED'});
         published=current.version+1;
         await client.query('INSERT INTO service_structure_versions(version,config,proposal_id) VALUES($1,$2,$3)',[published,JSON.stringify(config),id]);
+        if(catalogChange)await applyCatalogBundle(client,p.proposedBy,id,published,catalogChange);
         await client.query('UPDATE service_structure_current SET version=$1 WHERE id=true',[published]);
       }
       const updated=await client.query(`UPDATE service_structure_proposals SET status=$2,reviewed_by=$3,review_reason=$4,

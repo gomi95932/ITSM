@@ -4,6 +4,7 @@ import { type PoolClient } from 'pg';
 import { type Identity } from './auth.service.js';
 import { Database } from './database.service.js';
 import { IntakePolicyService } from './intake-policy.service.js';
+import { ROLE_AUTHORIZATION_LOCK } from './role-policy.js';
 
 type Field = { key: string; label: string; required: boolean; options?: string[] };
 type Step = { role: 'MANAGER' | 'SYSTEM_OWNER' | 'SECURITY_OWNER' | 'RESOURCE_OWNER' | 'LICENSE_OWNER' | 'DIRECTORY_OWNER'; approverId?: string };
@@ -28,7 +29,7 @@ function canonical(value: unknown): string {
   if (plain(value)) return `{${Object.entries(value).sort(([a],[b]) => a.localeCompare(b)).map(([k,v]) => `${JSON.stringify(k)}:${canonical(v)}`).join(',')}}`;
   return JSON.stringify(value) ?? 'null';
 }
-function validatePublish(body: unknown): Publish {
+export function validateRequestCatalogPublish(body: unknown): Publish {
   if (!plain(body) || !only(body,['contentClass','expectedVersion','name','description','groupId','visibleGroups','fields','approval','maxValidityDays'])
     || body.contentClass !== 'GENERAL' || !Number.isInteger(body.expectedVersion) || (body.expectedVersion as number) < 1
     || !text(body.name,100) || !text(body.description,500) || !text(body.groupId,100)
@@ -60,6 +61,7 @@ export class RequestCatalogService {
   constructor(private readonly db: Database, private readonly intake: IntakePolicyService) {}
 
   private async locked(client: PoolClient, actor: Identity, code: string): Promise<CatalogRow> {
+    await client.query('SELECT pg_advisory_xact_lock($1)',[ROLE_AUTHORIZATION_LOCK]);
     if (!codePattern.test(code)) throw new NotFoundException();
     const service = await client.query<CatalogRow>('SELECT * FROM service_catalog WHERE code=$1 AND type=\'REQ\' FOR UPDATE',[code]);
     if (!service.rowCount) throw new NotFoundException();
@@ -108,13 +110,17 @@ export class RequestCatalogService {
   }
 
   async publish(actor: Identity, code: string, body: unknown, key: string, requestId: string) {
-    const input = validatePublish(body);
+    const input = validateRequestCatalogPublish(body);
     await this.intake.requireGeneral(actor.id,input as unknown as Record<string,unknown>,'request-catalog');
     return this.db.transaction(async client => {
       const current = await this.locked(client,actor,code);
       const {requestHash,response} = await this.replay(client,actor,code,key,input,'PUBLISH');
       if (response) return response;
       if (input.expectedVersion !== current.form_version) throw new ConflictException({code:'FORM_VERSION_CONFLICT'});
+      const route = await client.query(`SELECT p."groupId" FROM service_position_routes r
+        JOIN support_positions p ON p.id=r."primaryPositionId" WHERE r."serviceCode"=$1 AND r.enabled`,[code]);
+      if (route.rowCount && route.rows[0].groupId !== input.groupId)
+        throw new ConflictException({code:'SERVICE_STRUCTURE_GROUP_MISMATCH'});
       const groups = [...input.visibleGroups,input.groupId];
       const foundGroups = await client.query('SELECT id FROM support_groups WHERE id=ANY($1::text[])',[groups]);
       if (foundGroups.rowCount !== new Set(groups).size) throw new BadRequestException({code:'CATALOG_GROUP_UNAVAILABLE'});
