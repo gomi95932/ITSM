@@ -1,7 +1,7 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
 import { createHash, randomUUID } from 'node:crypto';
 import { type PoolClient } from 'pg';
-import { P1_REVIEW_REMINDER_MINUTES, TICKET_ACTIONS, type ClassificationInput, type CreateTicketInput, type PriorityReviewInput, type PriorityReviewState, type TicketActionInput, type TicketFeedback, type TicketReceipt, type TicketStatus } from '@itsm/contracts';
+import { P1_REVIEW_REMINDER_MINUTES, TICKET_ACTIONS, WORK_QUEUES, type ClassificationInput, type CreateTicketInput, type PriorityReviewInput, type PriorityReviewState, type TicketActionInput, type TicketFeedback, type TicketReceipt, type TicketStatus, type WorkQueue, type WorkQueueCounts } from '@itsm/contracts';
 import { transition } from './ticket-state.js';
 import { Database } from './database.service.js';
 import { AuthService, type AuthHeaders, type Identity } from './auth.service.js';
@@ -20,7 +20,7 @@ type TicketRow = {
   description: string; fields: Record<string, unknown>; impact: string; urgency: string;
   priority: string; status: TicketStatus; version: number; created_at: Date; updated_at: Date;
   assignee_id: string | null; pending_group_id: string | null; pending_assignee_id: string | null;
-  assignee_name?: string | null; pending_assignee_name?: string | null;
+  assignee_name?: string | null; pending_assignee_name?: string | null; owner_group_name?: string | null;
   priority_review_state: PriorityReviewState; priority_candidate_at: Date | null;
   priority_reviewed_at: Date | null; priority_reviewed_by: string | null; priority_review_reason: string | null;
   submitted_by_id: string; delegation_id: string | null; original_catalog_snapshot: Record<string,unknown>;
@@ -30,7 +30,8 @@ const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const keys = new Set(['contentClass', 'serviceCode', 'formVersion', 'subject', 'description', 'impact', 'urgency', 'fields', 'draftId', 'delegationId']);
 const actionKeys = new Set(['contentClass', 'action', 'expectedVersion', 'comment', 'reason', 'dueAt', 'vendorReference', 'vendorOwner', 'resolutionCategory', 'evidence', 'targetGroupId', 'targetAssigneeId']);
 const names = `(SELECT display_name FROM employees WHERE id=t.assignee_id) AS assignee_name,
-  (SELECT display_name FROM employees WHERE id=t.pending_assignee_id) AS pending_assignee_name`;
+  (SELECT display_name FROM employees WHERE id=t.pending_assignee_id) AS pending_assignee_name,
+  (SELECT name FROM support_groups WHERE id=t.owner_group_id) AS owner_group_name`;
 const workAccess = `(owner_group_id IN (SELECT group_id FROM group_memberships WHERE employee_id=$1)
   OR owner_group_id IN (SELECT group_id FROM priority_reviewers WHERE employee_id=$1)
   OR (pending_assignee_id=$1 AND pending_group_id IN (SELECT group_id FROM group_memberships WHERE employee_id=$1)))`;
@@ -38,6 +39,18 @@ const delegatedAccess=(actor:string)=>`EXISTS(SELECT 1 FROM ticket_delegations d
   WHERE d.id=t.delegation_id AND d.requester_id=t.requester_id AND d.delegate_id=${actor} AND r.active
     AND d.revoked_at IS NULL AND d.expires_at>now()
     AND EXISTS(SELECT 1 FROM group_memberships m WHERE m.employee_id=d.delegate_id))`;
+
+const activeWork = `t.status NOT IN ('CLOSED','CANCELLED','REJECTED')`;
+const ownerMembership = `t.owner_group_id IN (SELECT group_id FROM group_memberships WHERE employee_id=$1)`;
+// These predicates only narrow workAccess; pending handovers retain the current owner's responsibility.
+const workQueueConditions: Record<WorkQueue, string> = {
+  all: 'true',
+  assigned: `${activeWork} AND t.assignee_id=$1 AND ${ownerMembership}`,
+  incoming: `${activeWork} AND t.pending_assignee_id=$1 AND t.pending_group_id IN
+    (SELECT group_id FROM group_memberships WHERE employee_id=$1)`,
+  outgoing: `${activeWork} AND t.assignee_id=$1 AND t.pending_assignee_id IS NOT NULL AND ${ownerMembership}`,
+  unassigned: `${activeWork} AND t.assignee_id IS NULL AND t.pending_assignee_id IS NULL AND ${ownerMembership}`,
+};
 
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
@@ -174,6 +187,7 @@ export class TicketsService {
   private receipt(row: TicketRow): TicketReceipt {
     return { id: row.id, number: row.number, status: row.status, version: row.version, ownerGroupId: row.owner_group_id,
       assigneeId: row.assignee_id, pendingGroupId: row.pending_group_id, pendingAssigneeId: row.pending_assignee_id,
+      ...(row.owner_group_name !== undefined ? { ownerGroupName: row.owner_group_name } : {}),
       ...(row.assignee_name !== undefined ? { assigneeName: row.assignee_name } : {}),
       ...(row.pending_assignee_name !== undefined ? { pendingAssigneeName: row.pending_assignee_name } : {}) };
   }
@@ -197,18 +211,34 @@ export class TicketsService {
     return result.rows[0];
   }
 
-  async list(actor: Identity, mine: boolean, status: string | undefined, page: number, size: number): Promise<object> {
+  async list(actor: Identity, mine: boolean, status: string | undefined, page: number, size: number, queue?: string): Promise<object> {
     if (!Number.isInteger(page) || page < 1 || !Number.isInteger(size) || size < 1 || size > 100) throw new BadRequestException();
     if (status && !['NEW','QUEUED','IN_PROGRESS','WAITING_APPROVAL','WAITING_USER','WAITING_VENDOR','PENDING_CONFIRMATION','CLOSED','CANCELLED','REJECTED'].includes(status)) throw new BadRequestException();
+    if (queue !== undefined && (mine || !WORK_QUEUES.includes(queue as WorkQueue))) throw new BadRequestException({ code: 'INVALID_WORK_QUEUE' });
     if (!mine && !actor.groups.length && !actor.priorityReviewGroups?.length) throw new NotFoundException();
     const mineAccess=`(requester_id=$1 OR ${delegatedAccess('$1')})`;
-    const result = await this.pool.query<TicketRow>(`SELECT t.*,${names} FROM tickets t WHERE ${mine ? mineAccess : workAccess}
-      AND ($2::text IS NULL OR status=$2) ORDER BY created_at DESC, id DESC LIMIT $3 OFFSET $4`,
+    const condition = workQueueConditions[(queue ?? 'all') as WorkQueue];
+    const queueCounts = `jsonb_build_object(${WORK_QUEUES.map(name =>
+      `'${name}',count(*) FILTER (WHERE ${workQueueConditions[name]})::integer`).join(',')})`;
+    const result = await this.pool.query<{
+      items: TicketRow[]; counts: Partial<Record<TicketStatus, number>>; total: number; work_queues?: WorkQueueCounts;
+    }>(`WITH scoped AS MATERIALIZED (
+        SELECT t.*,${names} FROM tickets t WHERE ${mine ? mineAccess : workAccess}
+      ), selected AS MATERIALIZED (
+        SELECT t.* FROM scoped t WHERE ${condition}
+      ), page_rows AS (
+        SELECT * FROM selected WHERE ($2::text IS NULL OR status=$2)
+        ORDER BY created_at DESC,id DESC LIMIT $3 OFFSET $4
+      )
+      SELECT COALESCE((SELECT jsonb_agg(to_jsonb(p) ORDER BY p.created_at DESC,p.id DESC) FROM page_rows p),'[]'::jsonb) AS items,
+        COALESCE((SELECT jsonb_object_agg(s.status,s.count) FROM
+          (SELECT status,count(*)::integer AS count FROM selected GROUP BY status) s),'{}'::jsonb) AS counts,
+        (SELECT count(*)::integer FROM selected WHERE ($2::text IS NULL OR status=$2)) AS total
+        ${mine ? '' : `,(SELECT ${queueCounts} FROM scoped t) AS work_queues`}`,
       [actor.id, status ?? null, size, (page - 1) * size]);
-    const summary = await this.pool.query(`SELECT status,count(*)::integer AS count FROM tickets t WHERE ${mine ? mineAccess : workAccess} GROUP BY status`,[actor.id]);
-    const counts = Object.fromEntries(summary.rows.map(row=>[row.status,row.count]));
-    const total = status ? counts[status] ?? 0 : summary.rows.reduce((sum,row)=>sum+row.count,0);
-    return { items: result.rows.map(row => this.publicTicket(row)), page, size, total, counts };
+    const row = result.rows[0];
+    return { items: row.items.map(ticket => this.publicTicket(ticket)), page, size, total: row.total, counts: row.counts,
+      ...(!mine ? { workQueues: row.work_queues } : {}) };
   }
 
   private publicTicket(row: TicketRow): object {
