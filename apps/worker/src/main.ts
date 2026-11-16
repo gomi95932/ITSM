@@ -73,7 +73,7 @@ async function deliver() {
         const sent = status.send_result?.sent_userid_list ?? [];
         if (!Array.isArray(sent) || !sent.includes(user.ding_user_id)) throw new Error('DELIVERY_NOT_CONFIRMED');
         await client.query("UPDATE notification_deliveries SET state='DELIVERED',last_error=NULL,updated_at=now() WHERE id=$1",[row.id]);
-        if (['ACCEPT','ACCEPT_HANDOVER'].includes(row.action) && row.employee_id === row.requester_id)
+        if (['ACCEPT','ACCEPT_HANDOVER','ACCEPT_OFFER'].includes(row.action) && row.employee_id === row.requester_id)
           await client.query('UPDATE sla_cycles SET responded_at=now() WHERE ticket_id=$1 AND cycle=1 AND responded_at IS NULL',[row.ticket_id]);
       } else {
         const data = await provider('asyncsend_v2',{ agent_id:process.env.DINGTALK_AGENT_ID,userid_list:user.ding_user_id,to_all_user:false,

@@ -11,3 +11,8 @@ test('a company holiday is not counted toward the deadline',()=>{
   const start=new Date('2026-11-23T01:00:00Z');
   assert.equal(assignmentDeadline(start,30,{...DEFAULT_CALENDAR,holidays:['2026-11-23']}).toISOString(),'2026-11-24T01:30:00.000Z');
 });
+test('a fractional remaining SLA budget does not grant an extra minute',()=>{
+  const start=new Date('2026-11-20T09:59:40.000Z');
+  assert.equal(assignmentDeadline(start,0.5,DEFAULT_CALENDAR,true).toISOString(),'2026-11-20T10:00:10.000Z');
+  assert.equal(assignmentDeadline(start,0.5,DEFAULT_CALENDAR).toISOString(),'2026-11-23T01:00:10.000Z');
+});
