@@ -124,6 +124,8 @@ jobs:
         run: node tests/integration/service-structure.mjs
       - name: Verify reviewed service catalog and position routing bundles
         run: node tests/integration/service-catalog.mjs
+      - name: Verify support group lifecycle, dependency guards and historical preservation
+        run: node tests/integration/support-group-lifecycle.mjs
       - uses: actions/upload-artifact@v4
         if: always()
         with:

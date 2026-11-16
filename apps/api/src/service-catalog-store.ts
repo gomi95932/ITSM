@@ -12,7 +12,9 @@ export async function validateCatalogBundle(client:Client,actor:string,change:Se
   if((row?.form_version??0)!==change.expectedVersion)throw new ConflictException({code:'FORM_VERSION_CONFLICT'});
   if(row&&row.type!==change.type)throw new BadRequestException({code:'CATALOG_TYPE_IMMUTABLE'});
   const groups=[...new Set([change.groupId,...change.visibleGroups])];
-  if((await client.query('SELECT id FROM support_groups WHERE id=ANY($1::text[])',[groups])).rowCount!==groups.length)
+  const found=await client.query<{id:string;enabled:boolean}>('SELECT id,enabled FROM support_groups WHERE id=ANY($1::text[])',[groups]);
+  const previousGroups=row?[row.group_id,...row.visible_groups]:[];
+  if(found.rowCount!==groups.length||found.rows.some(group=>!group.enabled&&(change.published||!previousGroups.includes(group.id))))
     throw new BadRequestException({code:'CATALOG_GROUP_UNAVAILABLE'});
   const mapping=config.mappings.find(item=>item.serviceCode===change.code);
   if(!mapping||mapping.enabled!==change.published||config.positions.find(p=>p.id===mapping.primaryPositionId)?.groupId!==change.groupId)

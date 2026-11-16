@@ -12,6 +12,9 @@ export class SupportController {
   @Get('groups/:group/members') async members(@Headers() h:H,@Param('group') group:string,@Query('q') q?:string,@Query('page') page?:string){
     return this.support.members(await this.auth.identity(auth(h)),group,q,page);
   }
+  @Get('groups/:group/dependencies') async dependencies(@Headers() h:H,@Param('group') group:string){
+    return this.support.dependencies(await this.auth.identity(auth(h)),group);
+  }
   @Get(':id/history') async history(@Headers() h:H,@Param('id') id:string){return this.support.history(await this.auth.identity(auth(h)),id);}
   @Post() async propose(@Headers() h:H,@Body() body:unknown){return this.support.propose(await this.auth.identity(auth(h),true),body);}
   @Post(':id/review') @HttpCode(200) async review(@Headers() h:H,@Param('id') id:string,@Body() body:unknown){

@@ -101,7 +101,7 @@ export class RoutingConfigService {
   async list(actor:Identity){
     await this.admin(this.db.pool,actor.id);
     const [groups,policies,proposals]=await Promise.all([
-      this.db.pool.query('SELECT id,name,fallback_group_id AS "fallbackGroupId",routing_version AS "routingVersion" FROM support_groups ORDER BY name,id'),
+      this.db.pool.query('SELECT id,name,fallback_group_id AS "fallbackGroupId",routing_version AS "routingVersion" FROM support_groups WHERE enabled ORDER BY name,id'),
       this.db.pool.query(`SELECT id,group_id AS "groupId",priority,receive_minutes AS "receiveMinutes",calendar_snapshot AS calendar,
         valid_from AS "validFrom",valid_to AS "validTo",approved_by AS "approvedBy"
         FROM assignment_policy_versions WHERE active ORDER BY group_id,priority`),
@@ -133,7 +133,7 @@ export class RoutingConfigService {
           throw new ConflictException({code:'ROUTING_ID_CONFLICT'});
         return p;
       }
-      const group=await client.query('SELECT id,routing_version FROM support_groups WHERE id=$1 FOR UPDATE',[input.groupId]);
+      const group=await client.query('SELECT id,routing_version FROM support_groups WHERE id=$1 AND enabled FOR UPDATE',[input.groupId]);
       if(!group.rowCount)throw new BadRequestException({code:'ROUTING_GROUP_UNAVAILABLE'});
       const pending=await client.query(`SELECT 1 FROM routing_config_proposals
         WHERE group_id=$1 AND kind=$2 AND priority IS NOT DISTINCT FROM $3 AND status='PENDING' LIMIT 1`,
@@ -178,6 +178,7 @@ export class RoutingConfigService {
         ?{fallbackGroupId:group.rows[0].fallback_group_id,routingVersion:group.rows[0].routing_version}
         :{policyId:await this.currentPolicy(client,proposal.groupId,proposal.priority!)};
       if(input.decision==='APPROVE'){
+        if(!group.rows[0].enabled)throw new ConflictException({code:'ROUTING_GROUP_UNAVAILABLE'});
         if(proposal.kind==='FALLBACK'){
           if(group.rows[0].routing_version!==proposal.expectedRoutingVersion)throw new ConflictException({code:'ROUTING_VERSION_CONFLICT'});
           const target=(proposal.config as FallbackConfig).fallbackGroupId;
@@ -186,7 +187,7 @@ export class RoutingConfigService {
             while(cursor){
               if(visited.has(cursor))throw new BadRequestException({code:'ROUTING_FALLBACK_CYCLE'});
               visited.add(cursor);
-              const next:QueryResult<{fallback_group_id:string|null}>=await client.query('SELECT fallback_group_id FROM support_groups WHERE id=$1',[cursor]);
+              const next:QueryResult<{fallback_group_id:string|null}>=await client.query('SELECT fallback_group_id FROM support_groups WHERE id=$1 AND enabled',[cursor]);
               if(!next.rowCount)throw new BadRequestException({code:'ROUTING_GROUP_UNAVAILABLE'});
               cursor=next.rows[0].fallback_group_id;
             }

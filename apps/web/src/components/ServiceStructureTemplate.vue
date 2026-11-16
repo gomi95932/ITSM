@@ -22,7 +22,7 @@ function save(){if(result.value&&!result.value.conflicts.length&&result.value.ad
       <div class="form-grid">
         <fieldset v-for="(template,index) in COMPANY_SERVICE_STRUCTURE_TEMPLATE" :key="template.id" class="template-choice">
           <legend><label class="template-toggle"><input v-model="selections[index].selected" type="checkbox"/>{{template.name}}</label></legend>
-          <label>支持组 · {{template.name}}<select v-model="selections[index].groupId" :required="selections[index].selected" :disabled="!selections[index].selected"><option value="">请选择</option><option v-for="group in groups" :key="group.id" :value="group.id">{{group.name}}</option></select></label>
+          <label>支持组 · {{template.name}}<select v-model="selections[index].groupId" :required="selections[index].selected" :disabled="!selections[index].selected"><option value="">请选择</option><option v-for="group in groups.filter(row=>row.enabled!==false)" :key="group.id" :value="group.id">{{group.name}}</option></select></label>
           <p class="muted">{{template.systems.length}} 个业务系统 · {{template.positions.length}} 个岗位</p>
         </fieldset>
       </div>

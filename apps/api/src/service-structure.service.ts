@@ -37,7 +37,7 @@ export class ServiceStructureService {
   }
 
   private async options(client:Client):Promise<ServiceStructureOptions>{
-    return {groups:(await client.query('SELECT id,name FROM support_groups ORDER BY name,id')).rows,
+    return {groups:(await client.query('SELECT id,name,enabled FROM support_groups ORDER BY name,id')).rows,
       services:(await client.query(`SELECT code,name,group_id AS "groupId",type,published FROM service_catalog ORDER BY code`)).rows,people:[]};
   }
 
@@ -85,6 +85,9 @@ export class ServiceStructureService {
       options.services.push({code:catalogChange.code,name:catalogChange.name,groupId:catalogChange.groupId,type:catalogChange.type,published:catalogChange.published});
     }
     if(config.positions.some(row=>!groups.has(row.groupId)))throw new BadRequestException({code:'SERVICE_STRUCTURE_GROUP_UNAVAILABLE'});
+    if(config.positions.some(row=>options.groups.find(group=>group.id===row.groupId)?.enabled===false
+      &&(row.enabled||previous.positions.find(old=>old.id===row.id)?.groupId!==row.groupId)))
+      throw new BadRequestException({code:'SERVICE_STRUCTURE_GROUP_UNAVAILABLE'});
     const employees=await client.query(`SELECT e.id,e.display_name AS name,e.active,
       ARRAY(SELECT m.group_id FROM group_memberships m WHERE m.employee_id=e.id) AS groups,
       EXISTS(SELECT 1 FROM identity_links l WHERE l.employee_id=e.id AND l.corp_id=$2) AS "dingLinked"

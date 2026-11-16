@@ -1,7 +1,7 @@
 import { test,expect } from './fixtures';
 
 test('support groups and members are independently reviewed with continuity checks and mobile audit',async({page})=>{
-  test.setTimeout(120000);
+  test.setTimeout(180000);
   const id=`e2e-support-${Date.now()}`,name='研发现场支持组',renamed='研发现场支持组（调整）';
   await page.setViewportSize({width:1440,height:1000});await page.goto('/');
   await expect(page.getByRole('button',{name:'支持组',exact:true})).toHaveCount(0);
@@ -107,4 +107,39 @@ test('support groups and members are independently reviewed with continuity chec
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
   await dialog.getByRole('button',{name:'关闭审计'}).click();
   await selectGroup();await expect(members.getByRole('listitem')).toHaveCount(1);
+
+  await page.setViewportSize({width:1440,height:1000});
+  await as('demo-admin-1');await selectGroup();
+  await page.getByRole('button',{name:'停用支持组',exact:true}).click();
+  const retiring=page.getByRole('region',{name:'停用支持组',exact:true});
+  await expect(retiring.getByText('无阻塞依赖',{exact:true})).toBeVisible();
+  await page.screenshot({path:'test-results/support-lifecycle-desktop.png',fullPage:true});
+  await submit(`停用 ${id}`,'停用支持组');
+  await as('demo-admin-2');await expect(await decide('停用支持组',`停用 ${id}`)).toContainText('已批准');
+  await page.getByRole('tab',{name:'支持组与成员',exact:true}).click();
+  await page.getByRole('combobox',{name:'当前支持组'}).selectOption(id);
+  await expect(page.getByRole('button',{name:'增加成员',exact:true})).toBeDisabled();
+  await expect(members.getByText('此组暂无成员',{exact:true})).toBeVisible();
+  await expect(page.getByRole('button',{name:'恢复支持组',exact:true})).toBeEnabled();
+  await page.setViewportSize({width:390,height:844});
+  await page.screenshot({path:'test-results/support-lifecycle-mobile.png',fullPage:true});
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+
+  await as('demo-admin-1');
+  await page.getByRole('combobox',{name:'当前支持组'}).selectOption(id);
+  await page.getByRole('button',{name:'恢复支持组',exact:true}).click();
+  await submit(`恢复 ${id}`,'恢复支持组');
+  await as('demo-admin-2');await expect(await decide('恢复支持组',`恢复 ${id}`)).toContainText('已批准');
+  await selectGroup();await expect(members.getByText('此组暂无成员',{exact:true})).toBeVisible();
+
+  await as('demo-admin-1');
+  await page.getByRole('combobox',{name:'当前支持组'}).selectOption('service-desk');
+  await page.getByRole('button',{name:'停用支持组',exact:true}).click();
+  await expect(retiring.getByText(/项阻塞依赖/)).toBeVisible();
+  await retiring.getByRole('textbox',{name:'变更依据'}).fill('责任未完成时不得停用');
+  await retiring.getByRole('checkbox',{name:'本次内容不含密码、密钥及安全事件证据'}).check();
+  await expect(retiring.getByRole('button',{name:'提交独立复核'})).toBeDisabled();
+  await page.screenshot({path:'test-results/support-lifecycle-dependencies-mobile.png',fullPage:true});
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+  await page.getByRole('button',{name:'取消编辑',exact:true}).click();
 });

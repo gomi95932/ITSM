@@ -15,14 +15,17 @@ export function supportProposal(body:unknown):SupportChangeInput {
     ||typeof body.id!=='string'||!supportUuid.test(body.id)||!supportId(body.groupId)||body.contentClass!=='GENERAL'
     ||!text(body.reason,500)||!object(body.config))throw invalid();
   const group=body.kind==='GROUP_CREATE'||body.kind==='GROUP_UPDATE';
-  if(!group&&body.kind!=='MEMBER_ADD'&&body.kind!=='MEMBER_REMOVE')throw invalid();
+  const lifecycle=body.kind==='GROUP_DISABLE'||body.kind==='GROUP_RESTORE';
+  if(!group&&!lifecycle&&body.kind!=='MEMBER_ADD'&&body.kind!=='MEMBER_REMOVE')throw invalid();
   if(body.kind==='GROUP_CREATE'?body.expectedGroupVersion!==null:!version(body.expectedGroupVersion))throw invalid();
   if(group){
     if(body.employeeId!==undefined||!only(body.config,['name','description'])||!text(body.config.name,100)
       ||!text(body.config.description,1000,true))throw invalid();
+  }else if(lifecycle){
+    if(body.employeeId!==undefined||Object.keys(body.config).length)throw invalid();
   }else if(!supportId(body.employeeId)||Object.keys(body.config).length)throw invalid();
   return {id:body.id.toLowerCase(),kind:body.kind as SupportChangeInput['kind'],groupId:body.groupId,
-    ...(group?{}:{employeeId:body.employeeId as string}),
+    ...(group||lifecycle?{}:{employeeId:body.employeeId as string}),
     config:group?{name:(body.config.name as string).trim(),description:(body.config.description as string).trim()}:{},
     expectedGroupVersion:body.expectedGroupVersion as number|null,reason:body.reason.trim(),contentClass:'GENERAL'};
 }

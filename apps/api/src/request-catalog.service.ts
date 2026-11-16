@@ -122,7 +122,7 @@ export class RequestCatalogService {
       if (route.rowCount && route.rows[0].groupId !== input.groupId)
         throw new ConflictException({code:'SERVICE_STRUCTURE_GROUP_MISMATCH'});
       const groups = [...input.visibleGroups,input.groupId];
-      const foundGroups = await client.query('SELECT id FROM support_groups WHERE id=ANY($1::text[])',[groups]);
+      const foundGroups = await client.query('SELECT id FROM support_groups WHERE id=ANY($1::text[]) AND enabled',[groups]);
       if (foundGroups.rowCount !== new Set(groups).size) throw new BadRequestException({code:'CATALOG_GROUP_UNAVAILABLE'});
       const ids = input.approval.steps.flatMap(step => step.approverId ? [step.approverId] : []);
       if (!unique(ids)) throw new BadRequestException({code:'DUPLICATE_APPROVER'});

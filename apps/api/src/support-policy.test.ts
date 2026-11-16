@@ -23,3 +23,12 @@ test('support decisions cannot overpost and require an independent reviewer',()=
   assert.equal(supportIndependentReview('engineer','admin-a','engineer'),false);
   assert.equal(supportIndependentReview('admin-b','admin-a','engineer'),true);
 });
+test('group lifecycle proposals have no employee, implicit migration or privilege restoration payload',()=>{
+  for(const kind of ['GROUP_DISABLE','GROUP_RESTORE']){
+    const input={...proposal,kind,employeeId:undefined};
+    assert.deepEqual(supportProposal(input),{id:input.id,kind,groupId:input.groupId,config:{},expectedGroupVersion:1,
+      reason:'Reviewed roster',contentClass:'GENERAL'});
+    for(const patch of [{employeeId:'agent-1'},{config:{restoreMembers:true}},{config:{enabled:false}},{expectedGroupVersion:null}])
+      assert.throws(()=>supportProposal({...input,...patch}));
+  }
+});

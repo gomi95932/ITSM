@@ -175,7 +175,7 @@ onMounted(load);
         <div class="form-grid">
           <label v-if="['domains','systems','positions'].includes(tab)">名称<input v-model="form.name" required maxlength="100"/></label>
           <label v-if="['systems','positions','mappings'].includes(tab)">责任域<select v-model="form.domainId" required><option value="">请选择</option><option v-for="d in draft.domains" :key="d.id" :value="d.id">{{d.name}}{{d.enabled?'':'（停用）'}}</option></select></label>
-          <label v-if="tab==='positions'">支持组<select v-model="form.groupId" required><option value="">请选择</option><option v-for="g in options.groups" :key="g.id" :value="g.id">{{g.name}}</option></select></label>
+          <label v-if="tab==='positions'">支持组<select v-model="form.groupId" required><option value="">请选择</option><option v-for="g in options.groups" :key="g.id" :value="g.id" :disabled="g.enabled===false">{{g.name}}{{g.enabled===false?'（已停用）':''}}</option></select></label>
           <template v-if="tab==='appointments'">
             <label>岗位<select v-model="form.positionId" required><option value="">请选择</option><option v-for="p in draft.positions" :key="p.id" :value="p.id">{{p.name}} · {{groupName(p.groupId)}}</option></select></label>
             <label>主备<select v-model="form.duty"><option value="PRIMARY">主处理</option><option value="BACKUP">备岗</option></select></label>

@@ -37,7 +37,7 @@ export function addCompanyServiceStructureTemplate(
       conflicts.push({id:choice.domainId,name:choice.domainId,reason:'SELECTION'});continue;
     }
     selected.add(choice.domainId);
-    if(!groups.some(row=>row.id===choice.groupId)){
+    if(!groups.some(row=>row.id===choice.groupId&&row.enabled!==false)){
       conflicts.push({id:choice.groupId,name:template.name,reason:'GROUP'});continue;
     }
     const domainId=`tpl-${template.id}`;

@@ -74,3 +74,9 @@ test('template rejects missing groups, unknown or duplicated selections without 
   assert.deepEqual(result.config,empty());assert.equal(result.added.length,0);
   assert.equal(COMPANY_SERVICE_STRUCTURE_TEMPLATE.length,2);
 });
+
+test('template cannot import a new position into a retired support group',()=>{
+  const result=addCompanyServiceStructureTemplate(empty(),groups.map(row=>({...row,enabled:false})),selection);
+  assert.ok(result.conflicts.every(row=>row.reason==='GROUP'));
+  assert.equal(result.conflicts.length,2);assert.deepEqual(result.added,[]);assert.deepEqual(result.config,empty());
+});

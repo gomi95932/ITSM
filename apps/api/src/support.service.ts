@@ -1,7 +1,7 @@
 import { BadRequestException,ConflictException,ForbiddenException,Injectable,NotFoundException,UnauthorizedException } from '@nestjs/common';
 import { createHash } from 'node:crypto';
 import type { PoolClient } from 'pg';
-import type { SupportAuditView,SupportChangeInput,SupportChangeView,SupportGroupView,SupportMembersView,SupportPeopleView,SupportStructureView } from '@itsm/contracts';
+import type { SupportAuditView,SupportChangeInput,SupportChangeView,SupportDependenciesView,SupportGroupView,SupportMembersView,SupportPeopleView,SupportStructureView } from '@itsm/contracts';
 import type { Identity } from './auth.service.js';
 import { Database } from './database.service.js';
 import { IntakePolicyService } from './intake-policy.service.js';
@@ -13,7 +13,7 @@ type Access={admin:boolean;groups:string[]};
 const columns=`p.id,p.kind,p.group_id AS "groupId",p.employee_id AS "employeeId",e.display_name AS "employeeName",
   p.config,p.expected_group_version AS "expectedGroupVersion",p.proposed_by AS "proposedBy",p.reviewed_by AS "reviewedBy",
   p.status,p.reason,p.review_reason AS "reviewReason",p.version,p.created_at AS "createdAt",p.reviewed_at AS "reviewedAt"`;
-const groupColumns=`g.id,g.name,g.description,g.administration_version AS version,
+const groupColumns=`g.id,g.name,g.description,g.enabled,g.administration_version AS version,
   (SELECT count(*)::int FROM group_memberships m JOIN employees e ON e.id=m.employee_id WHERE m.group_id=g.id AND e.active) AS "activeMembers"`;
 
 @Injectable()
@@ -36,7 +36,7 @@ export class SupportService {
   }
 
   private scope(access:Access,group:string,kind?:string){
-    if(!access.admin&&(!access.groups.includes(group)||kind==='GROUP_CREATE'||kind==='GROUP_UPDATE'))throw new NotFoundException();
+    if(!access.admin&&(!access.groups.includes(group)||(kind!==undefined&&!['MEMBER_ADD','MEMBER_REMOVE'].includes(kind))))throw new NotFoundException();
   }
 
   private async proposal(client:Client,id:string,access:Access):Promise<SupportChangeView>{
@@ -93,6 +93,31 @@ export class SupportService {
     return {group:g.rows[0],items:result.rows,total:count.rows[0].total,page,size:50};
   }
 
+  private async dependenciesFor(client:Client,group:string){
+    const result=await client.query<SupportDependenciesView['items'][number]>(`WITH refs AS (
+      SELECT kind,id,name,row_number() OVER(PARTITION BY kind ORDER BY id) AS n FROM support_group_dependencies($1)
+    ) SELECT kind,count(*)::int AS total,(count(*)>100) AS "hasMore",
+      jsonb_agg(jsonb_build_object('id',id,'name',name) ORDER BY id) FILTER(WHERE n<=100) AS "references"
+      FROM refs GROUP BY kind ORDER BY kind`,[group]);
+    return {items:result.rows,total:result.rows.reduce((sum,row)=>sum+row.total,0)};
+  }
+
+  async dependencies(actor:Identity,group:string):Promise<SupportDependenciesView>{
+    if(!supportId(group))throw new NotFoundException();
+    return this.db.transaction(async client=>{
+      await client.query('SELECT pg_advisory_xact_lock_shared($1)',[ROLE_AUTHORIZATION_LOCK]);
+      const access=await this.access(client,actor.id);if(!access.admin)throw new NotFoundException();
+      const result=await client.query<SupportGroupView>(`SELECT ${groupColumns} FROM support_groups g WHERE g.id=$1 FOR SHARE OF g`,[group]);
+      if(!result.rowCount)throw new NotFoundException();
+      return {group:result.rows[0],...await this.dependenciesFor(client,group)};
+    });
+  }
+
+  private async requireNoDependencies(client:Client,group:string){
+    const dependencies=await this.dependenciesFor(client,group);
+    if(dependencies.total)throw new ConflictException({code:'SUPPORT_GROUP_DEPENDENCIES',...dependencies});
+  }
+
   private async audit(client:PoolClient,id:string,actor:string,action:string,before:object|null,after:object,reason:string){
     await client.query(`INSERT INTO support_structure_audits(proposal_id,actor_id,action,before_value,after_value,reason)
       VALUES($1,$2,$3,$4,$5,$6)`,[id,actor,action,before===null?null:JSON.stringify(before),JSON.stringify(after),reason]);
@@ -105,6 +130,11 @@ export class SupportService {
       if(group.rowCount)throw new ConflictException({code:'SUPPORT_GROUP_EXISTS'});
     }else if(!group.rowCount||group.rows[0].administration_version!==input.expectedGroupVersion)
       throw new ConflictException({code:'SUPPORT_VERSION_CONFLICT'});
+    if(group.rowCount){
+      if(input.kind==='GROUP_RESTORE'&&group.rows[0].enabled)throw new ConflictException({code:'SUPPORT_GROUP_STATE_CONFLICT'});
+      if(!group.rows[0].enabled&&!['GROUP_RESTORE','GROUP_UPDATE'].includes(input.kind))
+        throw new ConflictException({code:'SUPPORT_GROUP_DISABLED'});
+    }
     return group.rows[0];
   }
 
@@ -121,6 +151,7 @@ export class SupportService {
       }
       if(input.kind==='MEMBER_ADD'&&input.employeeId===actor.id)throw new ForbiddenException({code:'SUPPORT_SELF_GRANT_DENIED'});
       await this.expected(client,input);
+      if(input.kind==='GROUP_DISABLE')await this.requireNoDependencies(client,input.groupId);
       if(input.employeeId){
         if(!(await client.query('SELECT id FROM employees WHERE id=$1 AND ($2 OR active) FOR SHARE',[input.employeeId,input.kind==='MEMBER_REMOVE'])).rowCount)
           throw new BadRequestException({code:'SUPPORT_PERSON_UNAVAILABLE'});
@@ -135,6 +166,30 @@ export class SupportService {
       await this.audit(client,input.id,actor.id,'PROPOSED',null,proposal,input.reason);
       return proposal;
     });
+  }
+
+  private async disableGroup(client:PoolClient,group:string,reviewer:string,reason:string){
+    await this.requireNoDependencies(client,group);
+    const before={
+      members:(await client.query('SELECT employee_id FROM group_memberships WHERE group_id=$1 ORDER BY employee_id FOR UPDATE',[group])).rows,
+      roles:(await client.query(`SELECT * FROM role_bindings WHERE group_id=$1 AND status IN ('PENDING','ACTIVE') ORDER BY id FOR UPDATE`,[group])).rows,
+      priorityReviewers:(await client.query('SELECT employee_id FROM priority_reviewers WHERE group_id=$1',[group])).rows,
+      knowledgeEditors:(await client.query('SELECT employee_id FROM knowledge_editors WHERE group_id=$1',[group])).rows,
+      knowledgeReviewers:(await client.query('SELECT employee_id FROM knowledge_reviewers WHERE group_id=$1',[group])).rows,
+      catalogPublishers:(await client.query(`SELECT p.* FROM request_catalog_publishers p JOIN service_catalog c ON c.code=p.service_code WHERE c.group_id=$1`,[group])).rows,
+    };
+    for(const binding of before.roles){
+      const changed=(await client.query(`UPDATE role_bindings SET status='REVOKED',revoked_by=$2,revoke_reason=$3,revoked_at=now(),version=version+1
+        WHERE id=$1 RETURNING *`,[binding.id,reviewer,reason])).rows[0];
+      await client.query(`INSERT INTO role_binding_audits(binding_id,actor_id,action,before_value,after_value,reason)
+        VALUES($1,$2,'REVOKED',$3,$4,$5)`,[binding.id,reviewer,JSON.stringify(binding),JSON.stringify(changed),reason]);
+      await client.query('INSERT INTO operational_audits(actor_id,action,target_id) VALUES($1,$2,$3)',[reviewer,'ROLE_REVOKED',binding.id]);
+    }
+    await client.query(`DELETE FROM request_catalog_publishers p USING service_catalog c WHERE p.service_code=c.code AND c.group_id=$1`,[group]);
+    for(const table of ['priority_reviewers','knowledge_editors','knowledge_reviewers','group_memberships'])
+      await client.query(`DELETE FROM ${table} WHERE group_id=$1`,[group]);
+    await client.query('UPDATE support_groups SET enabled=false,administration_version=administration_version+1 WHERE id=$1',[group]);
+    return before;
   }
 
   private async removeMember(client:PoolClient,p:SupportChangeView,reviewer:string,reason:string){
@@ -211,6 +266,10 @@ export class SupportService {
             if(!(await client.query(`INSERT INTO support_groups(id,name,description) VALUES($1,$2,$3) ON CONFLICT DO NOTHING RETURNING id`,[p.groupId,config.name,config.description])).rowCount)
               throw new ConflictException({code:'SUPPORT_GROUP_EXISTS'});
           }else await client.query('UPDATE support_groups SET name=$2,description=$3,administration_version=administration_version+1 WHERE id=$1',[p.groupId,config.name,config.description]);
+        }else if(p.kind==='GROUP_DISABLE'){
+          before={group,retired:await this.disableGroup(client,p.groupId,actor.id,input.reason)};
+        }else if(p.kind==='GROUP_RESTORE'){
+          await client.query('UPDATE support_groups SET enabled=true,administration_version=administration_version+1 WHERE id=$1',[p.groupId]);
         }else{
           if(p.kind==='MEMBER_ADD'){
             if(!(await client.query('SELECT id FROM employees WHERE id=$1 AND active FOR SHARE',[p.employeeId])).rowCount)

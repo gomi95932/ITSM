@@ -36,7 +36,7 @@ export interface ServiceStructureChange {
   catalogChange?:ServiceCatalogChange|null;
 }
 export interface ServiceStructureOptions {
-  groups:{id:string;name:string}[];
+  groups:{id:string;name:string;enabled?:boolean}[];
   services:{code:string;name:string;groupId:string;type:string;published:boolean}[];
   people:{id:string;name:string;active:boolean;groups:string[];dingLinked:boolean}[];
 }

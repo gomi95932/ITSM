@@ -21,11 +21,11 @@ export class WorkspaceController {
   }
   @Get('support-groups') async groups(@Headers() h: H) {
     const actor = await this.identity.identity(auth(h)); if (!actor.groups.length) throw new NotFoundException();
-    return { items: (await this.db.pool.query('SELECT id,name FROM support_groups ORDER BY name')).rows };
+    return { items: (await this.db.pool.query('SELECT id,name FROM support_groups WHERE enabled ORDER BY name')).rows };
   }
   @Get('support-groups/:id/members') async members(@Headers() h: H,@Param('id') id: string) {
     const actor = await this.identity.identity(auth(h)); if (!actor.groups.length) throw new NotFoundException();
-    if (!(await this.db.pool.query('SELECT id FROM support_groups WHERE id=$1',[id])).rowCount) throw new NotFoundException();
+    if (!(await this.db.pool.query('SELECT id FROM support_groups WHERE id=$1 AND enabled',[id])).rowCount) throw new NotFoundException();
     return { items:(await this.db.pool.query(`SELECT e.id,e.display_name AS name FROM employees e
       JOIN group_memberships m ON m.employee_id=e.id WHERE m.group_id=$1 AND e.active ORDER BY e.display_name,e.id`,[id])).rows };
   }
