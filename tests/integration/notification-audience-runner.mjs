@@ -61,6 +61,9 @@ async function canRetry(deliveryId,user) {
   return delivery.canRetry;
 }
 try {
+  const existingAdmins = (await client.query(`SELECT DISTINCT e.id FROM employees e JOIN role_bindings r ON r.employee_id=e.id
+    WHERE e.active AND r.role_code='PLATFORM_ADMIN' AND r.status='ACTIVE'
+      AND r.valid_from<=clock_timestamp() AND r.valid_to>clock_timestamp()`)).rows.map(row=>row.id);
   // Uncommitted audience fixtures are invisible to the concurrent notification worker.
   await client.query('BEGIN');
   await setup();
@@ -92,7 +95,9 @@ try {
   await client.query("UPDATE role_bindings SET valid_from=now()-interval '2 hours',valid_to=now()-interval '1 hour' WHERE employee_id=$1",[id('lead')]);
   assert.deepEqual(await notificationRecipients(client,queue.eventId,id('lead')),[],'role expired after expansion');
   await client.query('DELETE FROM group_memberships WHERE group_id=$1',[id('group')]);
-  const stranded=await audience('OWNERSHIP_ESCALATION_REQUIRED',['admin']);
+  const stranded=await event('OWNERSHIP_ESCALATION_REQUIRED');
+  assert.deepEqual(await notificationRecipients(client,stranded.eventId),[...existingAdmins,id('admin')].sort(),
+    'routing escalation reaches every active platform administrator');
   await client.query("UPDATE role_bindings SET status='REVOKED' WHERE employee_id=$1",[id('admin')]);
   assert.deepEqual(await notificationRecipients(client,stranded.eventId,id('admin')),[],'revoked administrator cannot receive an already expanded routing alert');
   await client.query('ROLLBACK');
