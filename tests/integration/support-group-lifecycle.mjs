@@ -9,11 +9,20 @@ async function request(url,user='demo-admin-1',body){
     body:body?JSON.stringify({contentClass:'GENERAL',...body}):undefined});
   return {status:response.status,data:await response.json()};
 }
-async function sql(query,success=true){return new Promise((resolve,reject)=>{
+async function sql(query,success=true){
+  const failure=new Error('LIFECYCLE_FIXTURE_SQL_FAILED');
+  return new Promise((resolve,reject)=>{
   const child=spawn('docker',['compose','--project-name','itsm-dev','--env-file',process.env.ITSM_CI_ENV,'-f','infra/compose/compose.yaml','exec','-T','db','sh','-ec',
     'PGPASSWORD="$POSTGRES_PASSWORD" exec psql -v ON_ERROR_STOP=1 -U itsm -d itsm -Atc "$1"','sh',query],{stdio:['ignore','pipe','pipe']});
-  let output='';child.stdout.on('data',chunk=>output+=chunk);child.stderr.resume();child.once('error',reject);
-  child.once('close',code=>success?(code===0?resolve(output.trim()):reject(new Error('LIFECYCLE_FIXTURE_SQL_FAILED'))):resolve(code));
+  let output='',diagnostic='';child.stdout.on('data',chunk=>output+=chunk);
+  child.stderr.on('data',chunk=>{diagnostic=(diagnostic+chunk).slice(-4096);});child.once('error',reject);
+  child.once('close',code=>{
+    if(!success)return resolve(code);
+    if(code===0)return resolve(output.trim());
+    const errorLine=diagnostic.match(/^ERROR:.*$/m)?.[0];
+    failure.message+=errorLine?`: ${errorLine}`:` (exit ${code})`;
+    reject(failure);
+  });
 });}
 const q=value=>`'${String(value).replaceAll("'","''")}'`;
 const ok=async promise=>{const r=await promise;assert.ok([200,201].includes(r.status),JSON.stringify(r));return r.data;};
