@@ -108,5 +108,5 @@ assert.equal(new Set([...first.items,...second.items].map(item=>item.id)).size,2
 assert.equal((await ok(request(`/fulfillments?queue=UNREVIEWED&group=${pageGroup}`))).total,0);
 const blocked=await request('/tickets','employee-1',{serviceCode:f.serviceCode,formVersion:1,subject:'Closed REQ submission',
   description:'CI-only closed boundary',fields:{},impact:'INDIVIDUAL',urgency:'LOW',contentClass:'GENERAL'});
-assert.equal(blocked.status,503);assert.equal(blocked.data.code,'REQUEST_APPROVAL_POLICY_NOT_CONFIGURED');
+assert.equal(blocked.status,503,JSON.stringify(blocked));assert.equal(blocked.data.code,'REQUEST_APPROVAL_POLICY_NOT_CONFIGURED');
 console.log('Fulfillment workspace: scoped history and queues, independent review, current appointments, lead revocation, concurrency, exactly-once replay and immutable evidence verified');

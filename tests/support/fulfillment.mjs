@@ -21,7 +21,7 @@ export async function createFulfillmentFixture({groupId=`fulfillment-${randomUUI
   appointed=false,includeApplicant=false,history=0,reviewed=false}={}) {
   if(!['READY','DELIVERED','REVOKE_DUE','REVOKED','BLOCKED'].includes(state))throw new Error('INVALID_FULFILLMENT_FIXTURE');
   const ticketId=randomUUID(),approvalId=randomUUID(),id=randomUUID(),positionId=`position-${id}`,domainId=`domain-${id}`;
-  const serviceCode=`REQ-FW-${randomUUID().replaceAll('-','').slice(0,24)}`,corp=`ci-fw-${id}`,subject=`交付验证 ${id.slice(0,8)}`;
+  const serviceCode=`REQ-FW-${randomUUID().replaceAll('-','').slice(0,24).toUpperCase()}`,corp=`ci-fw-${id}`,subject=`交付验证 ${id.slice(0,8)}`;
   const internalMarker=`private-oa-binding-${id}`,deliveryReference=`DELIVERY-${id}`;
   const delivered=['DELIVERED','REVOKE_DUE','REVOKED'].includes(state);
   const config={domains:[{id:domainId,name:'交付验证域',enabled:true}],systems:[],
