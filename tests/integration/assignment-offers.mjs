@@ -87,6 +87,8 @@ assert.equal((await request(`/tickets/${noPolicy.id}`,dispatcher)).data.canAssig
 assert.equal((await act(noPolicy,dispatcher,'ASSIGN_OFFER',offer)).data.code,'ASSIGNMENT_POLICY_NOT_APPROVED');
 let breached=await create();
 await sql(`UPDATE sla_cycles SET started_at=now()-interval '30 days' WHERE ticket_id=${quote(breached.id)}`);
+assert.equal((await request(`/tickets/${breached.id}`,dispatcher)).data.canAssignOffer,false);
+assert.equal((await act(breached,dispatcher,'ASSIGN_OFFER',offer)).data.code,'ASSIGNMENT_BUDGET_EXHAUSTED');
 breached=await ok(breached,dispatcher,'REASSIGN',{targetGroupId:'service-desk',targetAssigneeId:candidate,reason:'Recover breached ticket'});
 assert.equal(breached.assignmentKind,'HANDOVER');
 assert.ok(Date.parse(breached.assignmentDueAt)>Date.now(),'handover remains actionable after an SLA breach');

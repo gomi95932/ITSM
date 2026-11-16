@@ -311,12 +311,17 @@ export class TicketsService {
         : null;
       const progressRow = requestProgress?.rows[0];
       const dispatcher=!!membership.rowCount&&await canDispatch(client,actor.id,ticket.owner_group_id);
-      const offerPolicy=dispatcher && !ticket.assignee_id && !ticket.pending_assignee_id && ticket.status==='QUEUED'
-        ? await client.query(`SELECT 1 FROM assignment_policy_versions WHERE group_id=$1 AND priority=$2 AND active
-          AND valid_from<=now() AND valid_to>now()`,[ticket.owner_group_id,ticket.priority]) : null;
+      let canAssignOffer=false;
+      if(dispatcher && !ticket.assignee_id && !ticket.pending_assignee_id && ticket.status==='QUEUED') {
+        try {
+          canAssignOffer=!!await this.assignmentPolicy(client,ticket,true);
+        } catch(error) {
+          if(!(error instanceof ConflictException)) throw error;
+        }
+      }
       return { ...this.publicTicket(ticket),canAddInfo:actor.id===ticket.requester_id||delegated,
         canDispatchQueued:dispatcher,
-        canAssignOffer:!!offerPolicy?.rowCount,
+        canAssignOffer,
         ...(canViewRequestProgress(actor.id, ticket.requester_id, ticket.service_type) ? { requestProgress: {
           approval: progressRow ? { state: progressRow.approval_state, updatedAt: progressRow.approval_updated_at }
             : null,
