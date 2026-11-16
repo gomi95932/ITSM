@@ -8,6 +8,17 @@ export interface HealthResponse {
 
 export const TICKET_STATUSES = ['NEW', 'QUEUED', 'IN_PROGRESS', 'WAITING_APPROVAL', 'WAITING_USER', 'WAITING_VENDOR', 'PENDING_CONFIRMATION', 'CLOSED', 'CANCELLED', 'REJECTED'] as const;
 export type TicketStatus = typeof TICKET_STATUSES[number];
+export const WORK_QUEUES = ['all', 'assigned', 'incoming', 'outgoing', 'unassigned'] as const;
+export type WorkQueue = typeof WORK_QUEUES[number];
+export type WorkQueueCounts = Record<WorkQueue, number>;
+export interface TicketListResponse {
+  items: TicketView[];
+  page: number;
+  size: number;
+  total: number;
+  counts: Partial<Record<TicketStatus, number>>;
+  workQueues?: WorkQueueCounts;
+}
 export const TICKET_ACTIONS = ['ACCEPT', 'REQUEST_INFO', 'ADD_INFO', 'WAIT_VENDOR', 'RESOLVE', 'CONFIRM', 'REOPEN', 'CANCEL', 'REASSIGN', 'ACCEPT_HANDOVER', 'DECLINE_HANDOVER', 'CANCEL_HANDOVER'] as const;
 export type TicketAction = typeof TICKET_ACTIONS[number];
 export type TicketType = 'INC' | 'REQ' | 'GEN';
@@ -113,6 +124,7 @@ export interface TicketReceipt {
   status: TicketStatus;
   version: number;
   ownerGroupId: string;
+  ownerGroupName?: string | null;
   assigneeId: string | null;
   assigneeName?: string | null;
   pendingGroupId: string | null;

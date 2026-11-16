@@ -15,9 +15,10 @@ export class TicketsController {
 
   @Get()
   async list(@Headers('x-dev-user') user: string | undefined, @Query('mine') mine?: string,
-    @Query('status') status?: string, @Query('page') page?: string, @Query('size') size?: string, @Headers('cookie') cookie?: string): Promise<object> {
+    @Query('status') status?: string, @Query('page') page?: string, @Query('size') size?: string, @Headers('cookie') cookie?: string,
+    @Query('queue') queue?: string): Promise<object> {
     if (mine && mine !== 'true' && mine !== 'false') throw new BadRequestException();
-    return this.tickets.list(await this.tickets.identity({ devUser:user,cookie }), mine !== 'false', status, Number(page ?? 1), Number(size ?? 20));
+    return this.tickets.list(await this.tickets.identity({ devUser:user,cookie }), mine !== 'false', status, Number(page ?? 1), Number(size ?? 20), queue);
   }
 
   @Get(':id')

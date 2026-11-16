@@ -2,13 +2,14 @@
 import { computed,onBeforeUnmount,onMounted,ref,watch } from 'vue';
 import * as dd from 'dingtalk-jsapi';
 import { Activity,ArrowRight,BarChart3,Bell,BookOpen,ChevronLeft,ChevronRight,ClipboardList,Headphones,LayoutGrid,LoaderCircle,LogOut,Monitor,Network,Plus,RefreshCw,Send,ShieldCheck,UserRound } from 'lucide-vue-next';
-import type { CatalogItem,SessionUser,TicketView } from '@itsm/contracts';
+import type { CatalogItem,SessionUser,TicketListResponse,TicketView,WorkQueue,WorkQueueCounts } from '@itsm/contracts';
 import EmployeeForm from './components/EmployeeForm.vue';
 import TicketDetail from './components/TicketDetail.vue';
 import DelegationsPanel from './components/DelegationsPanel.vue';
 import KnowledgePanel from './components/KnowledgePanel.vue';
 import ReportsPanel from './components/ReportsPanel.vue';
 import RolesPanel from './components/RolesPanel.vue';
+import WorkQueueTabs from './components/WorkQueueTabs.vue';
 import { api,ApiError,devUser,errorText,setUser,useDevelopment } from './api';
 import { formatDate,statuses } from './labels';
 
@@ -16,6 +17,9 @@ type View='mine'|'catalog'|'queue'|'notifications'|'delegations'|'knowledge'|'re
 type Delivery={id:string;state:string;attempts:number;lastError:string|null;updatedAt:string;number:string;canRetry:boolean};
 const user=ref<SessionUser>(),booting=ref(true),error=ref(''),loading=ref(false),development=ref(false),identity=ref(devUser());
 const view=ref<View>('mine'),catalog=ref<CatalogItem[]>([]),tickets=ref<TicketView[]>([]),counts=ref<Record<string,number>>({}),total=ref(0),page=ref(1),filter=ref('');
+const workQueue=ref<WorkQueue>('all');
+const emptyWorkQueues=():WorkQueueCounts=>({all:0,assigned:0,incoming:0,outgoing:0,unassigned:0});
+const workQueues=ref<WorkQueueCounts>(emptyWorkQueues());
 const selected=ref(''),creating=ref(false),initialCode=ref(''),notices=ref<Delivery[]>([]),notificationMode=ref('disabled'),retrying=ref('');
 const pages=computed(()=>Math.max(1,Math.ceil(total.value/20)));
 const openCount=computed(()=>Object.entries(counts.value).filter(([status])=>!['CLOSED','CANCELLED','REJECTED'].includes(status)).reduce((sum,[,count])=>sum+count,0));
@@ -60,17 +64,19 @@ async function load(quiet=false){
       const result=await api<{items:Delivery[];mode:string}>('/notifications');if(current!==generation)return;
       notices.value=result.items;notificationMode.value=result.mode;
     }else if(!['catalog','delegations','knowledge','reports','roles'].includes(view.value)){
-      const result=await api<{items:TicketView[];total:number;counts:Record<string,number>}>(`/tickets?mine=${view.value!=='queue'}&page=${page.value}&size=20${filter.value?`&status=${filter.value}`:''}`);
+      const result=await api<TicketListResponse>(`/tickets?mine=${view.value!=='queue'}&page=${page.value}&size=20${view.value==='queue'?`&queue=${workQueue.value}`:''}${filter.value?`&status=${filter.value}`:''}`);
       if(current!==generation)return;tickets.value=result.items;total.value=result.total;counts.value=result.counts;
+      workQueues.value=result.workQueues??emptyWorkQueues();
     }
   }catch(e){if(current===generation)error.value=errorText(e);}finally{if(current===generation)loading.value=false;}
 }
-function navigate(value:View){view.value=value;filter.value='';page.value=1;selected.value='';creating.value=false;history.replaceState(null,'',location.pathname+location.search);void load();}
+function navigate(value:View){view.value=value;filter.value='';workQueue.value='all';page.value=1;selected.value='';creating.value=false;history.replaceState(null,'',location.pathname+location.search);void load();}
+function selectWorkQueue(value:WorkQueue){if(value===workQueue.value)return;workQueue.value=value;filter.value='';page.value=1;void load();}
 function openTicket(id:string){creating.value=false;location.hash=`/tickets/${id}`;}
 function syncHash(){const match=/^#\/tickets\/([a-f0-9-]{36})$/.exec(location.hash);selected.value=match?.[1]??'';}
 function back(){selected.value='';creating.value=false;history.replaceState(null,'',location.pathname+location.search);void load();}
 function create(code=''){selected.value='';initialCode.value=code;creating.value=true;history.replaceState(null,'',location.pathname+location.search);}
-async function switchIdentity(){sessionStorage.setItem('itsm-dev-user',identity.value);view.value='mine';selected.value='';creating.value=false;filter.value='';page.value=1;history.replaceState(null,'',location.pathname+location.search);await boot();}
+async function switchIdentity(){sessionStorage.setItem('itsm-dev-user',identity.value);view.value='mine';selected.value='';creating.value=false;filter.value='';page.value=1;workQueue.value='all';workQueues.value=emptyWorkQueues();tickets.value=[];counts.value={};total.value=0;history.replaceState(null,'',location.pathname+location.search);await boot();}
 async function retry(id:string){retrying.value=id;try{await api(`/notifications/${id}/retry`,{method:'POST',body:{}});await load();}catch(e){error.value=errorText(e);}finally{retrying.value='';}}
 async function logout(){try{await api('/auth/logout',{method:'POST',body:{}});setUser(null);user.value=undefined;error.value='已退出，请重新进入应用。';}catch(e){error.value=errorText(e);}}
 watch(filter,()=>{page.value=1;void load();});watch(page,()=>void load());
@@ -95,9 +101,47 @@ onBeforeUnmount(()=>{window.removeEventListener('hashchange',syncHash);if(refres
           <ReportsPanel v-else-if="view==='reports'" :key="user.id" :user="user" @open="openTicket"/>
           <RolesPanel v-else-if="view==='roles'" :key="user.id" :user="user"/>
           <template v-else-if="view==='notifications'"><div class="section-heading"><p class="muted">最近 100 条消息 · {{notificationMode==='fake'?'开发模拟':notificationMode==='dingtalk'?'钉钉通知':'发送未启用'}}</p><span class="count-badge danger">{{notices.filter(item=>item.state==='DEAD').length}} 条待处理</span></div><div class="table-wrap"><table><thead><tr><th>工单</th><th>发送状态</th><th>尝试次数</th><th>异常代码</th><th>更新时间</th><th>操作</th></tr></thead><tbody><tr v-for="item in notices" :key="item.id"><td>{{item.number}}</td><td><span class="status" :class="{failed:item.state==='DEAD'}">{{noticeLabels[item.state]??item.state}}</span></td><td>{{item.attempts}}</td><td class="mono">{{item.lastError??'—'}}</td><td>{{formatDate(item.updatedAt)}}</td><td><button v-if="item.state==='DEAD' && item.canRetry" class="icon-button" title="重试发送" aria-label="重试发送" :disabled="!!retrying" @click="retry(item.id)"><RefreshCw :size="17" :class="{spin:retrying===item.id}"/></button></td></tr></tbody></table><div v-if="!notices.length" class="empty-state"><Bell :size="28"/><p>暂无消息记录</p></div></div></template>
-          <template v-else><section class="summary-strip" aria-label="工单概况"><div><span>进行中</span><strong>{{openCount}}</strong></div><div><span>{{view==='queue'?'待接单':'排队中'}}</span><strong>{{counts.QUEUED??0}}</strong></div><div><span>{{view==='queue'?'等待员工补充':'待我补充'}}</span><strong class="amber-text">{{counts.WAITING_USER??0}}</strong></div><div><span>{{view==='queue'?'等待确认':'待我确认'}}</span><strong class="teal-text">{{counts.PENDING_CONFIRMATION??0}}</strong></div></section><div class="list-toolbar"><div class="segmented"><button :class="{selected:!filter}" @click="filter=''">全部</button><button :class="{selected:filter==='QUEUED'}" @click="filter='QUEUED'">待接单</button><button :class="{selected:filter==='IN_PROGRESS'}" @click="filter='IN_PROGRESS'">处理中</button></div><label class="filter-label">状态<select v-model="filter" aria-label="工单状态"><option value="">全部状态</option><option v-for="(label,status) in statuses" :key="status" :value="status">{{label}}</option></select></label></div><div class="table-wrap ticket-table" :aria-busy="loading"><table><thead><tr><th>工单 / 标题</th><th>状态</th><th>优先级</th><th>服务</th><th>更新时间</th><th></th></tr></thead><tbody><tr v-for="ticket in tickets" :key="ticket.id"><td><button class="ticket-link" @click="openTicket(ticket.id)"><span>{{ticket.number}}</span><strong>{{ticket.subject}}</strong></button></td><td><span class="status" :data-status="ticket.status">{{statuses[ticket.status]}}</span></td><td><span class="priority" :data-priority="ticket.priority">{{ticket.priority}}</span></td><td>{{catalog.find(item=>item.code===ticket.serviceCode)?.name??ticket.serviceCode}}</td><td>{{formatDate(ticket.updatedAt)}}</td><td><button class="icon-button" :aria-label="`查看${ticket.number}`" title="查看工单" @click="openTicket(ticket.id)"><ChevronRight :size="18"/></button></td></tr></tbody></table><div v-if="!tickets.length" class="empty-state"><LoaderCircle v-if="loading" class="spin" :size="28"/><ClipboardList v-else :size="32"/><h2>{{loading?'正在加载工单':'暂无工单'}}</h2><p v-if="!loading">{{filter?'当前状态没有工单。':view==='queue'?'所属支持组暂时没有工单。':'有 IT 问题，随时提交给服务台。'}}</p><button v-if="!loading&&view==='mine'&&!filter" class="primary" @click="create()"><Plus :size="17"/>提交报障</button></div></div><footer class="pagination"><span>共 {{total}} 条</span><div><button class="icon-button" title="上一页" aria-label="上一页" :disabled="page<=1||loading" @click="page--"><ChevronLeft :size="18"/></button><span>{{page}} / {{pages}}</span><button class="icon-button" title="下一页" aria-label="下一页" :disabled="page>=pages||loading" @click="page++"><ChevronRight :size="18"/></button></div></footer></template>
+          <template v-else>
+            <WorkQueueTabs v-if="view==='queue'" :model-value="workQueue" :counts="workQueues" :loading="loading" @update:model-value="selectWorkQueue"/>
+            <section class="summary-strip" aria-label="工单概况">
+              <div><span>进行中</span><strong>{{openCount}}</strong></div>
+              <div><span>排队中</span><strong>{{counts.QUEUED??0}}</strong></div>
+              <div><span>{{view==='queue'?'等待员工补充':'待我补充'}}</span><strong class="amber-text">{{counts.WAITING_USER??0}}</strong></div>
+              <div><span>{{view==='queue'?'等待确认':'待我确认'}}</span><strong class="teal-text">{{counts.PENDING_CONFIRMATION??0}}</strong></div>
+            </section>
+            <div class="list-toolbar">
+              <div class="segmented"><button :class="{selected:!filter}" @click="filter=''">全部</button><button :class="{selected:filter==='QUEUED'}" @click="filter='QUEUED'">排队中</button><button :class="{selected:filter==='IN_PROGRESS'}" @click="filter='IN_PROGRESS'">处理中</button></div>
+              <label class="filter-label">状态<select v-model="filter" aria-label="工单状态"><option value="">全部状态</option><option v-for="(label,status) in statuses" :key="status" :value="status">{{label}}</option></select></label>
+            </div>
+            <div class="table-wrap ticket-table" :aria-busy="loading">
+              <table><thead><tr><th>工单 / 标题</th><th>状态</th><th>优先级</th><th>服务</th><th>更新时间</th><th></th></tr></thead>
+                <tbody><tr v-for="ticket in tickets" :key="ticket.id">
+                  <td><button class="ticket-link" @click="openTicket(ticket.id)"><span>{{ticket.number}}</span><strong>{{ticket.subject}}</strong></button>
+                    <div v-if="view==='queue'" class="ticket-ownership">
+                      <span>{{ticket.ownerGroupName??ticket.ownerGroupId}}</span>
+                      <span>{{ticket.assigneeName??'组内未接单'}}</span>
+                      <span v-if="ticket.pendingAssigneeId">待接收：{{ticket.pendingAssigneeName??ticket.pendingAssigneeId}}</span>
+                    </div>
+                  </td>
+                  <td><span class="status" :data-status="ticket.status">{{statuses[ticket.status]}}</span></td>
+                  <td><span class="priority" :data-priority="ticket.priority">{{ticket.priority}}</span></td>
+                  <td>{{catalog.find(item=>item.code===ticket.serviceCode)?.name??ticket.serviceCode}}</td>
+                  <td>{{formatDate(ticket.updatedAt)}}</td>
+                  <td><button class="icon-button" :aria-label="`查看${ticket.number}`" title="查看工单" @click="openTicket(ticket.id)"><ChevronRight :size="18"/></button></td>
+                </tr></tbody>
+              </table>
+              <div v-if="!tickets.length" class="empty-state"><LoaderCircle v-if="loading" class="spin" :size="28"/><ClipboardList v-else :size="32"/><h2>{{loading?'正在加载工单':'暂无工单'}}</h2><p v-if="!loading">{{filter?'当前状态没有工单。':view==='queue'?'当前队列没有工单。':'有 IT 问题，随时提交给服务台。'}}</p><button v-if="!loading&&view==='mine'&&!filter" class="primary" @click="create()"><Plus :size="17"/>提交报障</button></div>
+            </div>
+            <footer class="pagination"><span>共 {{total}} 条</span><div><button class="icon-button" title="上一页" aria-label="上一页" :disabled="page<=1||loading" @click="page--"><ChevronLeft :size="18"/></button><span>{{page}} / {{pages}}</span><button class="icon-button" title="下一页" aria-label="下一页" :disabled="page>=pages||loading" @click="page++"><ChevronRight :size="18"/></button></div></footer>
+          </template>
         </template>
       </main><footer class="app-footer">IT 服务台 <span>·</span> {{development?'开发验证环境':'企业内部服务'}}</footer>
     </div>
   </div>
 </template>
+
+<style scoped>
+.ticket-ownership{display:flex;flex-wrap:wrap;gap:4px 10px;max-width:100%;margin-top:7px;color:#61727b;font-size:11px;line-height:1.5;overflow-wrap:anywhere}
+.ticket-ownership span{min-width:0;overflow-wrap:anywhere}
+@media(max-width:760px){.ticket-ownership{display:grid;gap:2px;font-size:10px}}
+</style>

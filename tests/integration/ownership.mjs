@@ -28,11 +28,29 @@ async function create(){
 }
 async function act(ticket,user,action,extra={},key){return request(`/tickets/${ticket.id}/actions`,user,{action,expectedVersion:ticket.version,...extra},key);}
 async function ok(ticket,user,action,extra={},key){const result=await act(ticket,user,action,extra,key);assert.equal(result.status,200,JSON.stringify(result));return result.data;}
+async function queue(user,kind,status=''){
+  const response=await request(`/tickets?mine=false&queue=${kind}&page=1&size=100${status?`&status=${status}`:''}`,user);
+  assert.equal(response.status,200,JSON.stringify(response));return response.data;
+}
+async function inQueue(ticket,user,kind,expected){
+  const data=await queue(user,kind);assert.equal(data.items.some(row=>row.id===ticket.id),expected,`${kind} for ${user}`);
+  assert.ok(data.workQueues[kind]>=Number(expected));
+  assert.equal(data.items.length<=data.total,true);
+  return data;
+}
 let t=await create();
+assert.equal((await request('/tickets?mine=true&queue=assigned')).status,400);
+assert.equal((await request('/tickets?mine=false&queue=unknown',a)).status,400);
+assert.equal((await request('/tickets?mine=false&queue=assigned')).status,404);
+await inQueue(t,a,'unassigned',true);
+await inQueue(t,a,'assigned',false);
 const race=await Promise.all([act(t,a,'ACCEPT',{comment:'Investigating'}),act(t,b,'ACCEPT',{comment:'Investigating'})]);
 assert.deepEqual(race.map(r=>r.status).sort(),[200,409]);
 t=race.find(r=>r.status===200).data;
 const owner=t.assigneeId,peer=owner===a?b:a;
+await inQueue(t,owner,'assigned',true);
+await inQueue(t,peer,'assigned',false);
+await inQueue(t,owner,'unassigned',false);
 const peerDenied=await act(t,peer,'RESOLVE',{comment:'Restored',resolutionCategory:'FIX',evidence:'Verified'});
 assert.equal(peerDenied.status,409);assert.equal(peerDenied.data.code,'PERSONAL_OWNER_REQUIRED');
 assert.equal((await request(`/tickets/${t.id}`,c)).status,404);
@@ -41,6 +59,17 @@ const handoverBody={targetGroupId:'applications',targetAssigneeId:c,reason:'Appl
 const key=randomUUID(),old=t;
 t=await ok(t,owner,'REASSIGN',handoverBody,key);
 assert.equal(t.assigneeId,owner);assert.equal(t.ownerGroupId,'service-desk');assert.equal(t.pendingAssigneeId,c);
+await inQueue(t,owner,'outgoing',true);
+await inQueue(t,owner,'assigned',true);
+await inQueue(t,c,'incoming',true);
+await inQueue(t,c,'assigned',false);
+await inQueue(t,b,'unassigned',false);
+const scoped=await queue(c,'incoming','QUEUED');
+assert.equal(scoped.items.some(row=>row.id===t.id),false);
+assert.ok(scoped.counts.IN_PROGRESS>=1,'status totals are before the status filter');
+assert.equal((await queue(c,'incoming')).workQueues.incoming,scoped.workQueues.incoming);
+const named=(await queue(owner,'outgoing')).items.find(row=>row.id===t.id);
+assert.equal(named.ownerGroupName,'IT 服务台');assert.equal(named.pendingAssigneeName,'Ownership C');
 assert.deepEqual((await act(old,owner,'REASSIGN',handoverBody,key)).data,t,'handover request replay is stable');
 assert.equal((await request(`/tickets/${t.id}`,owner)).status,200);
 assert.equal((await request(`/tickets/${t.id}`,c)).status,200);
@@ -48,6 +77,8 @@ assert.ok((await request('/tickets?mine=false&page=1&size=100',c)).data.items.so
 assert.equal((await act(t,peer,'ACCEPT_HANDOVER',{comment:'Not intended recipient'})).status,409);
 assert.equal((await act(t,owner,'REASSIGN',handoverBody)).status,409);
 t=await ok(t,c,'DECLINE_HANDOVER',{reason:'More information needed'});
+await inQueue(t,c,'incoming',false);
+await inQueue(t,owner,'outgoing',false);
 assert.equal(t.assigneeId,owner);assert.equal(t.pendingAssigneeId,null);assert.equal((await request(`/tickets/${t.id}`,c)).status,404);
 t=await ok(t,owner,'REASSIGN',handoverBody);
 t=await ok(t,owner,'CANCEL_HANDOVER',{reason:'Handled by current team'});
@@ -55,6 +86,9 @@ assert.equal(t.pendingAssigneeId,null);assert.equal(t.assigneeId,owner);
 t=await ok(t,owner,'REASSIGN',handoverBody);
 const slaBefore=await sql(`SELECT row_to_json(s)::text FROM sla_cycles s WHERE ticket_id=${quote(t.id)}`);
 t=await ok(t,c,'ACCEPT_HANDOVER',{comment:'Received by applications'});
+await inQueue(t,c,'incoming',false);
+await inQueue(t,c,'assigned',true);
+await inQueue(t,owner,'assigned',false);
 assert.equal(t.ownerGroupId,'applications');assert.equal(t.assigneeId,c);assert.equal(t.pendingAssigneeId,null);
 assert.equal((await request(`/tickets/${t.id}`,owner)).status,404);
 assert.equal(await sql(`SELECT row_to_json(s)::text FROM sla_cycles s WHERE ticket_id=${quote(t.id)}`),slaBefore,'handover does not reset SLA');
@@ -71,12 +105,14 @@ const recovered=JSON.parse(await sql(`SELECT row_to_json(t)::text FROM tickets t
 assert.equal(recovered.owner_group_id,'applications');assert.equal(recovered.status,'IN_PROGRESS');assert.equal(recovered.version,t.version+1);
 assert.equal(await sql(`SELECT row_to_json(s)::text FROM sla_cycles s WHERE ticket_id=${quote(t.id)}`),slaBefore);
 await sql(`UPDATE employees SET active=true WHERE id=${quote(c)}`);
+await inQueue(t,c,'unassigned',true);
 t=await ok({...t,version:recovered.version},c,'ACCEPT',{comment:'Reclaimed after recovery'});
 assert.equal(t.status,'IN_PROGRESS');assert.equal(t.assigneeId,c);
 // Membership removal invalidates only the named pending target, leaving current ownership intact.
 let pending=await create();pending=await ok(pending,owner,'ACCEPT',{comment:'Investigating'});
 pending=await ok(pending,owner,'REASSIGN',{targetGroupId:'service-desk',targetAssigneeId:peer,reason:'Same group handover'});
 await sql(`DELETE FROM group_memberships WHERE employee_id=${quote(peer)} AND group_id='service-desk'`);
+assert.equal((await request('/tickets?mine=false&queue=incoming',peer)).status,404);
 assert.equal((await request(`/tickets/${pending.id}`,peer)).status,404);
 await until(async()=>JSON.parse(await sql(`SELECT row_to_json(t)::text FROM tickets t WHERE id=${quote(pending.id)}`)).pending_assignee_id===null);
 const p=JSON.parse(await sql(`SELECT row_to_json(t)::text FROM tickets t WHERE id=${quote(pending.id)}`));assert.equal(p.assignee_id,owner);
@@ -86,6 +122,9 @@ await sql(`INSERT INTO role_bindings(id,employee_id,role_code,group_id,valid_fro
   VALUES(gen_random_uuid(),${quote(owner)},'DISPATCHER','service-desk',now(),now()+interval '1 day','ACTIVE','demo-admin-1','demo-admin-2','CI routing appointment')`);
 let routed=await create();routed=await ok(routed,owner,'REASSIGN',handoverBody);
 assert.equal(routed.status,'QUEUED');assert.equal(routed.assigneeId,null);
+await inQueue(routed,owner,'unassigned',false);
+await inQueue(routed,c,'incoming',true);
 routed=await ok(routed,c,'ACCEPT_HANDOVER',{comment:'Taking queued work'});
+await inQueue(routed,c,'assigned',true);
 assert.equal(routed.status,'IN_PROGRESS');assert.equal(routed.assigneeId,c);
 console.log('Personal ownership verified: concurrent claim, peer denial, confirmed handover, recovery, immutable SLA and audit/outbox');
