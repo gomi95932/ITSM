@@ -80,6 +80,8 @@ test('administrators configure a new service domain through actual employee inta
   await page.getByRole('button',{name:new RegExp(name)}).click();
   await page.getByRole('textbox',{name:'问题标题'}).fill(`试验设备不可用 ${suffix}`);
   await page.getByRole('textbox',{name:'详细情况'}).fill('设备无响应，请检查连接和运行状态');
+  await page.getByRole('combobox',{name:'影响范围'}).selectOption('INDIVIDUAL');
+  await page.getByRole('combobox',{name:'紧急程度'}).selectOption('LOW');
   await page.getByRole('textbox',{name:'设备编码',exact:true}).fill('LAB-01');
   await page.getByRole('checkbox',{name:'本次内容不含密码、密钥及安全事件证据'}).check();
   await page.getByRole('button',{name:'核对信息',exact:true}).click();

@@ -35,6 +35,10 @@ function changeType(){
   form.value.maxValidityDays=form.value.type==='REQ'?30:null;
   form.value.initialPublisherId=null;initialPublisherConfirmed.value=false;
 }
+function editDraft(){
+  const change=props.change;
+  if(change)edit(props.items.find(item=>item.code===change.code));
+}
 function save(){
   if(props.busy)return;
   if(props.change&&props.change.code!==form.value.code){error.value='当前草稿已有另一个目录变更，请先提交或放弃。';return;}
@@ -96,7 +100,7 @@ function setOptions(index:number,event:Event){
         <div class="form-footer"><button class="primary" :disabled="busy"><Check :size="16"/>确认目录草稿</button></div>
       </form>
     </section>
-    <section v-if="change" aria-label="待提交目录草稿"><ServiceCatalogSummary :change="change"/><div class="draft-tools"><button :disabled="busy||editing" @click="edit(items.find(item=>item.code===change.code))"><Pencil :size="16"/>编辑目录草稿</button><button :disabled="busy" @click="emit('cancel')"><X :size="16"/>放弃目录草稿</button></div></section>
+    <section v-if="change" aria-label="待提交目录草稿"><ServiceCatalogSummary :change="change"/><div class="draft-tools"><button :disabled="busy||editing" @click="editDraft"><Pencil :size="16"/>编辑目录草稿</button><button :disabled="busy" @click="emit('cancel')"><X :size="16"/>放弃目录草稿</button></div></section>
     <div class="table-wrap"><table><thead><tr><th>服务项</th><th>类型 / 版本</th><th>状态</th><th/></tr></thead><tbody>
       <tr v-for="item in items" :key="item.code"><td><strong>{{item.name}}</strong><small>{{item.code}}</small></td><td>{{item.type}} · {{item.formVersion}}</td><td>{{item.published?'已发布':'停用'}}</td><td><button v-if="item.canPropose" class="icon-button" :aria-label="`编辑目录${item.name}`" title="编辑目录" :disabled="busy||editing||!!change" @click="edit(item)"><Pencil :size="16"/></button></td></tr>
     </tbody></table></div>
