@@ -134,6 +134,7 @@ for(const query of [
   `UPDATE knowledge_articles SET status='DRAFT' WHERE id=${q(knowledge)}`,
   `UPDATE assignment_policy_versions SET active=true WHERE group_id=${q(group)}`,
   `UPDATE request_fulfillments SET state='READY' WHERE id=${q(fulfillment)}`,
+  `UPDATE request_approvals SET state='QUEUED' WHERE id=${q(approval)}`,
 ])assert.notEqual(await sql(query,false),0,'database guards prevent inactive group reference revival');
 const audit=await ok(request(`${path}/${retiring.id}/history`));
 assert.deepEqual(audit.items.map(row=>row.action),['PROPOSED','APPROVED']);

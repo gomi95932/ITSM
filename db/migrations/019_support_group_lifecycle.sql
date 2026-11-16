@@ -70,6 +70,12 @@ BEGIN
     IF NEW.status<>'ARCHIVED' THEN PERFORM require_enabled_support_group(NEW.owner_group_id); END IF;
   ELSIF TG_TABLE_NAME='assignment_policy_versions' THEN
     IF NEW.active THEN PERFORM require_enabled_support_group(NEW.group_id); END IF;
+  ELSIF TG_TABLE_NAME='request_approvals' THEN
+    IF NEW.state IN ('QUEUED','CREATING','CREATE_UNCERTAIN','PENDING')
+      OR (NEW.state='APPROVED' AND NOT EXISTS(SELECT 1 FROM request_fulfillments WHERE approval_id=NEW.id)) THEN
+      SELECT owner_group_id INTO target FROM tickets WHERE id=NEW.ticket_id;
+      PERFORM require_enabled_support_group(target);
+    END IF;
   ELSIF TG_TABLE_NAME='request_fulfillments' THEN
     IF NEW.state IN ('READY','DELIVERED','REVOKE_DUE') OR (NEW.delivered_at IS NOT NULL AND NEW.revoked_at IS NULL) THEN
       SELECT owner_group_id INTO target FROM tickets WHERE id=NEW.ticket_id;
@@ -96,6 +102,8 @@ CREATE TRIGGER support_knowledge_group_enabled BEFORE INSERT OR UPDATE ON knowle
 CREATE TRIGGER support_assignment_policy_group_enabled BEFORE INSERT OR UPDATE ON assignment_policy_versions
   FOR EACH ROW EXECUTE FUNCTION guard_enabled_support_group();
 CREATE TRIGGER support_fulfillment_group_enabled BEFORE INSERT OR UPDATE ON request_fulfillments
+  FOR EACH ROW EXECUTE FUNCTION guard_enabled_support_group();
+CREATE TRIGGER support_approval_group_enabled BEFORE INSERT OR UPDATE ON request_approvals
   FOR EACH ROW EXECUTE FUNCTION guard_enabled_support_group();
 CREATE TRIGGER support_role_group_enabled BEFORE INSERT OR UPDATE ON role_bindings
   FOR EACH ROW EXECUTE FUNCTION guard_enabled_support_group();
