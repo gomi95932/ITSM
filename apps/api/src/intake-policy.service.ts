@@ -1,7 +1,7 @@
 import { BadRequestException, ForbiddenException, Injectable } from '@nestjs/common';
 import { Database } from './database.service.js';
 
-type IntakeChannel = 'ticket-create' | 'ticket-action' | 'ticket-feedback' | 'voice-interpret' | 'priority-review' | 'classification' | 'request-catalog' | 'knowledge' | 'role-proposal' | 'role-decision';
+type IntakeChannel = 'ticket-create' | 'ticket-action' | 'ticket-feedback' | 'voice-interpret' | 'priority-review' | 'classification' | 'request-catalog' | 'knowledge' | 'role-proposal' | 'role-decision' | 'routing-config';
 type Denial = 'CONTENT_DECLARATION_REQUIRED' | 'SECURITY_CHANNEL_REQUIRED';
 
 const sensitivePatterns = [

@@ -94,7 +94,7 @@ export interface RoleBindingView extends Omit<RoleBindingInput,'contentClass'> {
   requestedBy:string; reviewedBy:string|null; revokedBy:string|null; reviewReason:string|null; revokeReason:string|null;
   version:number; effective:boolean; createdAt:string;
 }
-export interface SessionUser { id: string; name: string; groups: string[]; priorityReviewGroups?: string[]; csrfToken?: string; canManageRoles?:boolean }
+export interface SessionUser { id: string; name: string; groups: string[]; priorityReviewGroups?: string[]; csrfToken?: string; canManageRoles?:boolean; canManageRouting?:boolean }
 export interface TicketView extends TicketReceipt {
   serviceCode: string; serviceType: TicketType; subject: string; description: string;
   priority: Priority; impact: Impact; urgency: Urgency; fields: Record<string, unknown>;

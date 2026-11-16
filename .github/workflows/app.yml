@@ -88,6 +88,8 @@ jobs:
         run: node tests/integration/assignment-offers.mjs
       - name: Verify scoped roles, independent review and immediate dispatch revocation
         run: node tests/integration/roles.mjs
+      - name: Verify reviewed routing configuration and immutable audit
+        run: node tests/integration/routing-config.mjs
       - name: Verify targeted notification audiences, live revocation and scoped retries
         run: node tests/integration/notification-audience.mjs
       - name: Verify resolution-based confirmation auto-close
