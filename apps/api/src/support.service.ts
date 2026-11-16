@@ -1,7 +1,7 @@
 import { BadRequestException,ConflictException,ForbiddenException,Injectable,NotFoundException,UnauthorizedException } from '@nestjs/common';
 import { createHash } from 'node:crypto';
 import type { PoolClient } from 'pg';
-import type { SupportChangeInput,SupportChangeView } from '@itsm/contracts';
+import type { SupportAuditView,SupportChangeInput,SupportChangeView,SupportGroupView,SupportMembersView,SupportPeopleView,SupportStructureView } from '@itsm/contracts';
 import type { Identity } from './auth.service.js';
 import { Database } from './database.service.js';
 import { IntakePolicyService } from './intake-policy.service.js';
@@ -46,14 +46,14 @@ export class SupportService {
     return result.rows[0];
   }
 
-  async list(actor:Identity){
+  async list(actor:Identity):Promise<SupportStructureView>{
     const access=await this.access(this.db.pool,actor.id);
-    const groups=await this.db.pool.query(`SELECT ${groupColumns} FROM support_groups g
+    const groups=await this.db.pool.query<SupportGroupView>(`SELECT ${groupColumns} FROM support_groups g
       WHERE $1 OR g.id=ANY($2::text[]) ORDER BY g.name,g.id LIMIT 201`,[access.admin,access.groups]);
-    const proposals=await this.db.pool.query(`SELECT ${columns} FROM support_structure_proposals p LEFT JOIN employees e ON e.id=p.employee_id
+    const proposals=await this.db.pool.query<SupportChangeView>(`SELECT ${columns} FROM support_structure_proposals p LEFT JOIN employees e ON e.id=p.employee_id
       WHERE $1 OR p.group_id=ANY($2::text[]) ORDER BY p.created_at DESC,p.id DESC LIMIT 201`,[access.admin,access.groups]);
     return {groups:groups.rows.slice(0,200),groupsHasMore:groups.rows.length>200,items:proposals.rows.slice(0,200),
-      proposalsHasMore:proposals.rows.length>200,canReview:access.admin};
+      proposalsHasMore:proposals.rows.length>200,canManageGroups:access.admin,canReview:access.admin};
   }
 
   private search(value:unknown){
@@ -61,7 +61,7 @@ export class SupportService {
     return ((value??'') as string).trim();
   }
 
-  async people(actor:Identity,query:unknown){
+  async people(actor:Identity,query:unknown):Promise<SupportPeopleView>{
     await this.access(this.db.pool,actor.id);
     const q=this.search(query);
     if(q.length<2)return {items:[],hasMore:false};
@@ -71,7 +71,7 @@ export class SupportService {
     return {items:people.rows.slice(0,50),hasMore:people.rows.length>50};
   }
 
-  async members(actor:Identity,group:string,query:unknown,pageValue:unknown){
+  async members(actor:Identity,group:string,query:unknown,pageValue:unknown):Promise<SupportMembersView>{
     const access=await this.access(this.db.pool,actor.id);this.scope(access,group);
     if(!supportId(group))throw new NotFoundException();
     const page=pageValue===undefined?1:Number(pageValue);
@@ -234,7 +234,7 @@ export class SupportService {
   async history(actor:Identity,id:string){
     if(!supportUuid.test(id))throw new NotFoundException();
     const access=await this.access(this.db.pool,actor.id);await this.proposal(this.db.pool,id,access);
-    return {items:(await this.db.pool.query(`SELECT actor_id AS "actorId",action,before_value AS "beforeValue",after_value AS "afterValue",reason,created_at AS "createdAt"
+    return {items:(await this.db.pool.query<SupportAuditView>(`SELECT actor_id AS "actorId",action,before_value AS "beforeValue",after_value AS "afterValue",reason,created_at AS "createdAt"
       FROM support_structure_audits WHERE proposal_id=$1 ORDER BY created_at,id`,[id])).rows};
   }
 }

@@ -14,3 +14,12 @@ export interface SupportChangeView {
   status:'PENDING'|'APPROVED'|'REJECTED';reason:string;reviewReason:string|null;version:number;createdAt:string;reviewedAt:string|null;
 }
 export interface SupportMemberView {id:string;name:string;active:boolean;roles:string[];privileges:string[]}
+export interface SupportStructureView {
+  groups:SupportGroupView[];groupsHasMore:boolean;items:SupportChangeView[];proposalsHasMore:boolean;
+  canManageGroups:boolean;canReview:boolean;
+}
+export interface SupportMembersView {group:SupportGroupView;items:SupportMemberView[];total:number;page:number;size:number}
+export interface SupportPeopleView {items:{id:string;name:string}[];hasMore:boolean}
+export interface SupportAuditView {
+  actorId:string;action:string;beforeValue:unknown;afterValue:unknown;reason:string;createdAt:string;
+}

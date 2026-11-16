@@ -22,6 +22,21 @@ export async function api<T>(path: string,options: { method?: string; body?: unk
   return data as T;
 }
 export const messages: Record<string,string> = {
+  INVALID_SUPPORT_CHANGE:'请核对支持组、人员、版本及变更依据；组编码只能使用字母、数字、下划线和连字符。',
+  INVALID_SUPPORT_SEARCH:'查询条件无效，请缩短查询内容并重新搜索。',
+  SUPPORT_VERSION_CONFLICT:'支持组或提案已更新，请取消当前操作、刷新后基于最新版本重新提交。',
+  SUPPORT_GROUP_EXISTS:'此支持组编码已经存在，请使用其他编码。',
+  SUPPORT_PERSON_UNAVAILABLE:'该员工当前不可用，请重新选择有效员工。',
+  SUPPORT_MEMBERSHIP_CONFLICT:'成员关系已变化，请刷新成员列表后重新操作。',
+  SUPPORT_CHANGE_PENDING:'此支持组或成员已有待复核变更，请先处理已有提案。',
+  SUPPORT_SELF_GRANT_DENIED:'不能提交将自己加入支持组的提案，请由其他有权人员发起。',
+  SUPPORT_ID_CONFLICT:'此提案编号已用于其他内容，请取消当前操作并重新发起。',
+  SUPPORT_INDEPENDENT_REVIEW_REQUIRED:'须由另一名平台管理员复核，且不能是本次变更涉及的员工。',
+  SUPPORT_PROPOSER_UNAVAILABLE:'提案人的管理权限已失效，请拒绝此提案并由有效管理人员重新发起。',
+  SUPPORT_OPEN_RESPONSIBILITIES:'该成员仍有未结工单、交付或知识维护责任，请先完成交接。',
+  SUPPORT_MEMBER_CONTINUITY_REQUIRED:'支持组至少保留一名有效成员，请先增加接替人员。',
+  SUPPORT_LEAD_CONTINUITY_REQUIRED:'请先完成接替组长的任命，再移除此成员。',
+  SUPPORT_REVIEW_CONTINUITY_REQUIRED:'请先安排接替的 P1 复核人，再移除此成员。',
   INVALID_SERVICE_STRUCTURE:'配置不完整或关联无效，请检查名称、任职有效期和启用关系。',
   SERVICE_STRUCTURE_DISABLE_REQUIRED:'已发布记录不能删除，请停用并保留历史引用。',
   SERVICE_STRUCTURE_GROUP_UNAVAILABLE:'岗位所属支持组不存在，请先维护支持组。',
