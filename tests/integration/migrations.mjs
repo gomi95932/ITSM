@@ -18,18 +18,42 @@ async function run(command,args,{success=true}={}) {
 }
 const compose=(args,options)=>run('docker',[...prefix,...args],options);
 const sql=async query=>(await compose(['exec','-T','db','sh','-ec','PGPASSWORD="$POSTGRES_PASSWORD" exec psql -v ON_ERROR_STOP=1 -U itsm -d itsm -Atc "$1"','sh',query])).text;
+const literal=value=>`'${String(value).replaceAll("'","''")}'`;
+async function readiness(expected) {
+  const response=await fetch('http://127.0.0.1:8088/api/v1/health/ready',{signal:AbortSignal.timeout(10000)});
+  assert.equal(response.status,expected ? 200 : 503,'readiness must reflect the complete image migration ledger');
+  assert.deepEqual(await response.json(),expected ? {status:'ok',service:'itsm-api'} : {code:'API_NOT_READY'});
+  const live=await fetch('http://127.0.0.1:8088/api/v1/health',{signal:AbortSignal.timeout(10000)});
+  assert.equal(live.status,200,'schema mismatch must not be confused with process liveness');
+}
 try {
   const before=await sql('SELECT json_agg(s ORDER BY name) FROM schema_migrations s');
+  const ledger=JSON.parse(before);
   const migrationFiles=(await readdir('db/migrations')).filter(file=>/^\d+_.*\.sql$/.test(file));
-  assert.equal(JSON.parse(before).length,migrationFiles.length);
+  assert.equal(ledger.length,migrationFiles.length);
+  await readiness(true);
+  for (const row of ledger.slice(-2)) {
+    await sql(`DELETE FROM schema_migrations WHERE name=${literal(row.name)}`);
+    try { await readiness(false); }
+    finally {
+      await sql(`INSERT INTO schema_migrations(name,checksum,applied_at) VALUES (${literal(row.name)},${literal(row.checksum)},${literal(row.applied_at)})`);
+    }
+    await readiness(true);
+  }
+  await sql("INSERT INTO schema_migrations(name,checksum) VALUES ('999_readiness_probe.sql',repeat('f',64))");
+  try { await readiness(false); }
+  finally { await sql("DELETE FROM schema_migrations WHERE name='999_readiness_probe.sql'"); }
+  await readiness(true);
   await compose(['run','--rm','--no-deps','migrate']);
   assert.equal(await sql('SELECT json_agg(s ORDER BY name) FROM schema_migrations s'),before,'repeated migrations must preserve the ledger');
-  const first=JSON.parse(before)[0];
+  const first=ledger[0];
   await sql(`UPDATE schema_migrations SET checksum='invalid' WHERE name='${first.name}'`);
   try {
+    await readiness(false);
     const mismatch=await compose(['run','--rm','--no-deps','migrate'],{success:false});
     assert.notEqual(mismatch.code,0,'changed applied migrations must fail');
   } finally { await sql(`UPDATE schema_migrations SET checksum='${first.checksum}' WHERE name='${first.name}'`); }
+  await readiness(true);
   const migrations=resolve(directory,'migrations');
   const { mkdir }=await import('node:fs/promises'); await mkdir(migrations);
   for (const file of await readdir('db/migrations')) await copyFile(resolve('db/migrations',file),resolve(migrations,file));
@@ -52,5 +76,5 @@ try {
   metadata.sha256='0'.repeat(64); await writeFile(`${backup}.json`,JSON.stringify(metadata));
   const corrupt=await run('node',['scripts/release.mjs','restore-check','--env',envFile,'--state',state,'--backup',backup],{success:false});
   assert.notEqual(corrupt.code,0,'corrupt backup must be rejected');
-  console.log('Migration immutability, transaction rollback, backup recovery and live data isolation verified');
+  console.log('Image-bound schema readiness, migration immutability, transaction rollback, backup recovery and live data isolation verified');
 } finally { await rm(directory,{recursive:true,force:true}); }
