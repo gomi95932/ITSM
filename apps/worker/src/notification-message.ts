@@ -3,11 +3,13 @@ export function notificationLink(publicUrl: string, ticket: {
 }) {
   const base = new URL(publicUrl);
   if (base.protocol !== 'https:') throw new Error('HTTPS_DEEP_LINK_REQUIRED');
-  base.hash = `/tickets/${encodeURIComponent(ticket.ticket_id)}`;
+  const routingAlert = ticket.action === 'OWNERSHIP_ESCALATION_REQUIRED';
+  base.hash = routingAlert ? '/routing-alerts' : `/tickets/${encodeURIComponent(ticket.ticket_id)}`;
   return {
     title: `${ticket.action.startsWith('P1_') ? 'P1 候选 · ' : 'IT 服务台 · '}${ticket.number}`,
     text: ticket.action.startsWith('P1_')
       ? `${ticket.action === 'P1_REVIEW_OVERDUE' ? '主管确认逾期，请立即跟进。' : '请立即响应，主管确认中。'}工单 ${ticket.number}`
+      : routingAlert ? `工单 ${ticket.number} 所属支持组无人可接，且无可用备用组，请检查路由告警。`
       : ticket.action === 'ASSIGN_OFFER' ? `工单 ${ticket.number} 待您确认接收，请在截止时间前处理。`
       : ticket.action === 'ASSIGNMENT_EXPIRED' ? `工单 ${ticket.number} 候选接收已超时，请调度员跟进。`
       : `工单 ${ticket.number} 状态已更新：${ticket.to_status}`,

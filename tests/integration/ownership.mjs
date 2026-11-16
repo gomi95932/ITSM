@@ -156,8 +156,13 @@ const strandedRow=JSON.parse(await sql(`SELECT row_to_json(t)::text FROM tickets
 assert.equal(strandedRow.owner_group_id,unroutable);assert.equal(strandedRow.assignee_id,null);
 assert.equal(await sql(`SELECT count(*) FROM ticket_events WHERE ticket_id=${quote(stranded.id)} AND action='OWNERSHIP_ESCALATION_REQUIRED'`),'1');
 assert.equal((await request('/routing-alerts','employee-1')).data.items.length,0);
-assert.ok((await request('/routing-alerts','demo-admin-1')).data.items.some(row=>row.ticketId===stranded.id));
-assert.equal((await request('/routing-alerts','demo-admin-1')).data.items.find(row=>row.ticketId===stranded.id).subject,undefined);
+const visibleAlert=(await request('/routing-alerts','demo-admin-1')).data.items.find(row=>row.ticketId===stranded.id);
+assert.ok(visibleAlert);
+assert.equal(visibleAlert.ownerGroupId,unroutable);
+assert.ok(visibleAlert.ownerGroupName);
+assert.equal(visibleAlert.reason,'NO_ACTIVE_FALLBACK');
+assert.equal(visibleAlert.subject,undefined);
+assert.equal(visibleAlert.description,undefined);
 await new Promise(resolve=>setTimeout(resolve,32000));
 assert.equal(await sql(`SELECT count(*) FROM ticket_events WHERE ticket_id=${quote(stranded.id)} AND action='OWNERSHIP_ESCALATION_REQUIRED'`),'1',
   'an unresolved alert does not create duplicate escalation events on each scan');

@@ -18,6 +18,7 @@ test('candidate, queue and escalation notifications are explicit, not group broa
   assert.equal(notificationAudience('REQUEST_INFO').queue,undefined);
   assert.equal(notificationAudience('SLA_BREACH').escalation,true);
   assert.equal(notificationAudience('OWNERSHIP_ESCALATION_REQUIRED').escalation,true);
+  assert.equal(notificationAudience('OWNERSHIP_ESCALATION_REQUIRED').platformAdmin,true);
   assert.equal(notificationAudience('P1_REVIEW_OVERDUE').reviewer,true);
   assert.equal(notificationAudience('SLA_BREACH').reviewer,undefined);
 });

@@ -41,8 +41,9 @@ export class WorkspaceController {
   @Get('routing-alerts') async routingAlerts(@Headers() h: H) {
     const actor = await this.identity.identity(auth(h));
     const result = await this.db.pool.query(`SELECT t.id AS "ticketId",t.number,a.owner_group_id AS "ownerGroupId",
-      a.reason,a.opened_at AS "openedAt"
+      g.name AS "ownerGroupName",a.reason,a.opened_at AS "openedAt"
       FROM ticket_routing_alerts a JOIN tickets t ON t.id=a.ticket_id
+      JOIN support_groups g ON g.id=a.owner_group_id
       WHERE a.resolved_at IS NULL AND (
         EXISTS(SELECT 1 FROM role_bindings r WHERE r.employee_id=$1 AND r.role_code='PLATFORM_ADMIN'
           AND ${ROLE_EFFECTIVE_SQL}) OR

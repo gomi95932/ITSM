@@ -91,6 +91,10 @@ try {
   assert.deepEqual(await notificationRecipients(client,queue.eventId,id('dispatcher')),[],'role revoked after expansion');
   await client.query("UPDATE role_bindings SET valid_from=now()-interval '2 hours',valid_to=now()-interval '1 hour' WHERE employee_id=$1",[id('lead')]);
   assert.deepEqual(await notificationRecipients(client,queue.eventId,id('lead')),[],'role expired after expansion');
+  await client.query('DELETE FROM group_memberships WHERE group_id=$1',[id('group')]);
+  const stranded=await audience('OWNERSHIP_ESCALATION_REQUIRED',['admin']);
+  await client.query("UPDATE role_bindings SET status='REVOKED' WHERE employee_id=$1",[id('admin')]);
+  assert.deepEqual(await notificationRecipients(client,stranded.eventId,id('admin')),[],'revoked administrator cannot receive an already expanded routing alert');
   await client.query('ROLLBACK');
 
   // Retry authorization must be exercised through a different API connection.

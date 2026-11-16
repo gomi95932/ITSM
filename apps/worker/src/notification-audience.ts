@@ -1,6 +1,6 @@
 import type { PoolClient } from 'pg';
 
-type Audience = { requester?: boolean; owner?: boolean; pending?: boolean; queue?: boolean; escalation?: boolean; reviewer?: boolean };
+type Audience = { requester?: boolean; owner?: boolean; pending?: boolean; queue?: boolean; escalation?: boolean; reviewer?: boolean; platformAdmin?: boolean };
 const audiences: Readonly<Record<string, Audience>> = {
   SUBMIT_AND_ROUTE: { requester:true, owner:true, queue:true },
   ACCEPT: { requester:true, owner:true },
@@ -28,7 +28,7 @@ const audiences: Readonly<Record<string, Audience>> = {
   P1_REVIEW_ROUTED: { owner:true, escalation:true, reviewer:true },
   SLA_BREACH: { owner:true, escalation:true },
   OWNERSHIP_RECOVERED: { owner:true, escalation:true },
-  OWNERSHIP_ESCALATION_REQUIRED: { escalation:true },
+  OWNERSHIP_ESCALATION_REQUIRED: { escalation:true, platformAdmin:true },
   FEEDBACK_SUBMITTED: { owner:true },
 };
 
@@ -54,8 +54,10 @@ export async function notificationRecipients(client: Pick<PoolClient,'query'>, e
         (SELECT 1 FROM role_bindings r JOIN group_memberships m ON m.employee_id=r.employee_id AND m.group_id=r.group_id
           WHERE r.employee_id=e.id AND r.group_id=t.owner_group_id AND r.role_code IN ('DISPATCHER','GROUP_LEAD')
           AND r.status='ACTIVE' AND r.valid_from<=clock_timestamp() AND r.valid_to>clock_timestamp())) OR
-      ($8 AND EXISTS(SELECT 1 FROM priority_reviewers p WHERE p.employee_id=e.id AND p.group_id=t.owner_group_id))
-    ) ORDER BY e.id`,[eventId,employeeId,!!a.requester,!!a.owner,!!a.pending,!!a.queue,!!a.escalation,!!a.reviewer]);
+      ($8 AND EXISTS(SELECT 1 FROM priority_reviewers p WHERE p.employee_id=e.id AND p.group_id=t.owner_group_id)) OR
+      ($9 AND EXISTS(SELECT 1 FROM role_bindings r WHERE r.employee_id=e.id AND r.role_code='PLATFORM_ADMIN'
+        AND r.status='ACTIVE' AND r.valid_from<=clock_timestamp() AND r.valid_to>clock_timestamp()))
+    ) ORDER BY e.id`,[eventId,employeeId,!!a.requester,!!a.owner,!!a.pending,!!a.queue,!!a.escalation,!!a.reviewer,!!a.platformAdmin]);
   return result.rows.map(row=>row.id);
 }
 
