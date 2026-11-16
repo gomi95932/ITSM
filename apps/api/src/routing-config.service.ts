@@ -135,6 +135,10 @@ export class RoutingConfigService {
       }
       const group=await client.query('SELECT id,routing_version FROM support_groups WHERE id=$1 FOR UPDATE',[input.groupId]);
       if(!group.rowCount)throw new BadRequestException({code:'ROUTING_GROUP_UNAVAILABLE'});
+      const pending=await client.query(`SELECT 1 FROM routing_config_proposals
+        WHERE group_id=$1 AND kind=$2 AND priority IS NOT DISTINCT FROM $3 AND status='PENDING' LIMIT 1`,
+      [input.groupId,input.kind,input.priority??null]);
+      if(pending.rowCount)throw new ConflictException({code:'ROUTING_PROPOSAL_PENDING'});
       const before=input.kind==='FALLBACK'
         ?group.rows[0].routing_version as number
         :await this.currentPolicy(client,input.groupId,input.priority!);
