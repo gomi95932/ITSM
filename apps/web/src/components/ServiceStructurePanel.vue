@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed,nextTick,onMounted,ref,watch } from 'vue';
-import { Ban,Check,ChevronRight,Eye,LoaderCircle,Pencil,Plus,RefreshCw,Search,Undo2,X } from 'lucide-vue-next';
+import { Ban,Check,ChevronRight,Eye,ListPlus,LoaderCircle,Pencil,Plus,RefreshCw,Search,Undo2,X } from 'lucide-vue-next';
 import type { ServiceCatalogAdminItem,ServiceCatalogChange,ServicePositionMapping,ServiceStructure,ServiceStructureChange,ServiceStructureOptions,ServiceStructurePreview,SessionUser } from '@itsm/contracts';
 import { api,errorText } from '../api';
 import { createRequestKey } from '../request-key';
@@ -8,6 +8,7 @@ import { formatDate } from '../labels';
 import ContentBoundary from './ContentBoundary.vue';
 import ServiceCatalogEditor from './ServiceCatalogEditor.vue';
 import ServiceCatalogSummary from './ServiceCatalogSummary.vue';
+import ServiceStructureTemplate from './ServiceStructureTemplate.vue';
 
 const props=defineProps<{user:SessionUser}>();
 type StructureTab=keyof ServiceStructure;
@@ -24,6 +25,7 @@ const catalogItems=ref<ServiceCatalogAdminItem[]>([]),catalogMore=ref(false),cat
 const loading=ref(true),busy=ref(false),error=ref(''),notice=ref(''),reason=ref(''),safe=ref(false),proposalId=ref(createRequestKey());
 const preview=ref<ServiceStructurePreview[]>(),inspecting=ref<ServiceStructureChange>(),reviewReason=ref(''),reviewSafe=ref(false);
 const people=ref<Person[]>([]),query=ref(''),searchMore=ref(false),editing=ref(false),editKey=ref('');
+const templateOpen=ref(false);
 const form=ref({id:'',name:'',domainId:'',groupId:'',enabled:true,positionId:'',employeeId:'',duty:'PRIMARY' as 'PRIMARY'|'BACKUP',
   validFrom:'',validTo:'',serviceCode:'',systemId:'',primaryPositionId:'',collaboratingPositionIds:[] as string[]});
 const config=computed(()=>inspecting.value?.config??draft.value);
@@ -53,10 +55,11 @@ async function load(){
     if(result.version!==catalog.version)throw new Error('配置在加载期间已更新，请刷新。');
     version.value=result.version;published.value=copy(result.config);draft.value=copy(result.config);options.value=result.options;items.value=result.items;
     catalogItems.value=catalog.items;catalogMore.value=catalog.hasMore;catalogChange.value=undefined;
-    editing.value=false;preview.value=undefined;
+    editing.value=false;templateOpen.value=false;preview.value=undefined;
   }catch(e){error.value=errorText(e);}finally{loading.value=false;}
 }
-function reset(){draft.value=copy(published.value);catalogChange.value=undefined;editing.value=false;reason.value='';}
+function reset(){draft.value=copy(published.value);catalogChange.value=undefined;editing.value=false;templateOpen.value=false;reason.value='';}
+function saveTemplate(config:ServiceStructure){draft.value=copy(config);templateOpen.value=false;tab.value='domains';}
 function saveCatalog(change:ServiceCatalogChange,mapping:ServicePositionMapping){
   catalogChange.value=copy(change);
   const index=draft.value.mappings.findIndex(m=>m.serviceCode===mapping.serviceCode);
@@ -129,7 +132,7 @@ async function submit(){
   try{await api('/admin/service-structure',{method:'POST',body:body()});busy.value=false;await load();tab.value='changes';reason.value='';await nextTick();notice.value='配置已提交独立复核，尚未生效。';}
   catch(e){error.value=errorText(e);}finally{busy.value=false;}
 }
-function inspect(item:ServiceStructureChange){inspecting.value=item;tab.value='domains';editing.value=false;reviewReason.value='';reviewSafe.value=false;preview.value=undefined;error.value='';}
+function inspect(item:ServiceStructureChange){inspecting.value=item;tab.value='domains';editing.value=false;templateOpen.value=false;reviewReason.value='';reviewSafe.value=false;preview.value=undefined;error.value='';}
 async function review(decision:'APPROVE'|'REJECT'){
   if(!inspecting.value||busy.value||!reviewSafe.value||!reviewReason.value.trim())return;
   busy.value=true;error.value='';
@@ -147,8 +150,11 @@ onMounted(load);
     <header class="section-heading"><span class="muted">已发布版本 {{version}} <span v-if="dirty">· 未提交修改</span></span><div class="structure-tools">
       <button v-if="dirty&&!inspecting" class="icon-button" title="放弃未提交修改" aria-label="放弃未提交修改" :disabled="busy" @click="reset"><Undo2 :size="17"/></button>
       <button class="icon-button" title="刷新服务组织" aria-label="刷新服务组织" :disabled="busy||loading||dirty||!!inspecting" @click="load"><RefreshCw :size="17" :class="{spin:loading}"/></button>
-      <button v-if="structureTab&&!inspecting" class="primary" :disabled="busy||loading" @click="edit()"><Plus :size="17"/>新增{{labels[tab]}}</button>
+      <button v-if="!inspecting" class="icon-button" title="初始组织模板" aria-label="初始组织模板" :disabled="busy||loading||editing" @click="templateOpen=!templateOpen"><ListPlus :size="17"/></button>
+      <button v-if="structureTab&&!inspecting" class="primary" :disabled="busy||loading||templateOpen" @click="edit()"><Plus :size="17"/>新增{{labels[tab]}}</button>
     </div></header>
+    <ServiceStructureTemplate v-if="templateOpen&&!inspecting" :config="draft" :groups="options.groups" @save="saveTemplate" @cancel="templateOpen=false"/>
+    <template v-if="!templateOpen">
     <section v-if="inspecting" class="detail-section review-section" aria-label="配置复核">
       <div class="section-heading"><h2>配置复核 · {{states[inspecting.status]}}</h2><button class="icon-button" title="返回编辑配置" aria-label="返回编辑配置" :disabled="busy" @click="inspecting=undefined;tab='changes'"><X :size="18"/></button></div>
       <p>基于版本 {{inspecting.expectedVersion}} · 提交人 {{personName(inspecting.proposedBy)}} · {{formatDate(inspecting.createdAt)}}</p>
@@ -161,7 +167,7 @@ onMounted(load);
       </form>
     </section>
     <nav class="structure-tabs" role="tablist" aria-label="服务组织配置">
-      <button v-for="(label,key) in labels" :key="key" role="tab" :aria-selected="tab===key" :class="{active:tab===key}" :disabled="busy||!!inspecting&&key==='changes'" @click="tab=key;editing=false">{{label}}</button>
+      <button v-for="(label,key) in labels" :key="key" role="tab" :aria-selected="tab===key" :class="{active:tab===key}" :disabled="busy||templateOpen||!!inspecting&&key==='changes'" @click="tab=key;editing=false">{{label}}</button>
     </nav>
     <section v-if="editing&&!inspecting" class="detail-section" :aria-label="`编辑${labels[tab]}`">
       <div class="section-heading"><h2>{{editKey?'编辑':'新增'}}{{labels[tab]}}</h2><button class="icon-button" title="取消编辑" aria-label="取消编辑" @click="editing=false"><X :size="18"/></button></div>
@@ -204,9 +210,10 @@ onMounted(load);
     </div>
     <section v-if="dirty&&!inspecting" class="detail-section publish-section" aria-label="配置发布">
       <h2>配置发布</h2><label>变更依据<textarea v-model="reason" maxlength="500" rows="2" required/></label><ContentBoundary v-model="safe"/>
-      <div class="structure-tools"><button :disabled="busy||!safe||!reason.trim()||editing" @click="check"><Eye :size="16"/>预览分派</button><button class="primary" :disabled="busy||!safe||!preview||editing" @click="submit"><LoaderCircle v-if="busy" class="spin" :size="16"/><ChevronRight v-else :size="16"/>提交复核</button></div>
+      <div class="structure-tools"><button :disabled="busy||!safe||!reason.trim()||editing||templateOpen" @click="check"><Eye :size="16"/>预览分派</button><button class="primary" :disabled="busy||!safe||!preview||editing||templateOpen" @click="submit"><LoaderCircle v-if="busy" class="spin" :size="16"/><ChevronRight v-else :size="16"/>提交复核</button></div>
       <ul v-if="preview" class="routing-preview"><li v-for="r in preview" :key="r.serviceCode"><strong>{{serviceName(r.serviceCode)}}</strong> · {{r.enabled?groupName(r.groupId):'停用'}} · {{positionName(r.primaryPositionId)}}<p>{{r.candidates.map(p=>`${p.name}（${p.duty==='PRIMARY'?'主处理':'备岗'}）`).join('、')||'暂无有效任职人员'}}</p><p v-for="warning in r.warnings" :key="warning" class="danger-text">{{warningLabels[warning]??warning}}</p></li></ul>
     </section>
+    </template>
   </div>
 </template>
 

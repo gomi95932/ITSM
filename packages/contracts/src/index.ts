@@ -1,5 +1,6 @@
 export const API_PREFIX = 'api/v1';
 export * from './service-structure.js';
+export * from './service-structure-template.js';
 export { DEFAULT_CALENDAR, SLA_TARGETS, serviceMinutes, type ServiceCalendar } from './sla.js';
 export { assignmentDeadline } from './assignment.js';
 export type {SupportChangeKind,SupportChangeInput,SupportChangeDecision,SupportGroupView,SupportChangeView,SupportMemberView,SupportStructureView,SupportMembersView,SupportPeopleView,SupportAuditView} from './support.js';
