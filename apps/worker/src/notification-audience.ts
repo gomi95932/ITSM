@@ -1,6 +1,6 @@
 import type { PoolClient } from 'pg';
 
-type Audience = { requester?: boolean; owner?: boolean; pending?: boolean; queue?: boolean; escalation?: boolean; reviewer?: boolean; platformAdmin?: boolean };
+type Audience = { requester?: boolean; owner?: boolean; pending?: boolean; queue?: boolean; escalation?: boolean; reviewer?: boolean; platformAdmin?: boolean; fulfillment?: boolean };
 const audiences: Readonly<Record<string, Audience>> = {
   SUBMIT_AND_ROUTE: { requester:true, owner:true, queue:true },
   ACCEPT: { requester:true, owner:true },
@@ -35,6 +35,10 @@ const audiences: Readonly<Record<string, Audience>> = {
   OWNERSHIP_RECOVERED: { owner:true, escalation:true },
   OWNERSHIP_ESCALATION_REQUIRED: { owner:true, escalation:true, platformAdmin:true },
   FEEDBACK_SUBMITTED: { owner:true },
+  FULFILLMENT_REVIEW_REQUIRED: { fulfillment:true },
+  FULFILLMENT_REVOKE_REQUIRED: { fulfillment:true },
+  FULFILLMENT_REVIEW_OVERDUE: { fulfillment:true },
+  FULFILLMENT_REVOKE_OVERDUE: { fulfillment:true },
 };
 
 export function notificationAudience(action: string): Readonly<Audience> {
@@ -47,6 +51,27 @@ export async function notificationRecipients(client: Pick<PoolClient,'query'>, e
   if (!event.rowCount) return [];
   const a = notificationAudience(event.rows[0]!.action);
   if (!Object.keys(a).length) return [];
+  if(a.fulfillment){
+    const recipients=await client.query<{id:string}>(`SELECT e.id FROM request_fulfillment_signals s
+      JOIN ticket_events v ON v.id=s.event_id AND v.action='FULFILLMENT_'||s.kind
+      JOIN request_fulfillments f ON f.id=s.fulfillment_id AND f.ticket_id=v.ticket_id
+      JOIN tickets t ON t.id=f.ticket_id AND t.owner_group_id=s.group_id
+      JOIN support_groups g ON g.id=s.group_id AND g.enabled
+      JOIN group_memberships m ON m.group_id=g.id JOIN employees e ON e.id=m.employee_id AND e.active
+      WHERE s.event_id=$1 AND ($2::text IS NULL OR e.id=$2) AND (
+        (s.kind IN ('REVIEW_REQUIRED','REVIEW_OVERDUE') AND f.state='DELIVERED'
+          AND f.access_expires_at>clock_timestamp() AND f.reviewed_at IS NULL) OR
+        (s.kind IN ('REVOKE_REQUIRED','REVOKE_OVERDUE') AND (f.state='REVOKE_DUE'
+          OR (f.state='DELIVERED' AND f.access_expires_at<=clock_timestamp())))
+      ) AND (
+        (s.kind='REVIEW_REQUIRED' AND request_fulfillment_operator_eligible(f.id,e.id,'REVIEW')) OR
+        (s.kind='REVOKE_REQUIRED' AND request_fulfillment_operator_eligible(f.id,e.id,'REVOKE')) OR
+        (s.kind IN ('REVIEW_OVERDUE','REVOKE_OVERDUE') AND s.escalate_at<=clock_timestamp() AND EXISTS(
+          SELECT 1 FROM role_bindings r WHERE r.employee_id=e.id AND r.group_id=g.id AND r.role_code='GROUP_LEAD'
+            AND r.status='ACTIVE' AND r.valid_from<=clock_timestamp() AND r.valid_to>clock_timestamp()))
+      ) ORDER BY e.id`,[eventId,employeeId]);
+    return recipients.rows.map(row=>row.id);
+  }
   const result = await client.query<{ id:string }>(`SELECT e.id FROM ticket_events v JOIN tickets t ON t.id=v.ticket_id
     JOIN employees e ON e.active WHERE v.id=$1 AND ($2::text IS NULL OR e.id=$2) AND (
       ($3 AND e.id=t.requester_id) OR

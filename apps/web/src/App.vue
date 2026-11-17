@@ -79,6 +79,7 @@ function navigate(value:View){view.value=value;filter.value='';workQueue.value='
 function selectWorkQueue(value:WorkQueue){if(value===workQueue.value)return;workQueue.value=value;filter.value='';page.value=1;void load();}
 function openTicket(id:string){creating.value=false;location.hash=`/tickets/${id}`;}
 function syncHash(){
+  if(location.hash==='#/fulfillments'){view.value=user.value?.groups.length?'fulfillments':'mine';selected.value='';creating.value=false;return;}
   if(location.hash==='#/routing-alerts'){view.value='routing';selected.value='';return;}
   const match=/^#\/tickets\/([a-f0-9-]{36})$/.exec(location.hash);selected.value=match?.[1]??'';
 }

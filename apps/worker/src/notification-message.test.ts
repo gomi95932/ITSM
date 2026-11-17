@@ -2,6 +2,21 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { notificationLink } from './notification-message.js';
 
+test('fulfillment reminders link to authorized workspace without external evidence or approval details',()=>{
+  for(const action of ['FULFILLMENT_REVIEW_REQUIRED','FULFILLMENT_REVOKE_REQUIRED','FULFILLMENT_REVIEW_OVERDUE','FULFILLMENT_REVOKE_OVERDUE']){
+    const input={ticket_id:'ticket-f',number:'REQ-0001',action,to_status:'WAITING_APPROVAL',
+      detail:{reference:'private-evidence',snapshot:'private-approval'}};
+    const message=notificationLink('https://itsm.example.test/',input);
+    assert.equal(message.messageUrl,'https://itsm.example.test/#/fulfillments');
+    assert.match(message.text,/REQ-0001/);
+    assert.ok(!JSON.stringify(message).includes('private-'));
+    assert.throws(()=>notificationLink('http://itsm.example.test/',input),/HTTPS_DEEP_LINK_REQUIRED/);
+  }
+  for(const action of ['constructor','toString','__proto__'])
+    assert.equal(notificationLink('https://itsm.example.test/',{ticket_id:'t',number:'REQ-1',action,to_status:'OPEN'}).messageUrl,
+      'https://itsm.example.test/#/tickets/t');
+});
+
 test('DingTalk notification carries only an identifier, state and link', () => {
   const ticket = {
     ticket_id: 'ticket-1', number: 'INC-0001', action: 'REQUEST_INFO', to_status: 'WAITING_USER',

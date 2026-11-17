@@ -4,6 +4,7 @@ import { Pool, type PoolClient } from 'pg';
 import { P1_REVIEW_REMINDER_MINUTES, serviceMinutes } from '@itsm/contracts';
 import { maintainRequestApprovals } from './request-approval.js';
 import { maintainRequestFulfillments } from './request-fulfillment.js';
+import { fulfillmentReminderMinutes,maintainFulfillmentAttention } from './fulfillment-attention.js';
 import { shouldAutoClose } from './auto-close.js';
 import { notificationLink } from './notification-message.js';
 import { expandNotification, notificationRecipients } from './notification-audience.js';
@@ -14,6 +15,10 @@ let stopped = false;
 let timer: ReturnType<typeof setTimeout> | undefined;
 let access: { token:string; expires:number } | undefined;
 const mode = process.env.NOTIFICATION_MODE ?? 'disabled';
+const fulfillmentReminders={
+  reviewMinutes:fulfillmentReminderMinutes(process.env.FULFILLMENT_REVIEW_REMINDER_MINUTES,1440),
+  revokeMinutes:fulfillmentReminderMinutes(process.env.FULFILLMENT_REVOKE_REMINDER_MINUTES,60),
+};
 
 async function transaction(fn:(client:PoolClient)=>Promise<void>) {
   const client = await db.connect();
@@ -261,7 +266,7 @@ async function timers() {
 let ticks = 0;
 async function tick() {
   try {
-    if (ticks++ % 15 === 0) { await recoverOwnership(); await expireAssignments(); await priorityReviewTimers(); await maintainRequestApprovals(db); await maintainRequestFulfillments(db); await timers(); }
+    if (ticks++ % 15 === 0) { await recoverOwnership(); await expireAssignments(); await priorityReviewTimers(); await maintainRequestApprovals(db); await maintainRequestFulfillments(db); await maintainFulfillmentAttention(db,fulfillmentReminders); await timers(); }
     await expand();
     for (let i=0;i<10 && !stopped;i++) await deliver();
     await writeFile('/tmp/itsm-worker-heartbeat', String(Date.now()), { mode:0o600 });

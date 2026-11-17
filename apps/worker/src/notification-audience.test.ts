@@ -2,6 +2,12 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { notificationAudience } from './notification-audience.js';
 
+test('fulfillment reminders use current obligation recipients, never requester or queue broadcasts',()=>{
+  for(const kind of ['REVIEW_REQUIRED','REVOKE_REQUIRED','REVIEW_OVERDUE','REVOKE_OVERDUE'])
+    assert.deepEqual(notificationAudience(`FULFILLMENT_${kind}`),{fulfillment:true});
+  assert.deepEqual(notificationAudience('FULFILLMENT_UNKNOWN'),{});
+});
+
 test('continuity and supervisor handover notify named owner and escalation without leaking to requester',()=>{
   for(const action of ['CONTINUATION_PROPOSE','CONTINUATION_APPROVE','CONTINUATION_REJECT','CONTINUATION_REVOKE','INITIATE_HANDOVER']){
     assert.equal(notificationAudience(action).owner,true);
