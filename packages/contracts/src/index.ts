@@ -109,6 +109,7 @@ export interface TicketView extends TicketReceipt {
   canAssignOffer?: boolean;
   canClaim?: boolean;
   canProcess?: boolean;
+  requestCompletionReady?: boolean;
   ownerContinuityRequired?: boolean;
   canManageContinuity?: boolean;
   continuations?: {id:string;employeeId:string;proposedBy:string;status:string;expiresAt:string;reason:string;current:boolean;effective:boolean}[];
@@ -122,7 +123,7 @@ export interface TicketView extends TicketReceipt {
   feedback?: TicketFeedback | null;
   priorityAlert?: { reviewersAvailable: boolean; overdue: boolean; notificationMode: string; deliveries: Record<string, number> };
   events?: { action: string; fromStatus: string | null; toStatus: string; detail: Record<string, string>; createdAt: string }[];
-  sla?: { cycle: number; priority: Priority; responseTarget: number; resolutionTarget: number; responseMinutes: number; resolutionMinutes: number; responded: boolean; completed: boolean; paused: boolean; breached: boolean }[];
+  sla?: { cycle: number; priority: Priority; responseTarget: number; resolutionTarget: number; responseMinutes: number; resolutionMinutes: number; responded: boolean; completed: boolean; paused: boolean; pauseReason?:'USER'|'APPROVAL'|null; breached: boolean }[];
   requestProgress?: {
     approval: { state: string; updatedAt: string } | null;
     fulfillment: { state: string; deliveredAt: string | null; accessExpiresAt: string | null; revokedAt: string | null; reviewedAt: string | null; updatedAt: string } | null;

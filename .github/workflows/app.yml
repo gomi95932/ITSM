@@ -118,6 +118,8 @@ jobs:
         run: node tests/integration/request-progress.mjs
       - name: Verify scoped fulfillment review, revocation, current appointments and exactly-once commands
         run: node tests/integration/fulfillment.mjs
+      - name: Verify approved request delivery, independent review, confirmation and guarded closure
+        run: node tests/integration/request-lifecycle.mjs
       - name: Verify fulfillment reminders, current recipients, overdue escalation and atomic deduplication
         run: node tests/integration/fulfillment-attention.mjs
       - name: Verify service report boundaries and lifecycle metrics

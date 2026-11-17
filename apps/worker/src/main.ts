@@ -253,14 +253,21 @@ async function expireAssignments() {
 }
 
 async function timers() {
-  await transaction(async client => {
-    const result = await client.query(`SELECT t.*,s.cycle,s.priority AS sla_priority,s.calendar_snapshot,s.started_at,s.responded_at,s.completed_at,s.paused_at,s.paused_minutes,s.response_target,s.resolution_target,now() AS clock
+  const candidates=await db.query(`SELECT t.id FROM tickets t WHERE t.status NOT IN ('CLOSED','CANCELLED','REJECTED')
+    AND EXISTS(SELECT 1 FROM sla_cycles s WHERE s.ticket_id=t.id)
+    ORDER BY t.sla_checked_at NULLS FIRST,t.id LIMIT 100`);
+  for(const candidate of candidates.rows)await transaction(async client=>{
+    await client.query('SELECT pg_advisory_xact_lock_shared(71820512)');
+    await client.query('SELECT id FROM request_approvals WHERE ticket_id=$1 FOR UPDATE',[candidate.id]);
+    await client.query('SELECT id FROM request_fulfillments WHERE ticket_id=$1 FOR UPDATE',[candidate.id]);
+    const result = await client.query(`SELECT t.*,s.cycle,s.priority AS sla_priority,s.calendar_snapshot,s.started_at,s.responded_at,s.completed_at,s.paused_at,s.paused_minutes,s.response_target,s.resolution_target,clock_timestamp() AS clock
       FROM tickets t JOIN sla_cycles s ON s.ticket_id=t.id AND s.cycle=(SELECT max(cycle) FROM sla_cycles WHERE ticket_id=t.id)
-      WHERE t.status NOT IN ('CLOSED','CANCELLED','REJECTED') ORDER BY t.sla_checked_at NULLS FIRST,t.id LIMIT 100 FOR UPDATE OF t SKIP LOCKED`);
+      WHERE t.id=$1 AND t.status NOT IN ('CLOSED','CANCELLED','REJECTED') FOR UPDATE OF t SKIP LOCKED`,[candidate.id]);
     for (const row of result.rows) {
       await client.query('UPDATE tickets SET sla_checked_at=now() WHERE id=$1',[row.id]);
       const closeHours = Number(process.env.AUTO_CLOSE_HOURS ?? 72);
-      if (shouldAutoClose(row.status,row.completed_at,row.clock,closeHours)) {
+      const completionReady=row.service_type!=='REQ'||(await client.query('SELECT request_ticket_completion_ready($1) AS ready',[row.id])).rows[0].ready;
+      if (shouldAutoClose(row.status,row.completed_at,row.clock,closeHours)&&completionReady) {
         const updated = await client.query("UPDATE tickets SET status='CLOSED',pending_group_id=NULL,pending_assignee_id=NULL,assignment_kind=NULL,assignment_state=CASE WHEN pending_assignee_id IS NOT NULL THEN 'CANCELLED' ELSE assignment_state END,assignment_offered_at=NULL,assignment_due_at=NULL,assignment_policy_version_id=NULL,version=version+1,updated_at=now() WHERE id=$1 RETURNING *",[row.id]);
         await record(client,updated.rows[0],'AUTO_CLOSE',{ reason:`待确认超过 ${closeHours} 小时自动关闭` },row.status,'CLOSED',row);
         continue;
@@ -274,6 +281,8 @@ async function timers() {
         if (signal.rowCount) await record(client,row,'SLA_BREACH',{ cycle:row.cycle,kind },row.status,row.status);
       }
     }
+  });
+  await transaction(async client=>{
     await client.query("DELETE FROM auth_sessions WHERE expires_at<now()-interval '1 day'");
     await client.query("DELETE FROM auth_code_uses WHERE created_at<now()-interval '1 day'");
     await client.query('DELETE FROM voice_drafts WHERE expires_at<now()');

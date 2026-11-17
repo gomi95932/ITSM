@@ -49,10 +49,11 @@ export async function createFulfillmentFixture({groupId=`fulfillment-${randomUUI
     INSERT INTO tickets(id,number,requester_id,submitted_by_id,owner_group_id,service_code,service_type,form_version,
       subject,description,fields,impact,urgency,priority,status,service_routing_snapshot)
       VALUES('${ticketId}',${literal(`REQ-${ticketId}`)},'employee-1','employee-1',${literal(groupId)},${literal(serviceCode)},'REQ',1,
-        ${literal(subject)},'CI-only synthetic fulfillment','{}','INDIVIDUAL','LOW','P3','WAITING_APPROVAL',${literal(JSON.stringify(routing))});
+        ${literal(subject)},'CI-only synthetic fulfillment','{}','INDIVIDUAL','LOW','P3','IN_PROGRESS',${literal(JSON.stringify(routing))});
     INSERT INTO request_approvals(id,ticket_id,corp_id,snapshot,expires_at,state,provider_instance_id,last_verified_at,next_at,last_error)
       VALUES('${approvalId}','${ticketId}',${literal(corp)},${literal(JSON.stringify(snapshot))},now()+interval '1 day','APPROVED',
         ${literal(internalMarker)},now(),now()+interval '1 day',${literal(internalMarker)});
+    INSERT INTO request_approval_events(approval_id,action,to_state) VALUES('${approvalId}','APPROVAL_RECONCILED','APPROVED');
     ${state!==null?`INSERT INTO request_fulfillments(id,approval_id,ticket_id,assignee_id,ready_until,state,delivered_at,access_expires_at,
       reviewed_at,reviewed_by,revoked_at,reason_code)
       VALUES('${id}','${approvalId}','${ticketId}','agent-1',now()+interval '1 day','${state}',
@@ -60,6 +61,8 @@ export async function createFulfillmentFixture({groupId=`fulfillment-${randomUUI
         ${reviewed?"now()-interval '20 seconds'":'NULL'},${reviewed?"'agent-2'":'NULL'},${state==='REVOKED'?'now()':'NULL'},${literal(internalMarker)});`:''}
     ${delivered?`INSERT INTO request_fulfillment_events(fulfillment_id,actor_id,action,to_state,evidence_reference)
       VALUES('${id}','agent-1','DELIVERY_RECORDED','${state}',${literal(deliveryReference)});`:''}
+    ${reviewed?`INSERT INTO request_fulfillment_events(fulfillment_id,actor_id,action,to_state,evidence_reference)
+      VALUES('${id}','agent-2','DELIVERY_REVIEWED','${state}',${literal(`REVIEW-${id}`)});`:''}
     ${history?`INSERT INTO request_fulfillment_events(fulfillment_id,action,to_state,created_at)
       SELECT '${id}','CI_HISTORY','${state}',now()-n*interval '1 second' FROM generate_series(1,${Number(history)}) n;`:''}
     ${appointed?`SELECT version FROM service_structure_current WHERE id FOR UPDATE;

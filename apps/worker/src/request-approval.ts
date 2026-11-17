@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { type Pool, type PoolClient } from 'pg';
+import { serviceMinutes } from '@itsm/contracts';
 
 type Person = { employeeId: string; dingUserId: string };
 type Approver = Person & { role: string };
@@ -96,14 +97,23 @@ export async function enqueueRequestApproval(client: PoolClient, input: {
   const result = await client.query<Approval>(`INSERT INTO request_approvals(ticket_id,corp_id,snapshot,expires_at)
     VALUES ($1,$2,$3,$4) RETURNING *,now() AS clock`,[ticket.id,input.corpId,JSON.stringify(snapshot),input.expiresAt]);
   await event(client,result.rows[0],'APPROVAL_QUEUED','QUEUED');
+  await client.query(`UPDATE sla_cycles SET paused_at=clock_timestamp(),pause_reason='APPROVAL'
+    WHERE ticket_id=$1 AND cycle=(SELECT max(cycle) FROM sla_cycles WHERE ticket_id=$1)
+      AND completed_at IS NULL AND paused_at IS NULL`,[ticket.id]);
   return result.rows[0].id;
 }
 
+export function approvalStageAllowed(status:string|undefined,previouslyApproved:boolean):boolean {
+  return status==='WAITING_APPROVAL'||previouslyApproved&&['IN_PROGRESS','WAITING_USER','WAITING_VENDOR','PENDING_CONFIRMATION','CLOSED'].includes(status??'');
+}
+
 export async function localBlock(client: PoolClient, row: Approval): Promise<string | null> {
+  const previouslyApproved=row.state==='APPROVED'||!!(await client.query(`SELECT 1 FROM request_approval_events
+    WHERE approval_id=$1 AND action='APPROVAL_RECONCILED' AND to_state='APPROVED' LIMIT 1`,[row.id])).rowCount;
   // The approval deadline does not shorten an already approved access term.
-  if (row.state !== 'APPROVED' && row.expires_at <= row.clock) return 'APPROVAL_EXPIRED';
+  if (!previouslyApproved && row.expires_at <= row.clock) return 'APPROVAL_EXPIRED';
   const ticket = (await client.query('SELECT * FROM tickets WHERE id=$1 FOR SHARE',[row.ticket_id])).rows[0];
-  if (ticket?.status !== 'WAITING_APPROVAL') return 'TICKET_NOT_AWAITING_APPROVAL';
+  if (!approvalStageAllowed(ticket?.status,previouslyApproved)) return 'TICKET_NOT_AWAITING_APPROVAL';
   if (ticket.requester_id !== row.snapshot.applicant.employeeId || ticket.service_code !== row.snapshot.serviceCode
     || ticket.service_type !== 'REQ' || ticket.form_version !== row.snapshot.formVersion
     || canonical(ticket.catalog_snapshot) !== canonical(row.snapshot.catalog)
@@ -127,6 +137,36 @@ export async function localBlock(client: PoolClient, row: Approval): Promise<str
   }
   return null;
 }
+
+async function projectApproval(client:PoolClient,row:Approval,state:State) {
+  if(!['APPROVED','REJECTED'].includes(state))return;
+  const ticket=(await client.query("SELECT * FROM tickets WHERE id=$1 AND service_type='REQ' FOR UPDATE",[row.ticket_id])).rows[0];
+  if(ticket?.status!=='WAITING_APPROVAL')return;
+  const next=state==='APPROVED'?'IN_PROGRESS':'REJECTED',action=state==='APPROVED'?'REQUEST_APPROVED':'REQUEST_REJECTED';
+  const updated=(await client.query(`UPDATE tickets SET status=$2,version=version+1,updated_at=clock_timestamp(),
+    pending_group_id=NULL,pending_assignee_id=NULL,assignment_kind=NULL,
+    assignment_state=CASE WHEN pending_assignee_id IS NOT NULL THEN 'CANCELLED' ELSE assignment_state END,
+    assignment_offered_at=NULL,assignment_due_at=NULL,assignment_policy_version_id=NULL WHERE id=$1 RETURNING version`,[ticket.id,next])).rows[0];
+  const cycle=(await client.query(`SELECT *,clock_timestamp() AS clock FROM sla_cycles WHERE ticket_id=$1
+    ORDER BY cycle DESC LIMIT 1 FOR UPDATE`,[ticket.id])).rows[0];
+  if(cycle&&!cycle.completed_at){
+    if(cycle.paused_at&&cycle.pause_reason==='APPROVAL'){
+      const minutes=serviceMinutes(cycle.paused_at,cycle.clock,cycle.calendar_snapshot,cycle.priority==='P1');
+      await client.query(`UPDATE sla_cycles SET paused_at=NULL,pause_reason=NULL,paused_minutes=paused_minutes+$3
+        WHERE ticket_id=$1 AND cycle=$2`,[ticket.id,cycle.cycle,minutes]);
+    }
+    if(state==='REJECTED')await client.query('UPDATE sla_cycles SET completed_at=clock_timestamp() WHERE ticket_id=$1 AND cycle=$2',[ticket.id,cycle.cycle]);
+  }
+  const eventId=randomUUID(),requestId=randomUUID();
+  const detail={reason:state==='APPROVED'?'审批已通过，等待工程师接单与交付':'申请未获审批通过'};
+  await client.query(`INSERT INTO ticket_events(id,ticket_id,actor_id,action,from_status,to_status,detail,request_id)
+    VALUES($1,$2,'system:approval',$3,$4,$5,$6,$7)`,[eventId,ticket.id,action,ticket.status,next,JSON.stringify(detail),requestId]);
+  await client.query(`INSERT INTO audit_logs(ticket_id,event_id,actor_id,request_id,action,before_value,after_value)
+    VALUES($1,$2,'system:approval',$3,$4,$5,$6)`,[ticket.id,eventId,requestId,action,
+    JSON.stringify({status:ticket.status,version:ticket.version}),JSON.stringify({status:next,version:updated.version})]);
+  await client.query(`INSERT INTO outbox_events(ticket_id,event_id,kind,payload) VALUES($1,$2,'TICKET_CHANGED',$3)`,
+    [ticket.id,eventId,JSON.stringify({ticketId:ticket.id,eventId})]);
+}
 async function block(client: PoolClient, row: Approval, reason: string) {
   const state = reason === 'APPROVAL_EXPIRED' ? 'EXPIRED' : 'BLOCKED';
   await client.query(`UPDATE request_approvals SET state=$2,last_error=$3,last_verified_at=NULL,updated_at=now() WHERE id=$1`,[row.id,state,reason]);
@@ -135,6 +175,7 @@ async function block(client: PoolClient, row: Approval, reason: string) {
 
 export async function maintainRequestApprovals(db: Pool): Promise<void> {
   await transaction(db,async client => {
+    await client.query('SELECT pg_advisory_xact_lock_shared(71820512)');
     const rows = await client.query<Approval>(`SELECT *,now() AS clock FROM request_approvals WHERE state=ANY($1::text[])
       ORDER BY updated_at,id LIMIT 100 FOR UPDATE SKIP LOCKED`,[activeStates]);
     for (const row of rows.rows) {
@@ -183,6 +224,7 @@ export function matches(row: Approval, observed: ApprovalObservation): boolean {
 
 export async function processNextRequestApproval(db: Pool, provider: RequestApprovalProvider): Promise<boolean> {
   const claimed = await transaction(db,async client => {
+    await client.query('SELECT pg_advisory_xact_lock_shared(71820512)');
     const row = (await client.query<Approval>(`SELECT *,now() AS clock FROM request_approvals WHERE state=ANY($1::text[])
       AND next_at<=now() AND (lease_until IS NULL OR lease_until<now()) ORDER BY next_at,id LIMIT 1 FOR UPDATE SKIP LOCKED`,[activeStates])).rows[0];
     if (!row) return null;
@@ -210,6 +252,7 @@ export async function processNextRequestApproval(db: Pool, provider: RequestAppr
     } else observed = await bounded(signal => provider.inspect(claimed.provider_instance_id!,signal));
   } catch { failed = true; }
   await transaction(db,async client => {
+    await client.query('SELECT pg_advisory_xact_lock_shared(71820512)');
     const row = (await client.query<Approval>('SELECT *,now() AS clock FROM request_approvals WHERE id=$1 FOR UPDATE',[claimed.id])).rows[0];
     if (!row || row.lease_token !== claimed.lease_token) return;
     if (instanceId && !failed && !row.provider_instance_id) {
@@ -233,6 +276,7 @@ export async function processNextRequestApproval(db: Pool, provider: RequestAppr
         next_at=CASE WHEN $5 THEN now() ELSE now()+interval '30 seconds' END,updated_at=now() WHERE id=$1`,
         [row.id,state,error,!!observed && !error,!!instanceId && !observed]);
       await event(client,row,'APPROVAL_RECONCILED',state,error);
+      if(!error)await projectApproval(client,row,state);
     }
     await client.query('UPDATE request_approvals SET lease_token=NULL,lease_until=NULL WHERE id=$1',[row.id]);
   });

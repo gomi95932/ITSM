@@ -3,6 +3,8 @@ import type { PoolClient } from 'pg';
 type Audience = { requester?: boolean; owner?: boolean; pending?: boolean; queue?: boolean; escalation?: boolean; reviewer?: boolean; platformAdmin?: boolean; fulfillment?: boolean; deliveryFailure?: boolean };
 const audiences: Readonly<Record<string, Audience>> = {
   SUBMIT_AND_ROUTE: { requester:true, owner:true, queue:true },
+  REQUEST_APPROVED: { requester:true, owner:true, queue:true },
+  REQUEST_REJECTED: { requester:true, owner:true },
   ACCEPT: { requester:true, owner:true },
   REQUEST_INFO: { requester:true, owner:true },
   ADD_INFO: { requester:true, owner:true },

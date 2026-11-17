@@ -2,6 +2,16 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { notificationLink } from './notification-message.js';
 
+test('approval result messages distinguish approval from delivery and hide private bindings',()=>{
+  for(const action of ['REQUEST_APPROVED','REQUEST_REJECTED']){
+    const message=notificationLink('https://itsm.example.test/',{ticket_id:'request-1',number:'REQ-0001',action,
+      to_status:action==='REQUEST_APPROVED'?'IN_PROGRESS':'REJECTED',detail:{approvalId:'private-approval',snapshot:'private-snapshot'}});
+    assert.equal(message.messageUrl,'https://itsm.example.test/#/tickets/request-1');
+    assert.match(message.text,action==='REQUEST_APPROVED'?/等待工程师接单交付/:/审批未通过/);
+    assert.ok(!JSON.stringify(message).includes('private-'));
+  }
+});
+
 test('fulfillment reminders link to authorized workspace without external evidence or approval details',()=>{
   for(const action of ['FULFILLMENT_REVIEW_REQUIRED','FULFILLMENT_REVOKE_REQUIRED','FULFILLMENT_REVIEW_OVERDUE','FULFILLMENT_REVOKE_OVERDUE','DELIVERY_FAILURE_REQUIRED','DELIVERY_FAILURE_RESOLVED']){
     const input={ticket_id:'ticket-f',number:'REQ-0001',action,to_status:'WAITING_APPROVAL',

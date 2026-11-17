@@ -2,6 +2,11 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { notificationAudience } from './notification-audience.js';
 
+test('approval results notify the requester and approval opens only the dispatch queue',()=>{
+  assert.deepEqual(notificationAudience('REQUEST_APPROVED'),{requester:true,owner:true,queue:true});
+  assert.deepEqual(notificationAudience('REQUEST_REJECTED'),{requester:true,owner:true});
+});
+
 test('failed delivery investigation targets current independent verifiers, not requester or group broadcasts',()=>{
   assert.deepEqual(notificationAudience('DELIVERY_FAILURE_REQUIRED'),{deliveryFailure:true});
   assert.deepEqual(notificationAudience('DELIVERY_FAILURE_RESOLVED'),{owner:true,escalation:true});

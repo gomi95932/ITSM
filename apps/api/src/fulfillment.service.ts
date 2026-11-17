@@ -58,11 +58,11 @@ export class FulfillmentService {
         requester.display_name AS "requesterName",a.state AS "approvalState",a.expires_at AS deadline,
         f.id AS "taskId",f.state AS "taskState",COALESCE(f.version,0) AS version,delivery.display_name AS "assigneeName",
         ($4 AND a.state='APPROVED' AND a.last_verified_at IS NOT NULL AND a.lease_token IS NULL AND a.expires_at>clock_timestamp()
-          AND t.status='WAITING_APPROVAL' AND request_delivery_operator_eligible(a.id,$1) AND f.id IS NULL
+          AND t.status IN ('IN_PROGRESS','WAITING_VENDOR') AND request_delivery_operator_eligible(a.id,$1) AND f.id IS NULL
           AND NOT request_delivery_has_unresolved(a.id)
           AND NOT EXISTS(SELECT 1 FROM request_delivery_commands pending WHERE pending.approval_id=a.id AND pending.state='PENDING')) AS "canPrepare",
         COALESCE(($4 AND a.state='APPROVED' AND a.last_verified_at IS NOT NULL AND a.lease_token IS NULL AND a.expires_at>clock_timestamp()
-          AND t.status='WAITING_APPROVAL' AND request_delivery_operator_eligible(a.id,$1) AND f.state='READY' AND f.assignee_id=$1
+          AND t.status IN ('IN_PROGRESS','WAITING_VENDOR') AND request_delivery_operator_eligible(a.id,$1) AND f.state='READY' AND f.assignee_id=$1
           AND NOT request_delivery_has_unresolved(a.id)
           AND f.ready_until>clock_timestamp() AND NOT EXISTS(SELECT 1 FROM request_delivery_commands pending WHERE pending.approval_id=a.id AND pending.state='PENDING')),false) AS "canDeliver",
         CASE WHEN command.id IS NULL THEN NULL ELSE row_to_json(command) END AS command
@@ -97,7 +97,8 @@ export class FulfillmentService {
       }
       if((await client.query('SELECT request_delivery_has_unresolved($1) AS blocked',[id])).rows[0].blocked)
         throw new ConflictException({code:'DELIVERY_FAILURE_UNRESOLVED'});
-      if(ticket.status!=='WAITING_APPROVAL'||approval.state!=='APPROVED'||!approval.last_verified_at||approval.lease_token
+      if(!['IN_PROGRESS','WAITING_VENDOR'].includes(ticket.status))throw new ConflictException({code:'REQUEST_DELIVERY_STAGE_UNAVAILABLE'});
+      if(approval.state!=='APPROVED'||!approval.last_verified_at||approval.lease_token
         ||!(await client.query('SELECT expires_at>clock_timestamp() AS valid FROM request_approvals WHERE id=$1',[id])).rows[0].valid)
         throw new ConflictException({code:'FULFILLMENT_APPROVAL_UNAVAILABLE'});
       if(operation==='PREPARE'&&task)throw new ConflictException({code:'FULFILLMENT_ALREADY_EXISTS'});

@@ -328,6 +328,8 @@ export class TicketsService {
       const continuityManager=!!membership.rowCount&&await canManageContinuity(client,actor.id,ticket.owner_group_id);
       const processing=!!membership.rowCount&&(await client.query<{eligible:boolean}>(
         'SELECT ticket_processing_eligible($1,$2) AS eligible',[id,actor.id])).rows[0].eligible;
+      const requestCompletionReady=ticket.service_type==='REQ'?(await client.query<{ready:boolean}>(
+        'SELECT request_ticket_completion_ready($1) AS ready',[id])).rows[0].ready:undefined;
       const ownerContinuityRequired=!!membership.rowCount&&!!ticket.assignee_id&&!(await client.query<{eligible:boolean}>(
         'SELECT ticket_processing_eligible($1,$2) AS eligible',[id,ticket.assignee_id])).rows[0].eligible;
       const continuations=membership.rowCount?await client.query(`SELECT id,employee_id AS "employeeId",proposed_by AS "proposedBy",
@@ -337,7 +339,8 @@ export class TicketsService {
             JOIN support_groups g ON g.id=m.group_id AND g.enabled WHERE e.id=c.employee_id AND e.active AND m.group_id=c.group_id)) AS effective
         FROM ticket_continuations c WHERE ticket_id=$1 ORDER BY created_at DESC,id`,[id,ticket.responsibility_epoch,ticket.assignee_id,ticket.owner_group_id]):null;
       let canAssignOffer=false;
-      if(dispatcher && !ticket.assignee_id && !ticket.pending_assignee_id && ticket.status==='QUEUED') {
+      if(dispatcher && !ticket.assignee_id && !ticket.pending_assignee_id
+        && (ticket.status==='QUEUED'||ticket.service_type==='REQ'&&ticket.status==='IN_PROGRESS')) {
         try {
           canAssignOffer=!!await this.assignmentPolicy(client,ticket,true);
         } catch(error) {
@@ -350,6 +353,7 @@ export class TicketsService {
         canDispatchQueued:dispatcher,
         canAssignOffer,
         canProcess:processing,ownerContinuityRequired,canManageContinuity:continuityManager,
+        ...(ticket.service_type==='REQ'?{requestCompletionReady}:{}),
         ...(continuations?{continuations:continuations.rows}:{}),
         ...(canViewRequestProgress(actor.id, ticket.requester_id, ticket.service_type) ? { requestProgress: {
           approval: progressRow ? { state: progressRow.approval_state, updatedAt: progressRow.approval_updated_at }
@@ -365,7 +369,7 @@ export class TicketsService {
         } } : {}),
         canFeedback:actor.id===ticket.requester_id && ticket.service_type==='INC' && ticket.status==='CLOSED' && !feedback?.rowCount,
         feedback:feedback?.rows[0] ?? null,
-        canCorrectClassification:!!membership.rowCount && ['QUEUED','IN_PROGRESS','WAITING_USER','WAITING_VENDOR'].includes(ticket.status)
+        canCorrectClassification:ticket.service_type!=='REQ' && !!membership.rowCount && ['QUEUED','IN_PROGRESS','WAITING_USER','WAITING_VENDOR'].includes(ticket.status)
           && !ticket.pending_assignee_id && (ticket.assignee_id===actor.id&&processing||(!ticket.assignee_id&&ticket.status==='QUEUED'&&dispatcher)),
         canReviewPriority:!!reviewer.rowCount && actor.id!==ticket.requester_id && actor.id!==ticket.submitted_by_id
           && ticket.priority_review_state==='PENDING' && !['CLOSED','CANCELLED','REJECTED'].includes(ticket.status),
@@ -459,7 +463,7 @@ export class TicketsService {
       if(previous)return previous as TicketReceipt;
       if(ticket.version!==input.expectedVersion)throw new ConflictException({code:'VERSION_CONFLICT'});
       if(ticket.assignee_id)await this.requireProcessing(client,ticket,actor.id);
-      if(!['QUEUED','IN_PROGRESS','WAITING_USER','WAITING_VENDOR'].includes(ticket.status)||ticket.pending_assignee_id)
+      if(ticket.service_type==='REQ'||!['QUEUED','IN_PROGRESS','WAITING_USER','WAITING_VENDOR'].includes(ticket.status)||ticket.pending_assignee_id)
         throw new ConflictException({code:'CLASSIFICATION_NOT_ALLOWED'});
       const service=await this.catalogFor(client,actor.id,ticket.requester_id,input.serviceCode,input.formVersion,input.fields);
       if(service.group_id!==ticket.owner_group_id)throw new ConflictException({code:'CLASSIFICATION_HANDOVER_REQUIRED'});
@@ -553,13 +557,20 @@ export class TicketsService {
     return this.transaction(async client => {
       await client.query('SELECT pg_advisory_xact_lock_shared($1)',[ROLE_AUTHORIZATION_LOCK]);
       await this.requireActive(client, actor);
+      // Validate visibility before taking the same approval -> task -> ticket locks as the worker.
+      const visible=await this.accessible(client,actor,id);
+      if(visible.service_type==='REQ'){
+        await client.query('SELECT id FROM request_approvals WHERE ticket_id=$1 FOR UPDATE',[id]);
+        await client.query('SELECT id FROM request_fulfillments WHERE ticket_id=$1 FOR UPDATE',[id]);
+      }
       const ticket = await this.accessible(client, actor, id, true);
       const member = await client.query('SELECT 1 FROM group_memberships WHERE employee_id=$1 AND group_id=$2 FOR SHARE', [actor.id, ticket.owner_group_id]);
       const delegatedInfo=body.action==='ADD_INFO' && !!ticket.delegation_id
         && await this.delegation(client,actor.id,ticket.delegation_id,false)===ticket.requester_id;
       if(['ADD_INFO','CONFIRM','REOPEN','CANCEL'].includes(body.action) && ticket.requester_id!==actor.id && !delegatedInfo)
         throw new ForbiddenException({code:'TICKET_ACTION_NOT_AUTHORIZED'});
-      if(!ticket.assignee_id&&ticket.status==='QUEUED'&&['REASSIGN','CANCEL_HANDOVER','ASSIGN_OFFER','CANCEL_OFFER'].includes(body.action)
+      if(!ticket.assignee_id&&(ticket.status==='QUEUED'||ticket.service_type==='REQ'&&ticket.status==='IN_PROGRESS')
+        &&['REASSIGN','CANCEL_HANDOVER','ASSIGN_OFFER','CANCEL_OFFER'].includes(body.action)
         &&!await canDispatch(client,actor.id,ticket.owner_group_id))throw new ForbiddenException({code:'DISPATCH_ROLE_REQUIRED'});
       const previous = await this.claim(client, actor.id, `action:${id}`, key, body);
       if (previous) return previous as TicketReceipt;
@@ -572,6 +583,9 @@ export class TicketsService {
         ? 'requester' : 'agent';
       const next = transition(ticket.status, role, body);
       if(['REQUEST_INFO','WAIT_VENDOR','RESOLVE'].includes(body.action))await this.requireProcessing(client,ticket,actor.id);
+      if(ticket.service_type==='REQ'&&['RESOLVE','CONFIRM'].includes(body.action)
+        && !(await client.query<{ready:boolean}>('SELECT request_ticket_completion_ready($1) AS ready',[id])).rows[0].ready)
+        throw new ConflictException({code:'REQUEST_COMPLETION_NOT_READY'});
       if(body.action==='INITIATE_HANDOVER'){
         if(!member.rowCount||!await canManageContinuity(client,actor.id,ticket.owner_group_id))
           throw new ForbiddenException({code:'CONTINUITY_MANAGER_REQUIRED'});

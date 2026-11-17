@@ -39,6 +39,19 @@ async function enqueue(ticketId,expiresAt=new Date(Date.now()+3600000),requested
   return {id:await transaction(client=>enqueueRequestApproval(client,input)),input};
 }
 const fresh = async () => enqueue(await draft());
+async function startSla(ticketId) {
+  await db.query(`INSERT INTO sla_cycles(ticket_id,cycle,priority,calendar_snapshot,started_at,response_target,resolution_target)
+    SELECT $1,1,'P4',config||jsonb_build_object('version',version,'approved',approved),clock_timestamp(),480,2880
+    FROM sla_calendars ORDER BY version DESC LIMIT 1`,[ticketId]);
+}
+const sla = async ticketId => (await db.query('SELECT * FROM sla_cycles WHERE ticket_id=$1 ORDER BY cycle DESC LIMIT 1',[ticketId])).rows[0];
+async function projectionEffects(ticketId,action) {
+  return (await db.query(`SELECT t.status,t.version,t.assignee_id,
+    (SELECT count(*) FROM ticket_events e WHERE e.ticket_id=t.id AND e.action=$2) AS events,
+    (SELECT count(*) FROM audit_logs a WHERE a.ticket_id=t.id AND a.action=$2) AS audits,
+    (SELECT count(*) FROM outbox_events o JOIN ticket_events e ON e.id=o.event_id WHERE o.ticket_id=t.id AND e.action=$2) AS notices
+    FROM tickets t WHERE t.id=$1`,[ticketId,action])).rows[0];
+}
 async function retire(id) {
   await db.query("UPDATE tickets SET status='CANCELLED' WHERE id=(SELECT ticket_id FROM request_approvals WHERE id=$1)",[id]);
   await maintainRequestApprovals(db);
@@ -103,7 +116,11 @@ try {
   assert.equal(Number((await db.query('SELECT count(*) FROM request_approvals')).rows[0].count),beforeApprovals,
     'rolled-back intent must not add approval records, including on a populated database');
 
-  const normal=await fresh();
+  const normalTicket=await draft();await startSla(normalTicket);
+  const normal=await enqueue(normalTicket);
+  assert.equal((await sla(normalTicket)).pause_reason,'APPROVAL');
+  assert.ok((await sla(normalTicket)).paused_at);
+  assert.equal((await sla(normalTicket)).responded_at,null,'approval waiting is not a human response');
   assert.equal(await transaction(client=>enqueueRequestApproval(client,normal.input)),normal.id,'same intent is idempotent');
   await assert.rejects(transaction(client=>enqueueRequestApproval(client,{...normal.input,requestedValidityDays:31})),/APPROVAL_INTENT_CONFLICT/);
   const snap=(await row(normal.id)).snapshot;
@@ -122,7 +139,16 @@ try {
   assert.equal((await processApproval(normal.id)).state,'PENDING','only authoritative queries determine state');
   records.get(created.provider_instance_id).state='APPROVED';
   assert.equal((await processApproval(normal.id)).state,'APPROVED');
-  assert.equal((await db.query('SELECT status FROM tickets WHERE id=$1',[normal.input.ticketId])).rows[0].status,'WAITING_APPROVAL','approval is not fulfillment');
+  assert.equal((await db.query('SELECT status FROM tickets WHERE id=$1',[normal.input.ticketId])).rows[0].status,'IN_PROGRESS','approval opens processing, not delivery or completion');
+  assert.equal((await db.query('SELECT assignee_id FROM tickets WHERE id=$1',[normal.input.ticketId])).rows[0].assignee_id,null,'approval does not impersonate a human accepting ownership');
+  assert.equal((await db.query('SELECT count(*) FROM request_fulfillments WHERE approval_id=$1',[normal.id])).rows[0].count,'0');
+  assert.equal((await sla(normalTicket)).paused_at,null);
+  assert.equal((await sla(normalTicket)).pause_reason,null);
+  assert.equal((await sla(normalTicket)).responded_at,null,'approval cannot fabricate a human response');
+  const projected=await projectionEffects(normalTicket,'REQUEST_APPROVED');
+  assert.deepEqual([projected.events,projected.audits,projected.notices],['1','1','1']);
+  assert.equal((await processApproval(normal.id)).state,'APPROVED');
+  assert.deepEqual(await projectionEffects(normalTicket,'REQUEST_APPROVED'),projected,'reinspection cannot duplicate the lifecycle projection');
   records.get(created.provider_instance_id).state='WITHDRAWN';
   await hint(normal.id);
   assert.equal((await processApproval(normal.id)).state,'WITHDRAWN');
@@ -132,9 +158,42 @@ try {
   assert.equal((await row(normal.id)).state,'WITHDRAWN');
   await assert.rejects(db.query("UPDATE request_approval_events SET reason_code='changed' WHERE approval_id=$1",[normal.id]),/REQUEST_CATALOG_VERSION_IMMUTABLE/);
 
-  const rejected=await fresh(); const rejectedRow=await processApproval(rejected.id);
+  const rejectedTicket=await draft();await startSla(rejectedTicket);
+  const rejected=await enqueue(rejectedTicket); const rejectedRow=await processApproval(rejected.id);
   records.get(rejectedRow.provider_instance_id).state='REJECTED';
   assert.equal((await processApproval(rejected.id)).state,'REJECTED');
+  assert.equal((await db.query('SELECT status FROM tickets WHERE id=$1',[rejected.input.ticketId])).rows[0].status,'REJECTED');
+  assert.equal((await sla(rejectedTicket)).paused_at,null);
+  assert.equal((await sla(rejectedTicket)).responded_at,null);
+  assert.ok((await sla(rejectedTicket)).completed_at);
+  const rejectedProjection=await projectionEffects(rejectedTicket,'REQUEST_REJECTED');
+  assert.deepEqual([rejectedProjection.events,rejectedProjection.audits,rejectedProjection.notices],['1','1','1']);
+
+  const premature=await fresh();await processApproval(premature.id);
+  await db.query("UPDATE tickets SET status='IN_PROGRESS' WHERE id=$1",[premature.input.ticketId]);
+  assert.equal((await processApproval(premature.id)).last_error,'TICKET_NOT_AWAITING_APPROVAL',
+    'processing without prior authoritative approval cannot manufacture approval provenance');
+
+  for(const table of ['audit_logs','outbox_events']) {
+    const atomicTicket=await draft();await startSla(atomicTicket);
+    const atomic=await enqueue(atomicTicket),created=await processApproval(atomic.id);
+    records.get(created.provider_instance_id).state='APPROVED';
+    const before=await projectionEffects(atomicTicket,'REQUEST_APPROVED'),beforeSla=await sla(atomicTicket);
+    await db.query(`CREATE FUNCTION ci_fail_request_projection() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN IF NEW.ticket_id='${atomicTicket}'::uuid THEN RAISE EXCEPTION 'CI_PROJECTION_ROLLBACK'; END IF; RETURN NEW; END $$`);
+    await db.query(`CREATE TRIGGER ci_fail_request_projection BEFORE INSERT ON ${table}
+      FOR EACH ROW EXECUTE FUNCTION ci_fail_request_projection()`);
+    try {await assert.rejects(processApproval(atomic.id),/CI_PROJECTION_ROLLBACK/);}
+    finally {
+      await db.query(`DROP TRIGGER ci_fail_request_projection ON ${table}`);
+      await db.query('DROP FUNCTION ci_fail_request_projection()');
+    }
+    assert.equal((await row(atomic.id)).state,'PENDING','projection failure rolls back authoritative approval too');
+    assert.deepEqual(await projectionEffects(atomicTicket,'REQUEST_APPROVED'),before);
+    assert.deepEqual(await sla(atomicTicket),beforeSla,'projection failure cannot resume the SLA');
+    await db.query('UPDATE request_approvals SET lease_token=NULL,lease_until=NULL WHERE id=$1',[atomic.id]);
+    assert.equal((await processApproval(atomic.id)).state,'APPROVED');
+  }
 
   for (const change of [
     observation=>{observation.corpId='other';},observation=>{observation.templateId='other';},
@@ -397,6 +456,23 @@ try {
   const checked=(await db.query('SELECT state,updated_at FROM request_fulfillments WHERE id=$1',[healthyTask])).rows[0];
   assert.equal(checked.state,'READY');
   assert.ok(checked.updated_at > new Date(Date.now()-60_000),'healthy task advances beyond the oldest batch');
+
+  const closedTerm=await enqueue(await draft(),new Date(Date.now()+4000));
+  const closedApproval=await processApproval(closedTerm.id);
+  records.get(closedApproval.provider_instance_id).state='APPROVED';await processApproval(closedTerm.id);
+  const closedTask=await prepareRequestFulfillment(db,provider,closedTerm.id,employee('verifier'));
+  await recordRequestDelivery(db,provider,closedTerm.id,employee('verifier'),'CHG-CLOSED-TERM');
+  await reviewRequestDelivery(db,closedTerm.id,employee('reviewer'),'CHG-CLOSED-REVIEW');
+  await db.query("UPDATE tickets SET status='CLOSED' WHERE id=$1",[closedTerm.input.ticketId]);
+  while(Date.now()<(await row(closedTerm.id)).expires_at.getTime()+20)await delay(100);
+  await hint(closedTerm.id);
+  assert.equal((await processApproval(closedTerm.id)).state,'APPROVED','closed ticket and elapsed first-delivery window do not shorten a granted term');
+  await maintainRequestFulfillments(db);
+  assert.equal((await db.query('SELECT state FROM request_fulfillments WHERE id=$1',[closedTask])).rows[0].state,'DELIVERED');
+  records.get(closedApproval.provider_instance_id).state='WITHDRAWN';await hint(closedTerm.id);await processApproval(closedTerm.id);
+  await maintainRequestFulfillments(db);
+  assert.equal((await db.query('SELECT state FROM request_fulfillments WHERE id=$1',[closedTask])).rows[0].state,'REVOKE_DUE',
+    'withdrawal must still create a revocation obligation after ticket closure');
 
   const deliveryDomain=`delivery-domain-${randomUUID()}`,deliveryPosition=`delivery-position-${randomUUID()}`;
   const deliveryEmployee=employee('reviewer');

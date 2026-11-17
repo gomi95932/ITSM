@@ -47,6 +47,7 @@ async function authorized(client:PoolClient,approval:any,providerResult:any) {
   if((await client.query('SELECT request_delivery_has_unresolved($1) AS blocked',[approval.id])).rows[0].blocked)
     throw new Error('DELIVERY_FAILURE_UNRESOLVED');
   const ticket=(await client.query('SELECT * FROM tickets WHERE id=$1 FOR SHARE',[approval.ticket_id])).rows[0];
+  if(!['IN_PROGRESS','WAITING_VENDOR'].includes(ticket.status))throw new Error('REQUEST_DELIVERY_STAGE_UNAVAILABLE');
   return ticket;
 }
 async function inspect(db:Pool,provider:RequestApprovalProvider,approvalId:string) {
@@ -118,6 +119,7 @@ export async function recordRequestDelivery(db:Pool,provider:RequestApprovalProv
 
 const commandErrors=new Set(['FULFILLMENT_OPERATOR_DENIED','FULFILLMENT_APPROVAL_UNAVAILABLE','FULFILLMENT_PROVIDER_NOT_APPROVED',
   'DELIVERY_FAILURE_UNRESOLVED',
+  'REQUEST_DELIVERY_STAGE_UNAVAILABLE',
   'FULFILLMENT_NOT_READY','FULFILLMENT_VERSION_CONFLICT','FULFILLMENT_ALREADY_EXISTS','REQUEST_DELIVERY_COMMAND_EXPIRED',
   'TICKET_NOT_AWAITING_APPROVAL','APPROVAL_REQUEST_CHANGED','APPROVAL_IDENTITY_CHANGED','APPROVAL_PERSON_UNAVAILABLE','APPROVAL_MANAGER_CHANGED']);
 

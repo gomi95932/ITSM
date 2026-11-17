@@ -4,6 +4,18 @@ import { ownershipDenial, type Ownership } from './ticket-ownership.js';
 import { transition } from './ticket-state.js';
 
 const queued:Ownership={status:'QUEUED',assignee_id:null,pending_assignee_id:null};
+test('an approved unclaimed request can be dispatched without inventing a personal owner',()=>{
+  const request:Ownership={...queued,service_type:'REQ',status:'IN_PROGRESS'};
+  for(const action of ['REASSIGN','ASSIGN_OFFER'] as const){
+    assert.equal(ownershipDenial(request,'a',true,action),undefined);
+    assert.equal(ownershipDenial({...request,service_type:'INC'},'a',true,action),'PERSONAL_OWNER_REQUIRED');
+    assert.equal(ownershipDenial(request,'a',false,action),'OWNER_GROUP_REQUIRED');
+  }
+  for(const action of ['RESOLVE','WAIT_VENDOR','REQUEST_INFO'] as const)
+    assert.equal(ownershipDenial(request,'a',true,action),'PERSONAL_OWNER_REQUIRED');
+  for(const service_type of ['INC','REQ'])
+    assert.equal(ownershipDenial({...request,service_type,assignee_id:'a'},'a',true,'ASSIGN_OFFER'),'TICKET_ALREADY_ASSIGNED');
+});
 test('only an unassigned group ticket can be claimed; a peer cannot act for its owner',()=>{
   assert.equal(ownershipDenial(queued,'a',true,'ACCEPT'),undefined);
   assert.equal(ownershipDenial(queued,'a',false,'ACCEPT'),'OWNER_GROUP_REQUIRED');

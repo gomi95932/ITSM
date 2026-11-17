@@ -5,6 +5,7 @@ export interface Ownership {
   assignee_id: string | null;
   pending_assignee_id: string | null;
   assignment_kind?: 'OFFER' | 'HANDOVER' | null;
+  service_type?: string;
 }
 
 export function ownershipDenial(ticket: Ownership, actor: string, member: boolean, action: TicketAction): string | undefined {
@@ -17,7 +18,9 @@ export function ownershipDenial(ticket: Ownership, actor: string, member: boolea
       return 'HANDOVER_TARGET_REQUIRED';
   } else if (['REASSIGN', 'CANCEL_HANDOVER', 'ASSIGN_OFFER','CANCEL_OFFER','REQUEST_INFO', 'WAIT_VENDOR', 'RESOLVE'].includes(action)) {
     if (!member) return 'OWNER_GROUP_REQUIRED';
-    const queuedRouting = !ticket.assignee_id && ticket.status === 'QUEUED' && ['REASSIGN', 'CANCEL_HANDOVER','ASSIGN_OFFER','CANCEL_OFFER'].includes(action);
+    if (action === 'ASSIGN_OFFER' && ticket.assignee_id) return 'TICKET_ALREADY_ASSIGNED';
+    const queuedRouting = !ticket.assignee_id && (ticket.status === 'QUEUED'||ticket.service_type==='REQ'&&ticket.status==='IN_PROGRESS')
+      && ['REASSIGN', 'CANCEL_HANDOVER','ASSIGN_OFFER','CANCEL_OFFER'].includes(action);
     if (ticket.assignee_id !== actor && !queuedRouting) return 'PERSONAL_OWNER_REQUIRED';
     if (['REASSIGN','ASSIGN_OFFER'].includes(action) && ticket.pending_assignee_id) return 'HANDOVER_PENDING';
     if (action === 'CANCEL_HANDOVER' && (!ticket.pending_assignee_id || ticket.assignment_kind !== 'HANDOVER')) return 'HANDOVER_NOT_PENDING';
