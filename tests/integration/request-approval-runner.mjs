@@ -171,7 +171,12 @@ try {
 
   const premature=await fresh();await processApproval(premature.id);
   await db.query("UPDATE tickets SET status='IN_PROGRESS' WHERE id=$1",[premature.input.ticketId]);
-  assert.equal((await processApproval(premature.id)).last_error,'TICKET_NOT_AWAITING_APPROVAL',
+  await db.query("UPDATE request_approvals SET next_at=now()-interval '1 day' WHERE id=$1",[premature.id]);
+  const createsBeforePremature=creates;
+  assert.equal(await processNextRequestApproval(db,provider),false,'invalid local stage blocks provider dispatch');
+  assert.equal((await row(premature.id)).state,'BLOCKED');
+  assert.equal(creates,createsBeforePremature,'a locally blocked request cannot create another remote approval');
+  assert.equal((await row(premature.id)).last_error,'TICKET_NOT_AWAITING_APPROVAL',
     'processing without prior authoritative approval cannot manufacture approval provenance');
 
   for(const table of ['audit_logs','outbox_events']) {
