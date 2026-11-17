@@ -1,16 +1,18 @@
 <script setup lang="ts">
 import { computed,onMounted,ref } from 'vue';
-import { ArrowLeft,Check,ChevronLeft,ChevronRight,ClipboardCheck,LoaderCircle,RefreshCw,ShieldOff } from 'lucide-vue-next';
+import { ArrowLeft,Check,ChevronLeft,ChevronRight,ClipboardCheck,LoaderCircle,PackageCheck,RefreshCw,ShieldOff } from 'lucide-vue-next';
 import type { FulfillmentAction,FulfillmentDetail,FulfillmentList,FulfillmentQueue,FulfillmentState } from '@itsm/contracts';
 import { api,ApiError,errorText } from '../api';
 import { formatDate } from '../labels';
 import { createRequestKey } from '../request-key';
 import ContentBoundary from './ContentBoundary.vue';
+import RequestDeliveryPanel from './RequestDeliveryPanel.vue';
 
 const emit=defineEmits<{open:[id:string]}>();
 const queue=ref<FulfillmentQueue>('UNREVIEWED'),group=ref(''),page=ref(1),data=ref<FulfillmentList>(),detail=ref<FulfillmentDetail>();
 const loading=ref(false),busy=ref(false),error=ref(''),notice=ref(''),reference=ref(''),safe=ref(false),confirmed=ref(false);
 const operation=ref<FulfillmentAction>('REVIEW');
+const preparing=ref(false);
 const labels:Record<FulfillmentState,string>={READY:'待交付',DELIVERED:'已交付',REVOKE_DUE:'待回收',REVOKED:'已登记回收',BLOCKED:'交付阻断'};
 const eventLabels:Record<string,string>={TASK_PREPARED:'准备交付',DELIVERY_RECORDED:'登记实际交付',DELIVERY_REVIEWED:'独立复核',REVOCATION_REQUIRED:'产生回收义务',REVOCATION_RECORDED:'登记实际回收',TASK_BLOCKED:'阻断交付'};
 const tabs:{key:FulfillmentQueue;label:string;count:'unreviewed'|'revokeDue'|'all'}[]=[{key:'UNREVIEWED',label:'待复核',count:'unreviewed'},{key:'REVOKE_DUE',label:'待回收',count:'revokeDue'},{key:'ALL',label:'全部',count:'all'}];
@@ -58,10 +60,13 @@ onMounted(()=>void load());
 
 <template>
   <section class="fulfillment-panel" aria-label="交付与回收工作台" :aria-busy="loading||busy">
+    <RequestDeliveryPanel v-if="preparing" @back="preparing=false;load()" @open="emit('open',$event)"/>
+    <template v-else>
     <p v-if="error" class="error-banner" role="alert">{{error}}</p><p v-if="notice" class="fulfillment-notice" role="status">{{notice}}</p>
     <div class="section-heading">
       <button v-if="detail" :disabled="busy||loading" @click="back"><ArrowLeft :size="16"/>返回列表</button>
       <span v-else class="muted">{{data?.total??0}} 项</span>
+      <button v-if="!detail" :disabled="busy||loading" @click="preparing=true"><PackageCheck :size="16"/>准备与首次交付</button>
       <button class="icon-button" title="刷新交付任务" aria-label="刷新交付任务" :disabled="busy||loading" @click="detail?show(detail.id):load()"><RefreshCw :size="18" :class="{spin:loading}"/></button>
     </div>
     <p v-if="loading" class="muted" role="status">正在加载任务</p>
@@ -85,6 +90,7 @@ onMounted(()=>void load());
       <div class="fulfillment-filters"><div role="tablist" aria-label="交付任务队列" class="segmented"><button v-for="tab in tabs" :key="tab.key" role="tab" :aria-selected="queue===tab.key" :class="{selected:queue===tab.key}" :disabled="busy||loading" @click="select(tab.key)">{{tab.label}} <span>{{data?.counts[tab.count]??0}}</span></button></div><label>责任组<select v-model="group" :disabled="busy||loading" @change="changeGroup"><option value="">我的全部支持组</option><option v-for="item in data?.groups??[]" :key="item.id" :value="item.id">{{item.name}}</option></select></label></div>
       <div class="table-wrap fulfillment-table"><table><thead><tr><th>工单 / 服务</th><th>责任组 / 交付人</th><th>状态</th><th>访问截止</th><th>复核</th></tr></thead><tbody><tr v-for="item in data?.items??[]" :key="item.id"><td><button class="ticket-link" @click="show(item.id)"><span>{{item.number}}</span><strong>{{item.subject}}</strong></button><small>{{item.serviceName}}</small></td><td>{{item.groupName}}<small>{{item.assigneeName}}</small></td><td><span class="status">{{labels[item.state]}}</span></td><td>{{item.accessExpiresAt?formatDate(item.accessExpiresAt):'未设置'}}</td><td>{{item.reviewedAt?'已复核':'未复核'}}</td></tr></tbody></table><div v-if="!data?.items.length&&!error" class="empty-state"><ClipboardCheck :size="28"/><p>当前队列暂无任务</p></div></div>
       <div v-if="data&&pages>1" class="fulfillment-pagination"><button class="icon-button" title="上一页" aria-label="上一页交付任务" :disabled="page<=1||loading" @click="page--;load()"><ChevronLeft :size="17"/></button><span>{{page}} / {{pages}}</span><button class="icon-button" title="下一页" aria-label="下一页交付任务" :disabled="page>=pages||loading" @click="page++;load()"><ChevronRight :size="17"/></button></div>
+    </template>
     </template>
   </section>
 </template>

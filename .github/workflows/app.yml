@@ -132,6 +132,19 @@ jobs:
         run: node tests/integration/service-catalog.mjs
       - name: Verify support group lifecycle, dependency guards and historical preservation
         run: node tests/integration/support-group-lifecycle.mjs
+      - name: Enable manual delivery HTTP boundary in disposable CI only
+        env:
+          ENABLE_MANUAL_REQUEST_DELIVERY: 'true'
+        run: docker compose --env-file "$ITSM_CI_ENV" -f infra/compose/compose.yaml up -d --no-deps --wait --wait-timeout 90 api
+      - name: Verify queued delivery intent, worker reinspection, concurrency and atomic receipts
+        run: node tests/integration/request-delivery.mjs
+      - name: Verify desktop and mobile first-delivery workspace against synthetic provider
+        env:
+          ITSM_DELIVERY_CI_ENABLED: 'true'
+        run: npx playwright test tests/e2e/request-delivery.spec.ts
+      - name: Restore default closed manual-delivery boundary
+        if: always() && env.ITSM_CI_ENV != ''
+        run: docker compose --env-file "$ITSM_CI_ENV" -f infra/compose/compose.yaml up -d --no-deps --wait --wait-timeout 90 api
       - uses: actions/upload-artifact@v4
         if: always()
         with:

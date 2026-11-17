@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { Pool } from 'pg';
 import { enqueueRequestApproval, maintainRequestApprovals, processNextRequestApproval, queueVerifiedApprovalHint } from './apps/worker/dist/request-approval.js';
-import { prepareRequestFulfillment, recordRequestDelivery, reviewRequestDelivery, recordRequestRevocation, maintainRequestFulfillments } from './apps/worker/dist/request-fulfillment.js';
+import { prepareRequestFulfillment, recordRequestDelivery, reviewRequestDelivery, recordRequestRevocation, maintainRequestFulfillments, processNextRequestDelivery } from './apps/worker/dist/request-fulfillment.js';
 
 if (process.env.ITSM_APPROVAL_CI !== 'true' || process.env.NODE_ENV === 'production') throw new Error('DISPOSABLE_APPROVAL_CI_ONLY');
 const db = new Pool({host:process.env.DB_HOST,database:process.env.DB_NAME,user:process.env.DB_USER,password:process.env.DB_PASSWORD,
@@ -540,6 +540,22 @@ try {
   await untouchedDelivery(shortTask);
   await maintainRequestFulfillments(db);
   assert.equal((await db.query('SELECT reason_code FROM request_fulfillments WHERE id=$1',[shortTask])).rows[0].reason_code,'DELIVERY_WINDOW_EXPIRED');
+  const queuedExpiry=await approvedDelivery(),queuedTask=await prepareRequestFulfillment(db,provider,queuedExpiry.id,deliveryEmployee);
+  const expiryCommand=(await db.query(`INSERT INTO request_delivery_commands(approval_id,actor_id,request_key,operation,
+    expected_version,evidence_reference,request_hash,expires_at) VALUES($1,$2,$3,'DELIVER',1,'CHG-QUEUED-EXPIRED',repeat('b',64),
+    clock_timestamp()+interval '2500 milliseconds') RETURNING id`,[queuedExpiry.id,deliveryEmployee,randomUUID()])).rows[0].id;
+  const approvalHolder=await db.connect();let queuedWork,holderCommitted=false;
+  try{
+    await approvalHolder.query('BEGIN');await approvalHolder.query('SELECT id FROM request_approvals WHERE id=$1 FOR UPDATE',[queuedExpiry.id]);
+    queuedWork=processNextRequestDelivery(db,provider);
+    await until(async()=>(await db.query(`SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE application_name='itsm-oa-ci'
+      AND wait_event_type='Lock' AND query LIKE 'SELECT * FROM request_approvals WHERE id=%') AS waiting`)).rows[0].waiting);
+    await until(async()=>(await db.query('SELECT expires_at<=clock_timestamp() AS expired FROM request_delivery_commands WHERE id=$1',[expiryCommand])).rows[0].expired);
+    await approvalHolder.query('COMMIT');holderCommitted=true;assert.equal(await queuedWork,true);
+  }finally{if(!holderCommitted)await approvalHolder.query('ROLLBACK');approvalHolder.release();if(queuedWork)await queuedWork;}
+  assert.deepEqual((await db.query('SELECT state,error_code,result FROM request_delivery_commands WHERE id=$1',[expiryCommand])).rows[0],
+    {state:'REJECTED',error_code:'REQUEST_DELIVERY_COMMAND_EXPIRED',result:null});
+  await untouchedDelivery(queuedTask);
   assert.equal((await db.query("SELECT count(*) FROM request_approval_events WHERE strpos(row_to_json(request_approval_events)::text,'provider-secret-sentinel')>0")).rows[0].count,'0');
   assert.equal((await db.query("SELECT count(*) FROM request_approvals WHERE strpos(row_to_json(request_approvals)::text,'provider-secret-sentinel')>0")).rows[0].count,'0');
   console.log('OA and manual fulfillment core verified: immutable snapshots, callback fencing, current delivery appointments, post-lock deadlines, operator withdrawal races and recipient revocation obligations; real DingTalk and REQ routes remain gated');

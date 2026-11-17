@@ -2,7 +2,8 @@ import { type Pool, type PoolClient } from 'pg';
 import { bounded, localBlock, matches, type RequestApprovalProvider } from './request-approval.js';
 
 type Task = {id:string; approval_id:string; ticket_id:string; assignee_id:string; state:string;
-  ready_until:Date; access_expires_at:Date|null; reviewed_at:Date|null};
+  ready_until:Date; access_expires_at:Date|null; reviewed_at:Date|null;version:number};
+type DeliveryCommand={id:string;approval_id:string;actor_id:string;operation:'PREPARE'|'DELIVER';expected_version:number;evidence_reference:string|null};
 const evidence = (value:string) => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._/-]{2,99}$/.test(value);
 
 async function transaction<T>(db:Pool, fn:(client:PoolClient)=>Promise<T>):Promise<T> {
@@ -52,30 +53,54 @@ async function inspect(db:Pool,provider:RequestApprovalProvider,approvalId:strin
   return bounded(signal=>provider.inspect(row.provider_instance_id,signal));
 }
 
-// Internal only: no employee route or real downstream grant is exposed by this module.
-export async function prepareRequestFulfillment(db:Pool,provider:RequestApprovalProvider,approvalId:string,assigneeId:string):Promise<string> {
+async function commandGuard(client:PoolClient,command:DeliveryCommand|undefined,approvalId:string,actorId:string,operation:'PREPARE'|'DELIVER'){
+  if(!command)return;
+  await client.query('SELECT pg_advisory_xact_lock_shared(71820512)');
+  const current=(await client.query(`SELECT *,expires_at<=clock_timestamp() AS expired FROM request_delivery_commands WHERE id=$1 FOR UPDATE`,[command.id])).rows[0];
+  if(!current||current.state!=='PENDING')throw new Error('REQUEST_DELIVERY_COMMAND_FINISHED');
+  if(current.approval_id!==approvalId||current.actor_id!==actorId||current.operation!==operation
+    ||current.expected_version!==command.expected_version||current.evidence_reference!==command.evidence_reference)
+    throw new Error('REQUEST_DELIVERY_COMMAND_MISMATCH');
+  if(current.expired)throw new Error('REQUEST_DELIVERY_COMMAND_EXPIRED');
+}
+async function commandComplete(client:PoolClient,command:DeliveryCommand|undefined,taskId:string){
+  if(!command)return;
+  if(!(await client.query('SELECT expires_at>clock_timestamp() AS valid FROM request_delivery_commands WHERE id=$1',[command.id])).rows[0].valid)
+    throw new Error('REQUEST_DELIVERY_COMMAND_EXPIRED');
+  const version=(await client.query('SELECT version FROM request_fulfillments WHERE id=$1',[taskId])).rows[0].version;
+  await client.query(`UPDATE request_delivery_commands SET state='SUCCEEDED',result=$2,completed_at=clock_timestamp() WHERE id=$1`,
+    [command.id,JSON.stringify({taskId,version})]);
+}
+
+// The worker records manual-delivery facts; it never grants downstream access.
+export async function prepareRequestFulfillment(db:Pool,provider:RequestApprovalProvider,approvalId:string,assigneeId:string,command?:DeliveryCommand):Promise<string> {
   const observed=await inspect(db,provider,approvalId);
   return transaction(db,async client=>{
+    await commandGuard(client,command,approvalId,assigneeId,'PREPARE');
     const {approval,task}=await locked(client,approvalId);
     const ticket=await authorized(client,approval,observed);
     await operator(client,assigneeId,ticket.owner_group_id,approvalId);
+    if(command&&(command.expected_version!==0||task))throw new Error('FULFILLMENT_VERSION_CONFLICT');
     if (task && (task.assignee_id !== assigneeId || task.state !== 'READY')) throw new Error('FULFILLMENT_ALREADY_EXISTS');
     const clock=await deliveryClock(client,approval,task);
     if (task) return task.id;
     const inserted=(await client.query<Task>(`INSERT INTO request_fulfillments(approval_id,ticket_id,assignee_id,ready_until,created_at,updated_at)
       VALUES ($1,$2,$3,$4,$5,$5) RETURNING *`,[approvalId,approval.ticket_id,assigneeId,approval.expires_at,clock])).rows[0];
     await event(client,inserted,'TASK_PREPARED','READY',assigneeId);
+    await commandComplete(client,command,inserted.id);
     return inserted.id;
   });
 }
 
 // Called only after an operator has performed the manual grant in the target system.
 // A reference to the external change record is required; never store credentials as evidence.
-export async function recordRequestDelivery(db:Pool,provider:RequestApprovalProvider,approvalId:string,actorId:string,reference:string):Promise<void> {
+export async function recordRequestDelivery(db:Pool,provider:RequestApprovalProvider,approvalId:string,actorId:string,reference:string,command?:DeliveryCommand):Promise<void> {
   if (!evidence(reference)) throw new Error('FULFILLMENT_EVIDENCE_REQUIRED');
   const observed=await inspect(db,provider,approvalId);
   await transaction(db,async client=>{
+    await commandGuard(client,command,approvalId,actorId,'DELIVER');
     const {approval,task}=await locked(client,approvalId);
+    if(command&&(!task||task.version!==command.expected_version))throw new Error('FULFILLMENT_VERSION_CONFLICT');
     if (!task || task.state !== 'READY' || task.assignee_id !== actorId || task.ready_until <= approval.clock)
       throw new Error('FULFILLMENT_NOT_READY');
     const ticket=await authorized(client,approval,observed);
@@ -85,7 +110,28 @@ export async function recordRequestDelivery(db:Pool,provider:RequestApprovalProv
       access_expires_at=$3::timestamptz+($2::integer * interval '1 day'),updated_at=$3 WHERE id=$1`,
       [task.id,approval.snapshot.requestedValidityDays,clock]);
     await event(client,task,'DELIVERY_RECORDED','DELIVERED',actorId,reference);
+    await commandComplete(client,command,task.id);
   });
+}
+
+const commandErrors=new Set(['FULFILLMENT_OPERATOR_DENIED','FULFILLMENT_APPROVAL_UNAVAILABLE','FULFILLMENT_PROVIDER_NOT_APPROVED',
+  'FULFILLMENT_NOT_READY','FULFILLMENT_VERSION_CONFLICT','FULFILLMENT_ALREADY_EXISTS','REQUEST_DELIVERY_COMMAND_EXPIRED',
+  'TICKET_NOT_AWAITING_APPROVAL','APPROVAL_REQUEST_CHANGED','APPROVAL_IDENTITY_CHANGED','APPROVAL_PERSON_UNAVAILABLE','APPROVAL_MANAGER_CHANGED']);
+
+export async function processNextRequestDelivery(db:Pool,provider:RequestApprovalProvider):Promise<boolean>{
+  const command=(await db.query<DeliveryCommand>(`SELECT id,approval_id,actor_id,operation,expected_version,evidence_reference
+    FROM request_delivery_commands WHERE state='PENDING' ORDER BY created_at,id LIMIT 1`)).rows[0];
+  if(!command)return false;
+  try{
+    if(command.operation==='PREPARE')await prepareRequestFulfillment(db,provider,command.approval_id,command.actor_id,command);
+    else await recordRequestDelivery(db,provider,command.approval_id,command.actor_id,command.evidence_reference!,command);
+  }catch(error){
+    const message=error instanceof Error?error.message:'';
+    if(message!=='REQUEST_DELIVERY_COMMAND_FINISHED')await db.query(`UPDATE request_delivery_commands
+      SET state='REJECTED',error_code=$2,completed_at=clock_timestamp() WHERE id=$1 AND state='PENDING'`,
+      [command.id,commandErrors.has(message)?message:'DELIVERY_VERIFICATION_FAILED']);
+  }
+  return true;
 }
 
 // A second operator checks the actual downstream grant; approval and delivery evidence alone are not a review.

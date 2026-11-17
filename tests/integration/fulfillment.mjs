@@ -14,6 +14,9 @@ const get=(f,user)=>request(`/fulfillments/${f.id}`,user);
 const action=(f,operation='review',user='agent-2',expectedVersion=1,reference=`EVIDENCE-${randomUUID()}`,key=randomUUID())=>
   request(`/fulfillments/${f.id}/${operation}`,user,{expectedVersion,reference,contentClass:'GENERAL'},key);
 const f=await createFulfillmentFixture({includeApplicant:true});
+assert.equal((await ok(request('/fulfillments/intake'))).enabled,false,'manual delivery is closed by default');
+const gated=await request(`/fulfillments/intake/${f.approvalId}/prepare`,'agent-2',{expectedVersion:0,contentClass:'GENERAL'});
+assert.equal(gated.status,503);assert.equal(gated.data.code,'REQUEST_DELIVERY_DISABLED');
 const initial=await ok(get(f));
 assert.equal(initial.canReview,true);assert.equal(initial.canRevoke,true);
 assert.equal(JSON.stringify(initial).includes(f.internalMarker),false,'internal OA fields must not enter the workspace');

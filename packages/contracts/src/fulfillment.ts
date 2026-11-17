@@ -16,3 +16,16 @@ export interface FulfillmentList {
   groups:{id:string;name:string}[];
   counts:{unreviewed:number;revokeDue:number;all:number};
 }
+export type RequestDeliveryOperation='PREPARE'|'DELIVER';
+export interface RequestDeliveryReceipt {
+  id:string;operation:RequestDeliveryOperation;state:'PENDING'|'SUCCEEDED'|'REJECTED';
+  result:{taskId:string;version:number}|null;errorCode:string|null;createdAt:string;completedAt:string|null;
+}
+export interface RequestDeliveryItem {
+  approvalId:string;ticketId:string;number:string;subject:string;serviceName:string;groupId:string;groupName:string;
+  requesterName:string;approvalState:string;deadline:string;taskId:string|null;taskState:FulfillmentState|null;
+  version:number;assigneeName:string|null;canPrepare:boolean;canDeliver:boolean;command:RequestDeliveryReceipt|null;
+}
+export interface RequestDeliveryList {
+  enabled:boolean;items:RequestDeliveryItem[];groups:{id:string;name:string}[];total:number;page:number;size:number;
+}

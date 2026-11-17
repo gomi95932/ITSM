@@ -4,7 +4,7 @@ import { Pool, type PoolClient } from 'pg';
 import { P1_REVIEW_REMINDER_MINUTES, serviceMinutes } from '@itsm/contracts';
 import { maintainRequestApprovals,processNextRequestApproval } from './request-approval.js';
 import { dingtalkRequestApproval } from './dingtalk-request-approval.js';
-import { maintainRequestFulfillments } from './request-fulfillment.js';
+import { maintainRequestFulfillments,processNextRequestDelivery } from './request-fulfillment.js';
 import { fulfillmentReminderMinutes,maintainFulfillmentAttention } from './fulfillment-attention.js';
 import { shouldAutoClose } from './auto-close.js';
 import { notificationLink } from './notification-message.js';
@@ -285,6 +285,8 @@ async function tick() {
   try {
     if (ticks++ % 15 === 0) { await recoverOwnership(); await expireAssignments(); await priorityReviewTimers(); await maintainRequestApprovals(db); await maintainRequestFulfillments(db); await maintainFulfillmentAttention(db,fulfillmentReminders); await timers(); }
     if(approvalProvider)for(let i=0;i<5&&!stopped;i++)if(!await processNextRequestApproval(db,approvalProvider))break;
+    if(approvalProvider&&process.env.ENABLE_MANUAL_REQUEST_DELIVERY==='true')
+      for(let i=0;i<5&&!stopped;i++)if(!await processNextRequestDelivery(db,approvalProvider))break;
     await expand();
     for (let i=0;i<10 && !stopped;i++) await deliver();
     await writeFile('/tmp/itsm-worker-heartbeat', String(Date.now()), { mode:0o600 });

@@ -19,7 +19,7 @@ export async function fulfillmentSql(query,success=true) {
 // CI-only synthetic records, with no external OA request or downstream permission grant.
 export async function createFulfillmentFixture({groupId=`fulfillment-${randomUUID()}`,state='DELIVERED',
   appointed=false,includeApplicant=false,history=0,reviewed=false}={}) {
-  if(!['READY','DELIVERED','REVOKE_DUE','REVOKED','BLOCKED'].includes(state))throw new Error('INVALID_FULFILLMENT_FIXTURE');
+  if(state!==null&&!['READY','DELIVERED','REVOKE_DUE','REVOKED','BLOCKED'].includes(state))throw new Error('INVALID_FULFILLMENT_FIXTURE');
   const ticketId=randomUUID(),approvalId=randomUUID(),id=randomUUID(),positionId=`position-${id}`,domainId=`domain-${id}`;
   const serviceCode=`REQ-FW-${randomUUID().replaceAll('-','').slice(0,24).toUpperCase()}`,corp=`ci-fw-${id}`,subject=`交付验证 ${id.slice(0,8)}`;
   const internalMarker=`private-oa-binding-${id}`,deliveryReference=`DELIVERY-${id}`;
@@ -53,11 +53,11 @@ export async function createFulfillmentFixture({groupId=`fulfillment-${randomUUI
     INSERT INTO request_approvals(id,ticket_id,corp_id,snapshot,expires_at,state,provider_instance_id,last_verified_at,next_at,last_error)
       VALUES('${approvalId}','${ticketId}',${literal(corp)},${literal(JSON.stringify(snapshot))},now()+interval '1 day','APPROVED',
         ${literal(internalMarker)},now(),now()+interval '1 day',${literal(internalMarker)});
-    INSERT INTO request_fulfillments(id,approval_id,ticket_id,assignee_id,ready_until,state,delivered_at,access_expires_at,
+    ${state!==null?`INSERT INTO request_fulfillments(id,approval_id,ticket_id,assignee_id,ready_until,state,delivered_at,access_expires_at,
       reviewed_at,reviewed_by,revoked_at,reason_code)
       VALUES('${id}','${approvalId}','${ticketId}','agent-1',now()+interval '1 day','${state}',
         ${delivered?"now()-interval '1 minute'":'NULL'},${delivered?state==='DELIVERED'?"now()+interval '1 hour'":"now()-interval '30 seconds'":'NULL'},
-        ${reviewed?"now()-interval '20 seconds'":'NULL'},${reviewed?"'agent-2'":'NULL'},${state==='REVOKED'?'now()':'NULL'},${literal(internalMarker)});
+        ${reviewed?"now()-interval '20 seconds'":'NULL'},${reviewed?"'agent-2'":'NULL'},${state==='REVOKED'?'now()':'NULL'},${literal(internalMarker)});`:''}
     ${delivered?`INSERT INTO request_fulfillment_events(fulfillment_id,actor_id,action,to_state,evidence_reference)
       VALUES('${id}','agent-1','DELIVERY_RECORDED','${state}',${literal(deliveryReference)});`:''}
     ${history?`INSERT INTO request_fulfillment_events(fulfillment_id,action,to_state,created_at)
