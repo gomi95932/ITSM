@@ -20,7 +20,7 @@ async function fixture(client,{state='DELIVERED',age=10,expired=false,reviewed=f
   [ticket,`REQ-${ticket}`,person('applicant'),group,`REQ-ATTENTION-${suffix}`,JSON.stringify(route)]);
   const snapshot={applicant:{employeeId:person('applicant')},approvers:[{employeeId:person('approver')}]};
   await client.query(`INSERT INTO request_approvals(id,ticket_id,corp_id,snapshot,expires_at,state,provider_instance_id,last_verified_at,next_at)
-    VALUES($1,$2,'attention-ci',$3,now()+interval '1 day','APPROVED',$1::text,now(),now()+interval '1 day')`,
+    VALUES($1::uuid,$2,'attention-ci',$3,now()+interval '1 day','APPROVED',$1::text,now(),now()+interval '1 day')`,
   [approval,ticket,JSON.stringify(snapshot)]);
   const delivered=['DELIVERED','REVOKE_DUE','REVOKED'].includes(state);
   await client.query(`INSERT INTO request_fulfillments(id,approval_id,ticket_id,assignee_id,ready_until,state,
@@ -160,7 +160,7 @@ try{
 
   const expiredReview=await fixture(client,{age:180,expired:true}),expiredEvent=randomUUID();
   await client.query(`INSERT INTO ticket_events(id,ticket_id,actor_id,action,to_status,request_id)
-    VALUES($1,$2,'system:scheduler','FULFILLMENT_REVIEW_REQUIRED','WAITING_APPROVAL',$1::text)`,[expiredEvent,expiredReview.ticket]);
+    VALUES($1::uuid,$2,'system:scheduler','FULFILLMENT_REVIEW_REQUIRED','WAITING_APPROVAL',$1::text)`,[expiredEvent,expiredReview.ticket]);
   await client.query(`INSERT INTO request_fulfillment_signals(fulfillment_id,group_id,kind,event_id,escalate_at)
     VALUES($1,$2,'REVIEW_REQUIRED',$3,now()+interval '1 hour')`,[expiredReview.id,group,expiredEvent]);
   assert.deepEqual(await recipients(client,expiredEvent),[],'expired access needs revocation, not a stale independent-review message');
@@ -192,7 +192,7 @@ try{
   // A forged action without an authoritative signal cannot expand a fulfillment notification.
   const fake=randomUUID();
   await client.query(`INSERT INTO ticket_events(id,ticket_id,actor_id,action,to_status,request_id)
-    VALUES($1,$2,'system:scheduler','FULFILLMENT_REVIEW_REQUIRED','WAITING_APPROVAL',$1::text)`,[fake,fresh.ticket]);
+    VALUES($1::uuid,$2,'system:scheduler','FULFILLMENT_REVIEW_REQUIRED','WAITING_APPROVAL',$1::text)`,[fake,fresh.ticket]);
   assert.deepEqual(await recipients(client,fake),[]);
 
   // Isolate the deliberate write failure so the live worker cannot race the rollback assertion.
