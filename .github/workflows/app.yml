@@ -32,6 +32,8 @@ jobs:
       - run: npm run build
       - run: npm run typecheck
       - run: npm test
+      - name: Discover browser tests before starting the isolated stack
+        run: npx playwright test --list
       - name: Reject unsafe release archives with isolated Python fixtures
         run: python3 tests/unit/release-extraction.py
       - name: Verify privileged promotion boundary in disposable root-owned CI fixtures
