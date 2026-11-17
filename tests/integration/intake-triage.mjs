@@ -46,6 +46,22 @@ const catalog=await request('/catalog');assert.equal(catalog.data.items.find(i=>
 for(const code of ['INC-NONEXISTENT','INC-TRIAGE-OFF','INC-TRIAGE-HIDDEN'])assert.equal((await create(requester,{serviceCode:code})).status,400);
 assert.equal((await create(requester,{serviceCode:'REQ-ACCOUNT'})).status,503,'GEN must not unlock request fulfillment');
 assert.equal((await create(requester,{requesterId:'employee-2'})).status,400);
+const cancelCreated=await create();assert.equal(cancelCreated.status,201,JSON.stringify(cancelCreated));
+const cancelTicket=cancelCreated.data,cancelPath=`/tickets/${cancelTicket.id}/actions`,cancelBody={action:'CANCEL',expectedVersion:cancelTicket.version},cancelKey=randomUUID();
+assert.equal((await request(cancelPath,peer,cancelBody)).status,403,'visible agent cannot cancel for the requester');
+assert.equal((await request(cancelPath,requester,{...cancelBody,expectedVersion:cancelTicket.version+1})).status,409,'stale version cannot cancel');
+const cancelled=await request(cancelPath,requester,cancelBody,cancelKey);
+assert.equal(cancelled.status,200,JSON.stringify(cancelled));assert.equal(cancelled.data.status,'CANCELLED');
+assert.deepEqual((await request(cancelPath,requester,cancelBody,cancelKey)).data,cancelled.data,'same key and request replay the receipt');
+assert.equal((await request(cancelPath,requester,{...cancelBody,reason:'Changed request'},cancelKey)).status,409,'same key with a different body is rejected');
+assert.equal(await sql(`SELECT count(*) FROM ticket_events e JOIN audit_logs a ON a.event_id=e.id JOIN outbox_events o ON o.event_id=e.id
+  WHERE e.ticket_id=${quote(cancelTicket.id)} AND e.action='CANCEL' AND e.actor_id=${quote(requester)} AND e.to_status='CANCELLED'`),'1');
+const raceCreated=await create();assert.equal(raceCreated.status,201,JSON.stringify(raceCreated));
+const raceTicket=raceCreated.data,raceBody={action:'CANCEL',expectedVersion:raceTicket.version};
+const cancelRaces=await Promise.all([request(`/tickets/${raceTicket.id}/actions`,requester,raceBody),request(`/tickets/${raceTicket.id}/actions`,requester,raceBody)]);
+assert.deepEqual(cancelRaces.map(r=>r.status).sort(),[200,409],'concurrent distinct cancellation keys have one winner');
+assert.equal(await sql(`SELECT count(*) FROM ticket_events e JOIN audit_logs a ON a.event_id=e.id JOIN outbox_events o ON o.event_id=e.id
+  WHERE e.ticket_id=${quote(raceTicket.id)} AND e.action='CANCEL'`),'1');
 const historical=(await create()).data,grantId=await grant();
 assert.equal((await request(`/tickets/${historical.id}`,proxy)).status,404,'a grant is not access to historical tickets');
 const submitted={delegationId:grantId,subject:`Delegated ${randomUUID()}`},creationKey=randomUUID();
