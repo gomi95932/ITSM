@@ -6,7 +6,8 @@ import { enqueueRequestApproval, maintainRequestApprovals, processNextRequestApp
 import { prepareRequestFulfillment, recordRequestDelivery, reviewRequestDelivery, recordRequestRevocation, maintainRequestFulfillments } from './apps/worker/dist/request-fulfillment.js';
 
 if (process.env.ITSM_APPROVAL_CI !== 'true' || process.env.NODE_ENV === 'production') throw new Error('DISPOSABLE_APPROVAL_CI_ONLY');
-const db = new Pool({host:process.env.DB_HOST,database:process.env.DB_NAME,user:process.env.DB_USER,password:process.env.DB_PASSWORD,max:6});
+const db = new Pool({host:process.env.DB_HOST,database:process.env.DB_NAME,user:process.env.DB_USER,password:process.env.DB_PASSWORD,
+  application_name:'itsm-oa-ci',max:6});
 const corp = 'ci-approval-corp';
 const roles = ['requester','manager','owner','verifier','reviewer'];
 const employee = role => `oa-ci-${role}`;
@@ -24,12 +25,12 @@ async function mapping() {
     SET manager_id=EXCLUDED.manager_id,source_reference=EXCLUDED.source_reference,verified_by=EXCLUDED.verified_by,
       verified_at=now(),review_before=EXCLUDED.review_before`,[employee('requester'),employee('manager'),employee('verifier')]);
 }
-async function draft(client=db) {
+async function draft(client=db,routing={}) {
   const id=randomUUID();
   await client.query(`INSERT INTO tickets(id,number,requester_id,submitted_by_id,owner_group_id,service_code,service_type,
-    form_version,subject,description,fields,impact,urgency,priority,status,catalog_snapshot)
-    VALUES ($1,$2,$3,$3,'oa-ci-group','REQ-OA-CI','REQ',1,'Approval fixture','No real request','{}','INDIVIDUAL','LOW','P4','WAITING_APPROVAL',$4)`,
-    [id,`OA-CI-${id}`,employee('requester'),JSON.stringify(catalog)]);
+    form_version,subject,description,fields,impact,urgency,priority,status,catalog_snapshot,service_routing_snapshot)
+    VALUES ($1,$2,$3,$3,'oa-ci-group','REQ-OA-CI','REQ',1,'Approval fixture','No real request','{}','INDIVIDUAL','LOW','P4','WAITING_APPROVAL',$4,$5)`,
+    [id,`OA-CI-${id}`,employee('requester'),JSON.stringify(catalog),JSON.stringify(routing)]);
   return id;
 }
 const row = async id => (await db.query('SELECT * FROM request_approvals WHERE id=$1',[id])).rows[0];
@@ -396,7 +397,150 @@ try {
   const checked=(await db.query('SELECT state,updated_at FROM request_fulfillments WHERE id=$1',[healthyTask])).rows[0];
   assert.equal(checked.state,'READY');
   assert.ok(checked.updated_at > new Date(Date.now()-60_000),'healthy task advances beyond the oldest batch');
+
+  const deliveryDomain=`delivery-domain-${randomUUID()}`,deliveryPosition=`delivery-position-${randomUUID()}`;
+  const deliveryEmployee=employee('reviewer');
+  const deliveryRouting={version:1,domainId:deliveryDomain,systemId:null,primaryPositionId:deliveryPosition,
+    positions:[{id:deliveryPosition,groupId:'oa-ci-group'}]};
+  async function configureDelivery(change,client) {
+    if(!client)return transaction(async writer=>{
+      await writer.query('SELECT pg_advisory_xact_lock(71820512)');
+      await configureDelivery(change,writer);
+    });
+    const current=(await client.query(`SELECT v.version,v.config FROM service_structure_current c
+      JOIN service_structure_versions v ON v.version=c.version WHERE c.id FOR UPDATE OF c`)).rows[0];
+    const config=structuredClone(current.config);change(config);
+    await client.query('INSERT INTO service_structure_versions(version,config) VALUES ($1,$2)',[current.version+1,JSON.stringify(config)]);
+    await client.query('UPDATE service_structure_current SET version=$1 WHERE id',[current.version+1]);
+  }
+  await configureDelivery(config=>{
+    config.domains.push({id:deliveryDomain,name:'CI delivery responsibility',enabled:true});
+    config.positions.push({id:deliveryPosition,name:'CI delivery position',domainId:deliveryDomain,groupId:'oa-ci-group',enabled:true});
+    for(const role of roles)config.appointments.push({id:randomUUID(),positionId:deliveryPosition,employeeId:employee(role),duty:'PRIMARY',
+      validFrom:new Date(Date.now()-60000).toISOString(),validTo:new Date(Date.now()+86400000).toISOString(),enabled:true});
+  });
+  for(const role of ['requester','manager','owner'])await db.query(`INSERT INTO group_memberships(employee_id,group_id)
+    VALUES ($1,'oa-ci-group')`,[employee(role)]);
+  await db.query(`INSERT INTO role_bindings(id,employee_id,role_code,group_id,valid_from,valid_to,status,requested_by,reviewed_by,reason)
+    VALUES ($1,$2,'GROUP_LEAD','oa-ci-group',now()-interval '1 minute',now()+interval '1 day','ACTIVE',$3,$4,'CI-only delivery separation')`,
+    [randomUUID(),deliveryEmployee,employee('requester'),employee('manager')]);
+  const appointment=config=>config.appointments.find(item=>item.positionId===deliveryPosition&&item.employeeId===deliveryEmployee);
+  const appointDelivery=enabled=>configureDelivery(config=>{appointment(config).enabled=enabled;});
+  async function approvedDelivery(expiresAt=new Date(Date.now()+3600000)) {
+    const item=await enqueue(await draft(db,deliveryRouting),expiresAt);
+    const pending=await processApproval(item.id);records.get(pending.provider_instance_id).state='APPROVED';
+    assert.equal((await processApproval(item.id)).state,'APPROVED');return item;
+  }
+  const noDeliveryTask=async item=>assert.equal((await db.query('SELECT count(*) FROM request_fulfillments WHERE approval_id=$1',[item.id])).rows[0].count,'0');
+  async function untouchedDelivery(id) {
+    const task=(await db.query('SELECT state,delivered_at,access_expires_at,version FROM request_fulfillments WHERE id=$1',[id])).rows[0];
+    assert.deepEqual(task,{state:'READY',delivered_at:null,access_expires_at:null,version:1});
+    assert.equal((await db.query('SELECT count(*) FROM request_fulfillment_events WHERE fulfillment_id=$1',[id])).rows[0].count,'1');
+  }
+  async function until(check) {
+    const deadline=Date.now()+10000;
+    do {if(await check())return;await delay(20);}while(Date.now()<deadline);
+    assert.fail('delivery authorization wait did not reach its bounded condition');
+  }
+  async function behindAuthorizationLock(item,action,during=async()=>{}) {
+    const publisher=await db.connect();let pending,committed=false;
+    try {
+      await publisher.query('BEGIN');await publisher.query('SELECT pg_advisory_xact_lock(71820512)');
+      await publisher.query('SELECT id FROM request_approvals WHERE id=$1 FOR UPDATE',[item.id]);
+      pending=action().then(()=>null,error=>error);
+      await until(async()=>(await db.query(`SELECT EXISTS(SELECT 1 FROM pg_locks l JOIN pg_stat_activity a ON a.pid=l.pid
+        WHERE l.locktype='advisory' AND l.classid=0 AND l.objid=71820512 AND NOT l.granted AND a.application_name='itsm-oa-ci') AS waiting`)).rows[0].waiting);
+      await during(publisher);
+      const releasedAt=(await publisher.query('SELECT clock_timestamp() AS clock')).rows[0].clock;
+      await publisher.query('COMMIT');committed=true;
+      return {error:await pending,releasedAt};
+    } finally {if(!committed)await publisher.query('ROLLBACK');publisher.release();if(pending)await pending;}
+  }
+
+  const scoped=await approvedDelivery();
+  for(const role of ['requester','manager','owner']){
+    await assert.rejects(prepareRequestFulfillment(db,provider,scoped.id,employee(role)),/FULFILLMENT_OPERATOR_DENIED/,
+      'a current appointment and group membership do not bypass applicant/approver separation');
+    await noDeliveryTask(scoped);
+  }
+  await assert.rejects(db.query("UPDATE support_groups SET enabled=false WHERE id='oa-ci-group'"),/SUPPORT_GROUP_DEPENDENCIES/);
+  assert.equal((await db.query('SELECT request_delivery_operator_eligible($1,$2) AS eligible',[scoped.id,deliveryEmployee])).rows[0].eligible,true,
+    'dependency-protected retirement must not partially disable a delivery group');
+  for(const change of [
+    config=>{appointment(config).enabled=false;},
+    config=>{appointment(config).validTo=new Date(Date.now()-1000).toISOString();},
+    config=>{appointment(config).validFrom=new Date(Date.now()+60000).toISOString();},
+    config=>{config.positions.find(item=>item.id===deliveryPosition).enabled=false;appointment(config).enabled=false;},
+    config=>{config.domains.find(item=>item.id===deliveryDomain).enabled=false;
+      config.positions.find(item=>item.id===deliveryPosition).enabled=false;
+      config.appointments.filter(item=>item.positionId===deliveryPosition).forEach(item=>{item.enabled=false;});},
+  ]) {
+    await configureDelivery(change);
+    await assert.rejects(prepareRequestFulfillment(db,provider,scoped.id,deliveryEmployee),/FULFILLMENT_OPERATOR_DENIED/,
+      'even a current group lead needs the configured, currently valid delivery appointment');
+    await noDeliveryTask(scoped);
+    await configureDelivery(config=>{
+      config.domains.find(item=>item.id===deliveryDomain).enabled=true;
+      config.positions.find(item=>item.id===deliveryPosition).enabled=true;
+      config.appointments.filter(item=>item.positionId===deliveryPosition).forEach(item=>{item.enabled=true;
+        item.validFrom=new Date(Date.now()-60000).toISOString();item.validTo=new Date(Date.now()+86400000).toISOString();});
+    });
+  }
+  await db.query('DELETE FROM group_memberships WHERE employee_id=$1 AND group_id=\'oa-ci-group\'',[deliveryEmployee]);
+  await assert.rejects(prepareRequestFulfillment(db,provider,scoped.id,deliveryEmployee),/FULFILLMENT_OPERATOR_DENIED/);
+  await noDeliveryTask(scoped);
+  await db.query("INSERT INTO group_memberships(employee_id,group_id) VALUES ($1,'oa-ci-group')",[deliveryEmployee]);
+  await db.query('UPDATE employees SET active=false WHERE id=$1',[deliveryEmployee]);
+  await assert.rejects(prepareRequestFulfillment(db,provider,scoped.id,deliveryEmployee),/FULFILLMENT_OPERATOR_DENIED/);
+  await noDeliveryTask(scoped);await db.query('UPDATE employees SET active=true WHERE id=$1',[deliveryEmployee]);
+  await assert.rejects(prepareRequestFulfillment(db,{...provider,inspect:async instanceId=>{
+    const observed=await provider.inspect(instanceId);await appointDelivery(false);return observed;
+  }},scoped.id,deliveryEmployee),/FULFILLMENT_OPERATOR_DENIED/,'preparation rechecks appointments after provider inspection');
+  await noDeliveryTask(scoped);await appointDelivery(true);
+
+  const scopedTask=await prepareRequestFulfillment(db,provider,scoped.id,deliveryEmployee);
+  await assert.rejects(recordRequestDelivery(db,{...provider,inspect:async instanceId=>{
+    const observed=await provider.inspect(instanceId);await appointDelivery(false);return observed;
+  }},scoped.id,deliveryEmployee,'CHG-SCOPED-DENIED'),/FULFILLMENT_OPERATOR_DENIED/);
+  await untouchedDelivery(scopedTask);await appointDelivery(true);
+  const revokedWhileWaiting=await behindAuthorizationLock(scoped,
+    ()=>recordRequestDelivery(db,provider,scoped.id,deliveryEmployee,'CHG-SCOPED-RACE'),
+    publisher=>configureDelivery(config=>{appointment(config).enabled=false;},publisher));
+  assert.match(revokedWhileWaiting.error?.message??'',/FULFILLMENT_OPERATOR_DENIED/,
+    'delivery must wait before locking the approval and observe the committed appointment withdrawal');
+  await untouchedDelivery(scopedTask);await appointDelivery(true);
+  const successfulWait=await behindAuthorizationLock(scoped,
+    ()=>recordRequestDelivery(db,provider,scoped.id,deliveryEmployee,'CHG-SCOPED-DELIVERED'));
+  assert.equal(successfulWait.error,null);
+  const scopedDelivered=(await db.query('SELECT delivered_at FROM request_fulfillments WHERE id=$1',[scopedTask])).rows[0];
+  assert.ok(scopedDelivered.delivered_at>=successfulWait.releasedAt,'actual delivery time is sampled after lock waits, not at BEGIN');
+  await appointDelivery(false);await db.query('UPDATE employees SET active=false WHERE id=$1',[deliveryEmployee]);
+  await maintainRequestFulfillments(db);
+  assert.equal((await db.query('SELECT state FROM request_fulfillments WHERE id=$1',[scopedTask])).rows[0].state,'DELIVERED',
+    'operator departure alone does not invalidate already granted recipient access');
+  await db.query('UPDATE employees SET active=true WHERE id=$1',[deliveryEmployee]);await appointDelivery(true);
+
+  const lostAppointment=await approvedDelivery(),lostTask=await prepareRequestFulfillment(db,provider,lostAppointment.id,deliveryEmployee);
+  await appointDelivery(false);await maintainRequestFulfillments(db);
+  const blockedTask=(await db.query('SELECT state,reason_code,delivered_at,version FROM request_fulfillments WHERE id=$1',[lostTask])).rows[0];
+  assert.deepEqual(blockedTask,{state:'BLOCKED',reason_code:'DELIVERY_OPERATOR_UNAVAILABLE',delivered_at:null,version:2});
+  assert.equal((await db.query(`SELECT count(*) FROM request_fulfillment_events WHERE fulfillment_id=$1
+    AND action='TASK_BLOCKED' AND reason_code='DELIVERY_OPERATOR_UNAVAILABLE'`,[lostTask])).rows[0].count,'1');
+  await appointDelivery(true);
+  await assert.rejects(prepareRequestFulfillment(db,provider,lostAppointment.id,deliveryEmployee),/FULFILLMENT_ALREADY_EXISTS/,
+    'restoring an appointment does not silently resurrect a blocked delivery task');
+
+  const shortTerm=await approvedDelivery(new Date(Date.now()+2500));
+  const shortTask=await prepareRequestFulfillment(db,provider,shortTerm.id,deliveryEmployee);
+  const expiredWhileWaiting=await behindAuthorizationLock(shortTerm,
+    ()=>recordRequestDelivery(db,provider,shortTerm.id,deliveryEmployee,'CHG-EXPIRED-WAIT'),async()=>{
+      await until(async()=>(await db.query('SELECT clock_timestamp()>=expires_at AS expired FROM request_approvals WHERE id=$1',[shortTerm.id])).rows[0].expired);
+    });
+  assert.match(expiredWhileWaiting.error?.message??'',/FULFILLMENT_NOT_READY/,'lock waits cannot extend a first-delivery window');
+  await untouchedDelivery(shortTask);
+  await maintainRequestFulfillments(db);
+  assert.equal((await db.query('SELECT reason_code FROM request_fulfillments WHERE id=$1',[shortTask])).rows[0].reason_code,'DELIVERY_WINDOW_EXPIRED');
   assert.equal((await db.query("SELECT count(*) FROM request_approval_events WHERE strpos(row_to_json(request_approval_events)::text,'provider-secret-sentinel')>0")).rows[0].count,'0');
   assert.equal((await db.query("SELECT count(*) FROM request_approvals WHERE strpos(row_to_json(request_approvals)::text,'provider-secret-sentinel')>0")).rows[0].count,'0');
-  console.log('OA and manual fulfillment core verified: immutable snapshots, callback fencing, operator scope, fresh approval, delivery evidence and revocation obligations; real DingTalk and REQ routes remain gated');
+  console.log('OA and manual fulfillment core verified: immutable snapshots, callback fencing, current delivery appointments, post-lock deadlines, operator withdrawal races and recipient revocation obligations; real DingTalk and REQ routes remain gated');
 } finally {await db.end();}
