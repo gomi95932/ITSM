@@ -103,6 +103,11 @@ for(const [name,change] of [
   await sql(change(blocked));await completionDenied(blocked,'employee-1','CONFIRM');
   await ok(action(blocked,pending.version,'REOPEN','employee-1',{reason:`Investigate ${name}`}));
   await completionDenied(blocked);
+  if(name==='pending'){
+    await sql(`UPDATE request_delivery_commands SET state='REJECTED',error_code='CI_FIXTURE_CLOSED',completed_at=clock_timestamp()
+      WHERE approval_id=${q(blocked.approvalId)} AND state='PENDING'`);
+    assert.equal(await sql(`SELECT count(*) FROM request_delivery_commands WHERE approval_id=${q(blocked.approvalId)} AND state='PENDING'`),'0');
+  }
 }
 
 // The worker must use the same prerequisites as explicit confirmation.
