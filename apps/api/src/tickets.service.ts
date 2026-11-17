@@ -29,6 +29,7 @@ type TicketRow = {
   service_routing_snapshot: Record<string,unknown>;
   responsibility_epoch: number;
 };
+type TicketResponseRow = Omit<TicketRow, 'assignment_due_at'> & { assignment_due_at: Date | string | null };
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const keys = new Set(['contentClass', 'serviceCode', 'formVersion', 'subject', 'description', 'impact', 'urgency', 'fields', 'draftId', 'delegationId']);
@@ -233,10 +234,12 @@ export class TicketsService {
     });
   }
 
-  private receipt(row: TicketRow): TicketReceipt {
+  private receipt(row: TicketResponseRow): TicketReceipt {
     return { id: row.id, number: row.number, status: row.status, version: row.version, ownerGroupId: row.owner_group_id,
       assigneeId: row.assignee_id, pendingGroupId: row.pending_group_id, pendingAssigneeId: row.pending_assignee_id,
-      assignmentKind:row.assignment_kind,assignmentState:row.assignment_state,assignmentDueAt:row.assignment_due_at?.toISOString()??null,
+      assignmentKind:row.assignment_kind,assignmentState:row.assignment_state,
+      assignmentDueAt:row.assignment_due_at instanceof Date?row.assignment_due_at.toISOString()
+        :row.assignment_due_at?new Date(row.assignment_due_at).toISOString():null,
       assignmentPolicyVersionId:row.assignment_policy_version_id,
       ...(row.owner_group_name !== undefined ? { ownerGroupName: row.owner_group_name } : {}),
       ...(row.assignee_name !== undefined ? { assigneeName: row.assignee_name } : {}),
@@ -272,7 +275,7 @@ export class TicketsService {
     const queueCounts = `jsonb_build_object(${WORK_QUEUES.map(name =>
       `'${name}',count(*) FILTER (WHERE ${workQueueConditions[name]})::integer`).join(',')})`;
     const result = await this.pool.query<{
-      items: TicketRow[]; counts: Partial<Record<TicketStatus, number>>; total: number; work_queues?: WorkQueueCounts;
+      items: TicketResponseRow[]; counts: Partial<Record<TicketStatus, number>>; total: number; work_queues?: WorkQueueCounts;
     }>(`WITH scoped AS MATERIALIZED (
         SELECT t.*,${names} FROM tickets t WHERE ${mine ? mineAccess : workAccess}
       ), selected AS MATERIALIZED (
@@ -292,7 +295,7 @@ export class TicketsService {
       ...(!mine ? { workQueues: row.work_queues } : {}) };
   }
 
-  private publicTicket(row: TicketRow): object {
+  private publicTicket(row: TicketResponseRow): object {
     return { ...this.receipt(row), requesterId: row.requester_id, serviceCode: row.service_code, serviceType: row.service_type, formVersion: row.form_version,
       submittedById:row.submitted_by_id,originalServiceCode:row.original_catalog_snapshot?.code??row.service_code,
       subject: row.subject, description: row.description, fields: row.fields, impact: row.impact, urgency: row.urgency,

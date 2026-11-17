@@ -4,6 +4,8 @@ import { createFulfillmentFixture } from '../support/fulfillment.mjs';
 
 for(const viewport of [{name:'desktop',width:1440,height:1000},{name:'mobile',width:390,height:844}]){
   test(`request delivery and requester confirmation on ${viewport.name}`,async({page})=>{
+    const serverErrors:string[]=[];
+    page.on('response',response=>{if(response.url().includes('/api/v1/')&&response.status()>=500)serverErrors.push(`${response.status()} ${response.url()}`);});
     await page.setViewportSize({width:viewport.width,height:viewport.height});
     const f=await createFulfillmentFixture();
     const accept=await page.request.post(`/api/v1/tickets/${f.ticketId}/actions`,{
@@ -15,6 +17,7 @@ for(const viewport of [{name:'desktop',width:1440,height:1000},{name:'mobile',wi
     await expect(page.getByRole('heading',{name:'我的工单',exact:true})).toBeVisible();
     await page.goto(`/#/tickets/${f.ticketId}`);
     await expect(page.getByRole('heading',{name:f.subject,exact:true})).toBeVisible();
+    await expect(page.getByRole('alert')).toHaveCount(0);
     await expect(page.getByRole('button',{name:'提交交付完成',exact:true})).toHaveCount(0);
     await expect(page.getByText('交付完成条件未齐备，待核验审批、实际交付及独立复核记录。',{exact:true})).toBeVisible();
     await expect(page.getByRole('button',{name:'分类纠偏',exact:true})).toHaveCount(0);
@@ -45,6 +48,7 @@ for(const viewport of [{name:'desktop',width:1440,height:1000},{name:'mobile',wi
     await expect(page.getByRole('region',{name:'申请进度'})).toContainText('已交付');
     await expect(page.getByRole('button',{name:'交付仍有问题',exact:true})).toBeVisible();
     await expect(page.getByRole('button',{name:'确认已交付',exact:true})).toBeVisible();
+    await expect(page.getByRole('alert')).toHaveCount(0);
     expect(await page.locator('body').innerText()).not.toContain(f.internalMarker);
     expect(await page.locator('body').innerText()).not.toContain(f.deliveryReference);
     expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
@@ -56,5 +60,6 @@ for(const viewport of [{name:'desktop',width:1440,height:1000},{name:'mobile',wi
     await expect(page.getByRole('button',{name:'确认已交付',exact:true})).toHaveCount(0);
     await expect(page.getByRole('button',{name:'交付仍有问题',exact:true})).toHaveCount(0);
     await expect(page.getByRole('region',{name:'申请进度'})).toContainText('已交付');
+    expect(serverErrors,'successful lifecycle navigation must not hide API failures').toEqual([]);
   });
 }
