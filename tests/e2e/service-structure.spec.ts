@@ -50,6 +50,13 @@ test('custom domains can be added, reviewed, renamed and disabled without a rele
   await form.getByRole('button',{name:'确认修改',exact:true}).click();
   await propose(`停用 ${name}`);
   await expect(page.getByRole('row').filter({hasText:renamed})).toContainText('停用');
+  await page.getByRole('combobox',{name:'开发身份'}).selectOption('demo-admin-1');
+  await page.getByRole('button',{name:'服务组织',exact:true}).click();
+  await page.getByRole('button',{name:`编辑${renamed}`,exact:true}).click();
+  await form.getByRole('checkbox',{name:'启用',exact:true}).check();
+  await form.getByRole('button',{name:'确认修改',exact:true}).click();
+  await propose(`重新启用 ${name}`);
+  await expect(page.getByRole('row').filter({hasText:renamed})).toContainText('启用');
   await page.setViewportSize({width:390,height:844});
   await page.screenshot({path:'test-results/service-structure-mobile.png',fullPage:true});
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);

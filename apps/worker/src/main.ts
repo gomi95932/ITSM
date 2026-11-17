@@ -2,7 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { writeFile } from 'node:fs/promises';
 import { Pool, type PoolClient } from 'pg';
 import { P1_REVIEW_REMINDER_MINUTES, serviceMinutes } from '@itsm/contracts';
-import { maintainRequestApprovals } from './request-approval.js';
+import { maintainRequestApprovals,processNextRequestApproval } from './request-approval.js';
+import { dingtalkRequestApproval } from './dingtalk-request-approval.js';
 import { maintainRequestFulfillments } from './request-fulfillment.js';
 import { fulfillmentReminderMinutes,maintainFulfillmentAttention } from './fulfillment-attention.js';
 import { shouldAutoClose } from './auto-close.js';
@@ -15,6 +16,22 @@ let stopped = false;
 let timer: ReturnType<typeof setTimeout> | undefined;
 let access: { token:string; expires:number } | undefined;
 const mode = process.env.NOTIFICATION_MODE ?? 'disabled';
+const liveApproval=process.env.ENABLE_LIVE_OA_APPROVAL==='true';
+if(liveApproval&&(!process.env.DINGTALK_CORP_ID||!process.env.DINGTALK_APP_KEY||!process.env.DINGTALK_APP_SECRET))
+  throw new Error('OA_APPROVAL_NOT_CONFIGURED');
+const approvalProvider=liveApproval?dingtalkRequestApproval({corpId:process.env.DINGTALK_CORP_ID!,token:async signal=>{
+  if(!access||access.expires<Date.now()){
+    const url=new URL('https://oapi.dingtalk.com/gettoken');
+    url.searchParams.set('appkey',process.env.DINGTALK_APP_KEY!);
+    url.searchParams.set('appsecret',process.env.DINGTALK_APP_SECRET!);
+    const response=await fetch(url,{signal,redirect:'error'});
+    if(!response.ok)throw new Error('OA_TOKEN_UNAVAILABLE');
+    const data=await response.json() as {errcode?:number;access_token?:string;expires_in?:number};
+    if(data.errcode!==0||!data.access_token)throw new Error('OA_TOKEN_UNAVAILABLE');
+    access={token:data.access_token,expires:Date.now()+Math.min(data.expires_in??7200,7200)*1000-60000};
+  }
+  return access.token;
+}}):undefined;
 const fulfillmentReminders={
   reviewMinutes:fulfillmentReminderMinutes(process.env.FULFILLMENT_REVIEW_REMINDER_MINUTES,1440),
   revokeMinutes:fulfillmentReminderMinutes(process.env.FULFILLMENT_REVOKE_REMINDER_MINUTES,60),
@@ -267,6 +284,7 @@ let ticks = 0;
 async function tick() {
   try {
     if (ticks++ % 15 === 0) { await recoverOwnership(); await expireAssignments(); await priorityReviewTimers(); await maintainRequestApprovals(db); await maintainRequestFulfillments(db); await maintainFulfillmentAttention(db,fulfillmentReminders); await timers(); }
+    if(approvalProvider)for(let i=0;i<5&&!stopped;i++)if(!await processNextRequestApproval(db,approvalProvider))break;
     await expand();
     for (let i=0;i<10 && !stopped;i++) await deliver();
     await writeFile('/tmp/itsm-worker-heartbeat', String(Date.now()), { mode:0o600 });

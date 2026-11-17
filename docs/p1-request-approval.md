@@ -17,6 +17,30 @@
 
 ## 适配器与开放门槛
 
+本分支已增加 `dingtalk-request-approval.ts` 适配器候选及隔离单元测试，worker 仅在
+`ENABLE_LIVE_OA_APPROVAL=true` 且企业 ID、应用凭据齐备时轮询审批账本；Compose 默认 `false`。
+适配器对创建请求不自动重试，创建结果不明仍按账本的人工对账策略处理；不注册尚未核验
+验签/解密契约的公开回调。查询必须从远端表单读取完整申请绑定，再以同一企业的应用令牌
+按模板和创建时间查实例列表，穷尽分页确认实例归属；远端审批人/状态原样交给账本比对。
+列表失败、过多分页、模板未命中、表单字段丢失和未知终态均拒绝批准。
+当前仅是接口代码候选；没有经过真实审批模板、跨企业隔离、授权/分页和人工交付的现场验收，
+因此**不得打开该开关，也不得开放 REQ 申请入口**。
+
+官方接口核验记录（2026-11-17）：阿里云钉钉官方 Go SDK `alibabacloud-go/dingtalk` 固定提交
+`18adce821fd57424a1a39c8a642e6e10f99eda6f` 的 `workflow_1_0/client.go` 定义
+`StartProcessInstance` 为 `POST /v1.0/workflow/processInstances`，提交 `processCode`、
+`originatorUserId`、有序 `approvers` 和 `formComponentValues`，响应 `instanceId`；
+`GetProcessInstance` 为 `GET /v1.0/workflow/processInstances?processInstanceId=...`，返回
+`originatorUserId`、`approverUserIds`、`status/result`、`formComponentValues` 等。
+**单条实例详情没有 `processCode` 或企业 ID 字段**。`ListProcessInstanceIds` 定义
+`POST /v1.0/workflow/processes/instanceIds/query`，允许按 `processCode` 和时间范围查实例 ID；
+这仅是交叉验证的接口候选，不能推断现场应用一定具备相应授权、分页穷尽能力或回读一致性。
+跨企业隔离须通过已核验的企业专属令牌及应用边界证明；模板归属须通过该权威列表或
+现场另一个已证实的接口核验，不能由本地配置给查询结果补出缺失字段。
+模板中须设置可回读的稳定表单控件，完整承载申请引用、服务编号、表单版本、申请有效天数
+和请求内容；上线前实测长文本、控件改名、审批人改派/代理、结束状态及分页语义，
+任何无法确认的响应一律不得转为已批准。SDK 字段定义不是现场模板和授权的验收证据。
+
 目前没有新建公开回调路由、模拟 HTTP 接口或自动开通配置。`POST /tickets` 对 REQ 的服务端阻断保持有效；真实 OA 接入及 P1-07 交付未验收前，不开放申请。
 
 现场须确认模板及表单映射、模板版本治理、应用权限、审批人顺序/代理规则、主管映射权威来源和核验责任、审批超时策略、签名/解密/时效与事件 ID 规则。根据现场版本与官方文档实现真实适配器及经过鉴权的回调入口，不将接口抽象视为钉钉能力证明。
