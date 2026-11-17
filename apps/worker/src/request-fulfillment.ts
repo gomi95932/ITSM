@@ -44,6 +44,8 @@ async function authorized(client:PoolClient,approval:any,providerResult:any) {
   if (providerResult.state !== 'APPROVED' || !matches(approval,providerResult)) throw new Error('FULFILLMENT_PROVIDER_NOT_APPROVED');
   const block=await localBlock(client,approval);
   if (block) throw new Error(block);
+  if((await client.query('SELECT request_delivery_has_unresolved($1) AS blocked',[approval.id])).rows[0].blocked)
+    throw new Error('DELIVERY_FAILURE_UNRESOLVED');
   const ticket=(await client.query('SELECT * FROM tickets WHERE id=$1 FOR SHARE',[approval.ticket_id])).rows[0];
   return ticket;
 }
@@ -76,8 +78,8 @@ async function commandComplete(client:PoolClient,command:DeliveryCommand|undefin
 export async function prepareRequestFulfillment(db:Pool,provider:RequestApprovalProvider,approvalId:string,assigneeId:string,command?:DeliveryCommand):Promise<string> {
   const observed=await inspect(db,provider,approvalId);
   return transaction(db,async client=>{
-    await commandGuard(client,command,approvalId,assigneeId,'PREPARE');
     const {approval,task}=await locked(client,approvalId);
+    await commandGuard(client,command,approvalId,assigneeId,'PREPARE');
     const ticket=await authorized(client,approval,observed);
     await operator(client,assigneeId,ticket.owner_group_id,approvalId);
     if(command&&(command.expected_version!==0||task))throw new Error('FULFILLMENT_VERSION_CONFLICT');
@@ -98,8 +100,8 @@ export async function recordRequestDelivery(db:Pool,provider:RequestApprovalProv
   if (!evidence(reference)) throw new Error('FULFILLMENT_EVIDENCE_REQUIRED');
   const observed=await inspect(db,provider,approvalId);
   await transaction(db,async client=>{
-    await commandGuard(client,command,approvalId,actorId,'DELIVER');
     const {approval,task}=await locked(client,approvalId);
+    await commandGuard(client,command,approvalId,actorId,'DELIVER');
     if(command&&(!task||task.version!==command.expected_version))throw new Error('FULFILLMENT_VERSION_CONFLICT');
     if (!task || task.state !== 'READY' || task.assignee_id !== actorId || task.ready_until <= approval.clock)
       throw new Error('FULFILLMENT_NOT_READY');
@@ -115,6 +117,7 @@ export async function recordRequestDelivery(db:Pool,provider:RequestApprovalProv
 }
 
 const commandErrors=new Set(['FULFILLMENT_OPERATOR_DENIED','FULFILLMENT_APPROVAL_UNAVAILABLE','FULFILLMENT_PROVIDER_NOT_APPROVED',
+  'DELIVERY_FAILURE_UNRESOLVED',
   'FULFILLMENT_NOT_READY','FULFILLMENT_VERSION_CONFLICT','FULFILLMENT_ALREADY_EXISTS','REQUEST_DELIVERY_COMMAND_EXPIRED',
   'TICKET_NOT_AWAITING_APPROVAL','APPROVAL_REQUEST_CHANGED','APPROVAL_IDENTITY_CHANGED','APPROVAL_PERSON_UNAVAILABLE','APPROVAL_MANAGER_CHANGED']);
 
@@ -127,9 +130,22 @@ export async function processNextRequestDelivery(db:Pool,provider:RequestApprova
     else await recordRequestDelivery(db,provider,command.approval_id,command.actor_id,command.evidence_reference!,command);
   }catch(error){
     const message=error instanceof Error?error.message:'';
-    if(message!=='REQUEST_DELIVERY_COMMAND_FINISHED')await db.query(`UPDATE request_delivery_commands
-      SET state='REJECTED',error_code=$2,completed_at=clock_timestamp() WHERE id=$1 AND state='PENDING'`,
-      [command.id,commandErrors.has(message)?message:'DELIVERY_VERIFICATION_FAILED']);
+    if(message!=='REQUEST_DELIVERY_COMMAND_FINISHED')await transaction(db,async client=>{
+      const {approval}=await locked(client,command.approval_id);
+      const ticket=(await client.query('SELECT id,status FROM tickets WHERE id=$1 FOR SHARE',[approval.ticket_id])).rows[0];
+      const rejected=await client.query(`UPDATE request_delivery_commands
+        SET state='REJECTED',error_code=$2,completed_at=clock_timestamp() WHERE id=$1 AND state='PENDING' RETURNING id`,
+        [command.id,commandErrors.has(message)?message:'DELIVERY_VERIFICATION_FAILED']);
+      if(!rejected.rowCount||command.operation!=='DELIVER')return;
+      const eventId=(await client.query(`INSERT INTO ticket_events(ticket_id,actor_id,action,from_status,to_status,detail,request_id)
+        VALUES($1,$2,'DELIVERY_FAILURE_REQUIRED',$3,$3,$4,gen_random_uuid()) RETURNING id`,
+        [ticket.id,command.actor_id,ticket.status,JSON.stringify({commandId:command.id})])).rows[0].id;
+      await client.query(`INSERT INTO audit_logs(ticket_id,event_id,actor_id,request_id,action,before_value,after_value)
+        SELECT ticket_id,id,actor_id,request_id,action,$2::jsonb,$3::jsonb FROM ticket_events WHERE id=$1`,
+        [eventId,JSON.stringify({commandId:command.id,state:'PENDING'}),JSON.stringify({commandId:command.id,state:'REJECTED'})]);
+      await client.query(`INSERT INTO outbox_events(ticket_id,event_id,kind,payload)
+        VALUES($1,$2,'TICKET_CHANGED',$3)`,[ticket.id,eventId,JSON.stringify({ticketId:ticket.id,eventId})]);
+    });
   }
   return true;
 }

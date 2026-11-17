@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 
 export async function processDeliveryCommands(mode='NORMAL') {
   if(process.env.GITHUB_ACTIONS!=='true'||!process.env.ITSM_CI_ENV)throw new Error('DISPOSABLE_GITHUB_CI_ONLY');
-  if(!['NORMAL','CONCURRENT','FAIL','CALLBACK','WITHDRAW'].includes(mode))throw new Error('INVALID_DELIVERY_CI_MODE');
+  if(!['NORMAL','CONCURRENT','FAIL','CALLBACK','WITHDRAW','DIRECT_BLOCKED','RESOLVED_NOTICE'].includes(mode))throw new Error('INVALID_DELIVERY_CI_MODE');
   const runner=await readFile('tests/integration/request-delivery-runner.mjs','utf8');
   await new Promise((resolve,reject)=>{
     const child=spawn('docker',['compose','--project-name','itsm-dev','--env-file',process.env.ITSM_CI_ENV,

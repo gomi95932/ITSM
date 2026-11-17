@@ -17,6 +17,18 @@ export interface FulfillmentList {
   counts:{unreviewed:number;revokeDue:number;all:number};
 }
 export type RequestDeliveryOperation='PREPARE'|'DELIVER';
+export type DeliveryFailureOutcome='NOT_GRANTED'|'REVOKED';
+export interface DeliveryFailureResolution {
+  commandId:string;outcome:DeliveryFailureOutcome;reference:string;resolvedAt:string;
+}
+export interface DeliveryFailureItem {
+  id:string;ticketId:string;number:string;subject:string;groupId:string;groupName:string;
+  operatorName:string;reference:string;failedAt:string;canResolve:boolean;
+  resolution:(DeliveryFailureResolution&{verifierName:string})|null;
+}
+export interface DeliveryFailureList {
+  items:DeliveryFailureItem[];groups:{id:string;name:string}[];total:number;page:number;size:number;
+}
 export interface RequestDeliveryReceipt {
   id:string;operation:RequestDeliveryOperation;state:'PENDING'|'SUCCEEDED'|'REJECTED';
   result:{taskId:string;version:number}|null;errorCode:string|null;createdAt:string;completedAt:string|null;

@@ -1,18 +1,20 @@
 <script setup lang="ts">
 import { computed,onMounted,ref } from 'vue';
-import { ArrowLeft,Check,ChevronLeft,ChevronRight,ClipboardCheck,LoaderCircle,PackageCheck,RefreshCw,ShieldOff } from 'lucide-vue-next';
+import { ArrowLeft,Check,ChevronLeft,ChevronRight,ClipboardCheck,ClipboardList,LoaderCircle,PackageCheck,RefreshCw,ShieldOff } from 'lucide-vue-next';
 import type { FulfillmentAction,FulfillmentDetail,FulfillmentList,FulfillmentQueue,FulfillmentState } from '@itsm/contracts';
 import { api,ApiError,errorText } from '../api';
 import { formatDate } from '../labels';
 import { createRequestKey } from '../request-key';
 import ContentBoundary from './ContentBoundary.vue';
 import RequestDeliveryPanel from './RequestDeliveryPanel.vue';
+import DeliveryFailuresPanel from './DeliveryFailuresPanel.vue';
 
 const emit=defineEmits<{open:[id:string]}>();
 const queue=ref<FulfillmentQueue>('UNREVIEWED'),group=ref(''),page=ref(1),data=ref<FulfillmentList>(),detail=ref<FulfillmentDetail>();
 const loading=ref(false),busy=ref(false),error=ref(''),notice=ref(''),reference=ref(''),safe=ref(false),confirmed=ref(false);
 const operation=ref<FulfillmentAction>('REVIEW');
 const preparing=ref(false);
+const investigating=ref(false);
 const labels:Record<FulfillmentState,string>={READY:'待交付',DELIVERED:'已交付',REVOKE_DUE:'待回收',REVOKED:'已登记回收',BLOCKED:'交付阻断'};
 const eventLabels:Record<string,string>={TASK_PREPARED:'准备交付',DELIVERY_RECORDED:'登记实际交付',DELIVERY_REVIEWED:'独立复核',REVOCATION_REQUIRED:'产生回收义务',REVOCATION_RECORDED:'登记实际回收',TASK_BLOCKED:'阻断交付'};
 const tabs:{key:FulfillmentQueue;label:string;count:'unreviewed'|'revokeDue'|'all'}[]=[{key:'UNREVIEWED',label:'待复核',count:'unreviewed'},{key:'REVOKE_DUE',label:'待回收',count:'revokeDue'},{key:'ALL',label:'全部',count:'all'}];
@@ -60,13 +62,15 @@ onMounted(()=>void load());
 
 <template>
   <section class="fulfillment-panel" aria-label="交付与回收工作台" :aria-busy="loading||busy">
-    <RequestDeliveryPanel v-if="preparing" @back="preparing=false;load()" @open="emit('open',$event)"/>
+    <DeliveryFailuresPanel v-if="investigating" @back="investigating=false;load()" @open="emit('open',$event)"/>
+    <RequestDeliveryPanel v-else-if="preparing" @back="preparing=false;load()" @open="emit('open',$event)"/>
     <template v-else>
     <p v-if="error" class="error-banner" role="alert">{{error}}</p><p v-if="notice" class="fulfillment-notice" role="status">{{notice}}</p>
-    <div class="section-heading">
+    <div class="section-heading fulfillment-toolbar">
       <button v-if="detail" :disabled="busy||loading" @click="back"><ArrowLeft :size="16"/>返回列表</button>
       <span v-else class="muted">{{data?.total??0}} 项</span>
       <button v-if="!detail" :disabled="busy||loading" @click="preparing=true"><PackageCheck :size="16"/>准备与首次交付</button>
+      <button v-if="!detail" :disabled="busy||loading" @click="investigating=true"><ClipboardList :size="16"/>登记失败核查</button>
       <button class="icon-button" title="刷新交付任务" aria-label="刷新交付任务" :disabled="busy||loading" @click="detail?show(detail.id):load()"><RefreshCw :size="18" :class="{spin:loading}"/></button>
     </div>
     <p v-if="loading" class="muted" role="status">正在加载任务</p>
@@ -96,5 +100,6 @@ onMounted(()=>void load());
 </template>
 
 <style scoped>
+.fulfillment-toolbar{flex-wrap:wrap;gap:10px}.fulfillment-toolbar button{max-width:100%;white-space:normal}
 .fulfillment-panel{min-width:0}.fulfillment-filters{display:flex;align-items:end;justify-content:space-between;gap:16px;flex-wrap:wrap;margin:18px 0}.fulfillment-filters label{display:grid;gap:7px;font-size:12px;max-width:100%}.fulfillment-table table{width:100%;table-layout:fixed}.fulfillment-table th:first-child{width:32%}.fulfillment-table th,.fulfillment-table td{overflow-wrap:anywhere;vertical-align:top}.fulfillment-table small{display:block;color:#65747c;margin-top:6px}.fulfillment-detail,.fulfillment-history{margin-top:24px;padding-top:20px;border-top:1px solid #dfe5e8;min-width:0}.fulfillment-facts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px;margin:24px 0}.fulfillment-facts dt{font-size:12px;color:#65747c;margin-bottom:6px}.fulfillment-facts dd{margin:0;font-size:13px;overflow-wrap:anywhere}.fulfillment-detail .ticket-link{min-width:0;overflow-wrap:anywhere}.fulfillment-action{max-width:580px}.fulfillment-action>label{display:grid;gap:8px}.fulfillment-action>.checkbox-label{display:flex;align-items:start;font-size:13px;line-height:1.7}.fulfillment-action input[type=checkbox]{width:16px;height:16px;flex:none;margin-top:4px}.fulfillment-history ol{padding:0;list-style:none}.fulfillment-history li{display:flex;gap:8px 16px;flex-wrap:wrap;padding:14px 0;border-bottom:1px solid #edf0f2;font-size:12px;overflow-wrap:anywhere}.fulfillment-history li span{color:#65747c}.fulfillment-history code{max-width:100%;overflow-wrap:anywhere}.fulfillment-pagination{display:flex;align-items:center;justify-content:end;gap:12px;margin-top:18px;font-size:12px}.fulfillment-notice{padding:12px;border-left:3px solid #147e76;background:#edf8f4;color:#245c47;font-size:13px;margin-bottom:16px}@media(max-width:760px){.fulfillment-facts{grid-template-columns:minmax(0,1fr);gap:16px}.fulfillment-table th,.fulfillment-table td{font-size:11px;padding:10px 5px}.fulfillment-table .ticket-link strong{font-size:12px}.fulfillment-filters{align-items:stretch}.fulfillment-filters .segmented{display:flex;max-width:100%;flex-wrap:wrap}.fulfillment-filters .segmented button{padding:8px}.fulfillment-filters label{width:100%}.fulfillment-detail>.section-heading{align-items:start;gap:12px}.fulfillment-detail .status{flex:none;font-size:11px}}
 </style>

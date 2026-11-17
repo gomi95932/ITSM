@@ -31,3 +31,13 @@ export function requestDeliveryAction(value:unknown,key:unknown,operation:Reques
     throw new BadRequestException({code:'INVALID_DELIVERY_ACTION'});
   return {key:key.toLowerCase(),expectedVersion:body.expectedVersion as number,reference:operation==='DELIVER'?body.reference as string:null,contentClass:'GENERAL' as const};
 }
+export function deliveryFailureResolution(value:unknown,key:unknown){
+  if(typeof key!=='string'||!fulfillmentUuid.test(key))throw new BadRequestException({code:'FULFILLMENT_KEY_REQUIRED'});
+  if(!value||typeof value!=='object'||Array.isArray(value))throw new BadRequestException({code:'INVALID_DELIVERY_RESOLUTION'});
+  const body=value as Record<string,unknown>;
+  if(Object.keys(body).length!==4||!['outcome','reference','actualVerificationConfirmed','contentClass'].every(k=>Object.hasOwn(body,k))
+    ||!['NOT_GRANTED','REVOKED'].includes(body.outcome as string)||body.actualVerificationConfirmed!==true||body.contentClass!=='GENERAL'
+    ||typeof body.reference!=='string'||!/^[A-Za-z0-9][A-Za-z0-9._/-]{2,99}$/.test(body.reference))
+    throw new BadRequestException({code:'INVALID_DELIVERY_RESOLUTION'});
+  return {key:key.toLowerCase(),outcome:body.outcome as 'NOT_GRANTED'|'REVOKED',reference:body.reference,contentClass:'GENERAL' as const};
+}

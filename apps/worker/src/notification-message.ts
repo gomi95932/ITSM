@@ -5,6 +5,8 @@ export function notificationLink(publicUrl: string, ticket: {
   if (base.protocol !== 'https:') throw new Error('HTTPS_DEEP_LINK_REQUIRED');
   const routingAlert = ticket.action === 'OWNERSHIP_ESCALATION_REQUIRED';
   const fulfillmentMessages:Record<string,string>={
+    DELIVERY_FAILURE_REQUIRED:'交付登记未通过，请独立核查实际授权并登记处置结果。',
+    DELIVERY_FAILURE_RESOLVED:'交付登记失败的独立核查结果已记录，请查看工作台。',
     FULFILLMENT_REVIEW_REQUIRED:'交付待独立复核，请核查目标系统的实际授权。',
     FULFILLMENT_REVOKE_REQUIRED:'存在待回收授权，请在目标系统实际撤权后登记结果。',
     FULFILLMENT_REVIEW_OVERDUE:'交付尚未复核，已到提醒升级时间，请主管跟进。',

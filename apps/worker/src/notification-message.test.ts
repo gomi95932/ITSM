@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { notificationLink } from './notification-message.js';
 
 test('fulfillment reminders link to authorized workspace without external evidence or approval details',()=>{
-  for(const action of ['FULFILLMENT_REVIEW_REQUIRED','FULFILLMENT_REVOKE_REQUIRED','FULFILLMENT_REVIEW_OVERDUE','FULFILLMENT_REVOKE_OVERDUE']){
+  for(const action of ['FULFILLMENT_REVIEW_REQUIRED','FULFILLMENT_REVOKE_REQUIRED','FULFILLMENT_REVIEW_OVERDUE','FULFILLMENT_REVOKE_OVERDUE','DELIVERY_FAILURE_REQUIRED','DELIVERY_FAILURE_RESOLVED']){
     const input={ticket_id:'ticket-f',number:'REQ-0001',action,to_status:'WAITING_APPROVAL',
       detail:{reference:'private-evidence',snapshot:'private-approval'}};
     const message=notificationLink('https://itsm.example.test/',input);

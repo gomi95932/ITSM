@@ -19,6 +19,12 @@ export class FulfillmentController {
   @Post('intake/:id/deliver') @HttpCode(202) async deliver(@Headers() h:H,@Param('id') id:string,@Body() body:unknown){
     return this.fulfillment.enqueueDelivery(await this.auth.identity(identity(h),true),id,'DELIVER',body,h['idempotency-key']);
   }
+  @Get('delivery-failures') async deliveryFailures(@Headers() h:H,@Query('group') group?:string,@Query('page') page?:string,@Query('resolved') resolved?:string){
+    return this.fulfillment.deliveryFailures(await this.auth.identity(identity(h)),{group,page,resolved});
+  }
+  @Post('delivery-failures/:id/resolve') @HttpCode(200) async resolveFailure(@Headers() h:H,@Param('id') id:string,@Body() body:unknown){
+    return this.fulfillment.resolveDeliveryFailure(await this.auth.identity(identity(h),true),id,body,h['idempotency-key']);
+  }
   @Get(':id') async detail(@Headers() h:H,@Param('id') id:string){return this.fulfillment.detail(await this.auth.identity(identity(h)),id);}
   @Post(':id/review') @HttpCode(200) async review(@Headers() h:H,@Param('id') id:string,@Body() body:unknown){
     return this.fulfillment.action(await this.auth.identity(identity(h),true),id,'REVIEW',body,h['idempotency-key']);

@@ -140,6 +140,8 @@ jobs:
         run: docker compose --env-file "$ITSM_CI_ENV" -f infra/compose/compose.yaml up -d --no-deps --wait --wait-timeout 90 api
       - name: Verify queued delivery intent, worker reinspection, concurrency and atomic receipts
         run: node tests/integration/request-delivery.mjs
+      - name: Verify failed delivery investigation, independent resolution and blocked retries
+        run: node tests/integration/delivery-failures.mjs
       - name: Verify desktop and mobile first-delivery workspace against synthetic provider
         env:
           ITSM_DELIVERY_CI_ENABLED: 'true'

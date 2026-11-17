@@ -1,6 +1,6 @@
 import type { PoolClient } from 'pg';
 
-type Audience = { requester?: boolean; owner?: boolean; pending?: boolean; queue?: boolean; escalation?: boolean; reviewer?: boolean; platformAdmin?: boolean; fulfillment?: boolean };
+type Audience = { requester?: boolean; owner?: boolean; pending?: boolean; queue?: boolean; escalation?: boolean; reviewer?: boolean; platformAdmin?: boolean; fulfillment?: boolean; deliveryFailure?: boolean };
 const audiences: Readonly<Record<string, Audience>> = {
   SUBMIT_AND_ROUTE: { requester:true, owner:true, queue:true },
   ACCEPT: { requester:true, owner:true },
@@ -35,6 +35,8 @@ const audiences: Readonly<Record<string, Audience>> = {
   OWNERSHIP_RECOVERED: { owner:true, escalation:true },
   OWNERSHIP_ESCALATION_REQUIRED: { owner:true, escalation:true, platformAdmin:true },
   FEEDBACK_SUBMITTED: { owner:true },
+  DELIVERY_FAILURE_RESOLVED: { owner:true, escalation:true },
+  DELIVERY_FAILURE_REQUIRED: { deliveryFailure:true },
   FULFILLMENT_REVIEW_REQUIRED: { fulfillment:true },
   FULFILLMENT_REVOKE_REQUIRED: { fulfillment:true },
   FULFILLMENT_REVIEW_OVERDUE: { fulfillment:true },
@@ -51,6 +53,17 @@ export async function notificationRecipients(client: Pick<PoolClient,'query'>, e
   if (!event.rowCount) return [];
   const a = notificationAudience(event.rows[0]!.action);
   if (!Object.keys(a).length) return [];
+  if(a.deliveryFailure){
+    const recipients=await client.query<{id:string}>(`SELECT e.id FROM ticket_events v
+      JOIN request_delivery_commands c ON c.id::text=v.detail->>'commandId'
+      JOIN request_approvals p ON p.id=c.approval_id AND p.ticket_id=v.ticket_id
+      JOIN tickets t ON t.id=v.ticket_id JOIN group_memberships m ON m.group_id=t.owner_group_id
+      JOIN employees e ON e.id=m.employee_id AND e.active
+      WHERE v.id=$1 AND ($2::text IS NULL OR e.id=$2)
+        AND NOT EXISTS(SELECT 1 FROM request_delivery_resolutions r WHERE r.command_id=c.id)
+        AND request_delivery_resolution_eligible(c.id,e.id) ORDER BY e.id`,[eventId,employeeId]);
+    return recipients.rows.map(row=>row.id);
+  }
   if(a.fulfillment){
     const recipients=await client.query<{id:string}>(`SELECT e.id FROM request_fulfillment_signals s
       JOIN ticket_events v ON v.id=s.event_id AND v.action='FULFILLMENT_'||s.kind

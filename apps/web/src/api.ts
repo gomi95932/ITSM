@@ -22,6 +22,14 @@ export async function api<T>(path: string,options: { method?: string; body?: unk
   return data as T;
 }
 export const messages: Record<string,string> = {
+  INVALID_DELIVERY_RESOLUTION:'请核对核查结果、独立外部记录编号及实际核查声明。',
+  INVALID_DELIVERY_FAILURE_FILTER:'核查队列筛选条件无效，请重新选择。',
+  DELIVERY_FAILURE_UNRESOLVED:'此申请存在未核清的交付登记失败，请先完成独立核查，不能直接重新登记。',
+  DELIVERY_RESOLUTION_OPERATOR_DENIED:'核查人须具备当前任职或组长资格，且不能是原登记人、申请人或审批人。',
+  DELIVERY_RESOLUTION_KEY_CONFLICT:'此核查操作标识已用于其他内容，请刷新核对后重试。',
+  DELIVERY_FAILURE_ALREADY_RESOLVED:'此记录已由其他人员完成核查，请刷新查看结果。',
+  DELIVERY_RESOLUTION_ACTIVE_GRANT:'此申请仍有已登记的有效授权，请先通过回收工作台登记实际撤权。',
+  REQUEST_DELIVERY_PENDING:'此申请已有待核验操作，请等待当前回执。',
   INVALID_FULFILLMENT_FILTER:'任务筛选条件无效，请重新选择。',
   INVALID_FULFILLMENT_ACTION:'请核对外部记录编号、任务版本及内容声明。',
   FULFILLMENT_KEY_REQUIRED:'操作标识无效，请刷新后重新提交。',

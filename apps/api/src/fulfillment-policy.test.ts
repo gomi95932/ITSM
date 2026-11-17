@@ -1,8 +1,17 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { fulfillmentAction,fulfillmentFilter,requestDeliveryAction } from './fulfillment-policy.js';
+import { deliveryFailureResolution,fulfillmentAction,fulfillmentFilter,requestDeliveryAction } from './fulfillment-policy.js';
 const key='AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE';
 const body={expectedVersion:1,reference:'CHG-2026/123',contentClass:'GENERAL'};
+test('failed actual-delivery registration requires a declared independent factual verification',()=>{
+  const input={outcome:'NOT_GRANTED',reference:'VERIFY-2026/123',actualVerificationConfirmed:true,contentClass:'GENERAL'};
+  assert.deepEqual(deliveryFailureResolution(input,key),{key:key.toLowerCase(),outcome:'NOT_GRANTED',reference:input.reference,contentClass:'GENERAL'});
+  assert.equal(deliveryFailureResolution({...input,outcome:'REVOKED'},key).outcome,'REVOKED');
+  for(const value of [null,{},[],{...input,outcome:'GRANTED'},{...input,outcome:undefined},{...input,actualVerificationConfirmed:false},
+    {...input,actualVerificationConfirmed:'true'},{...input,reference:'private text'},{...input,contentClass:'SECRET'},
+    {...input,extra:1},{...input,expectedVersion:1}])assert.throws(()=>deliveryFailureResolution(value,key));
+  for(const invalid of ['',undefined,[], 'not-a-uuid'])assert.throws(()=>deliveryFailureResolution(input,invalid));
+});
 test('fulfillment filters are strict, paginated and accept configurable groups',()=>{
   assert.deepEqual(fulfillmentFilter({}),{queue:'UNREVIEWED',group:'',page:1,size:20});
   assert.equal(fulfillmentFilter({queue:'ALL',group:'custom-domain_group',page:'2'}).page,2);
