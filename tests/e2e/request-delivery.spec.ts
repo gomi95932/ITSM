@@ -14,10 +14,11 @@ test('first delivery stays visibly closed by default',async({page})=>{
 });
 
 for(const viewport of [{name:'desktop',width:1440,height:1000},{name:'mobile',width:390,height:844}]){
-  test(`failed registration does not imply no actual grant on ${viewport.name}`,async({page})=>{
+  for(const action of ['PREPARE','DELIVER'] as const){
+  test(`failed ${action} receipt updates notice on ${viewport.name}`,async({page})=>{
     test.skip(process.env.ITSM_DELIVERY_CI_ENABLED!=='true');
     test.setTimeout(60000);
-    const fixture=await createFulfillmentFixture({state:'READY',appointed:true});
+    const fixture=await createFulfillmentFixture({state:action==='DELIVER'?'READY':null,appointed:true});
     await page.setViewportSize({width:viewport.width,height:viewport.height});
     await page.goto('/');
     await page.getByRole('combobox',{name:'开发身份'}).selectOption('agent-1');
@@ -27,21 +28,30 @@ for(const viewport of [{name:'desktop',width:1440,height:1000},{name:'mobile',wi
     await panel.getByRole('combobox',{name:'责任组'}).selectOption(fixture.groupId);
     await panel.getByRole('button').filter({hasText:fixture.subject}).click();
     const operation=panel.getByRole('region',{name:'准备与交付操作',exact:true});
-    await operation.getByRole('textbox',{name:'外部执行记录编号'}).fill(`CI-FAILED-${fixture.approvalId}`);
+    if(action==='DELIVER'){
+      await operation.getByRole('textbox',{name:'外部执行记录编号'}).fill(`CI-FAILED-${fixture.approvalId}`);
+      await operation.getByRole('checkbox',{name:'已在目标系统实际完成交付，并核对上述记录'}).check();
+    }
     await operation.getByRole('checkbox',{name:'本次内容不含密码、密钥及安全事件证据'}).check();
-    await operation.getByRole('checkbox',{name:'已在目标系统实际完成交付，并核对上述记录'}).check();
-    await operation.getByRole('button',{name:'提交实际交付记录',exact:true}).click();
+    await operation.getByRole('button',{name:action==='DELIVER'?'提交实际交付记录':'领取准备任务',exact:true}).click();
+    await expect(panel.getByRole('status')).toHaveText('操作请求已提交，等待后台核验。');
     await expect(operation.getByRole('region',{name:'操作请求回执',exact:true})).toContainText('等待后台核验');
     await processDeliveryCommands('FAIL');
-    await panel.getByRole('button',{name:'刷新准备与交付',exact:true}).click();
+    // Let the normal polling path observe the terminal receipt without a manual refresh.
     const receipt=operation.getByRole('region',{name:'操作请求回执',exact:true});
-    await expect(receipt).toContainText('登记未通过，需核查实际授权');
-    await expect(receipt).not.toContainText('未执行');
+    const outcome=action==='DELIVER'?'登记未通过，需核查实际授权':'未执行，核验未通过';
+    await expect(receipt).toContainText(outcome,{timeout:15000});
+    await expect(panel.getByRole('status')).toHaveText(`${outcome}。`);
+    if(action==='DELIVER')await expect(receipt).not.toContainText('未执行');
     await expect(receipt).not.toContainText('provider-private-error-sentinel');
-    await expect(panel.getByRole('row').filter({hasText:fixture.subject})).toContainText('登记未通过，需核查实际授权');
-    await page.screenshot({path:`test-results/request-delivery-rejected-${viewport.name}.png`,fullPage:true});
+    await expect(panel.getByRole('row').filter({hasText:fixture.subject})).toContainText(outcome);
+    await page.screenshot({path:`test-results/request-${action.toLowerCase()}-rejected-${viewport.name}.png`,fullPage:true});
     expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+    await panel.getByRole('button').filter({hasText:fixture.subject}).click();
+    await expect(panel.getByRole('status')).toHaveCount(0);
+    await expect(operation.getByRole('region',{name:'操作请求回执',exact:true})).toContainText(outcome);
   });
+  }
   test(`prepare and register actual first delivery on ${viewport.name}`,async({page})=>{
     test.skip(process.env.ITSM_DELIVERY_CI_ENABLED!=='true');
     test.setTimeout(90000);
@@ -73,6 +83,7 @@ for(const viewport of [{name:'desktop',width:1440,height:1000},{name:'mobile',wi
     await processDeliveryCommands('CONCURRENT');
     await panel.getByRole('button',{name:'刷新准备与交付',exact:true}).click();
     await expect(operation.getByRole('region',{name:'操作请求回执',exact:true})).toContainText('核验通过，操作已记录');
+    await expect(panel.getByRole('status')).toHaveText('核验通过，操作已记录。');
     await expect(operation.getByRole('button',{name:'提交实际交付记录',exact:true})).toBeDisabled();
     await page.screenshot({path:`test-results/request-delivery-ready-${viewport.name}.png`,fullPage:true});
     const reference=`CI-DELIVERY-${viewport.name}-${fixture.approvalId}`;
@@ -81,11 +92,13 @@ for(const viewport of [{name:'desktop',width:1440,height:1000},{name:'mobile',wi
     await expect(operation.getByRole('button',{name:'提交实际交付记录',exact:true})).toBeDisabled();
     await operation.getByRole('checkbox',{name:'已在目标系统实际完成交付，并核对上述记录'}).check();
     await operation.getByRole('button',{name:'提交实际交付记录',exact:true}).click();
+    await expect(panel.getByRole('status')).toHaveText('操作请求已提交，等待后台核验。');
     await expect(operation.getByRole('region',{name:'操作请求回执',exact:true})).toContainText('等待后台核验');
     await processDeliveryCommands();
     await panel.getByRole('button',{name:'刷新准备与交付',exact:true}).click();
     await expect(operation).toContainText('当前无可执行操作');
     await expect(operation.getByRole('region',{name:'操作请求回执',exact:true})).toContainText('核验通过，操作已记录');
+    await expect(panel.getByRole('status')).toHaveText('核验通过，操作已记录。');
     expect(await panel.innerText()).not.toContain(fixture.internalMarker);
     await page.screenshot({path:`test-results/request-delivery-completed-${viewport.name}.png`,fullPage:true});
     expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);

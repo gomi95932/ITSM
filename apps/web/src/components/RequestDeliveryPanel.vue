@@ -9,13 +9,18 @@ import ContentBoundary from './ContentBoundary.vue';
 
 const emit=defineEmits<{back:[];open:[id:string]}>();
 const data=ref<RequestDeliveryList>(),group=ref(''),page=ref(1),selected=ref(''),loading=ref(false),busy=ref(false);
-const error=ref(''),notice=ref(''),reference=ref(''),safe=ref(false),confirmed=ref(false);
+const error=ref(''),submittedReceiptId=ref(''),reference=ref(''),safe=ref(false),confirmed=ref(false);
 const item=computed(()=>data.value?.items.find(row=>row.approvalId===selected.value));
 const pages=computed(()=>Math.max(1,Math.ceil((data.value?.total??0)/20)));
 const receiptLabels={PENDING:'等待后台核验',SUCCEEDED:'核验通过，操作已记录',REJECTED:'未执行，核验未通过'};
 function receiptLabel(receipt:RequestDeliveryReceipt){
   return receipt.state==='REJECTED'&&receipt.operation==='DELIVER'?'登记未通过，需核查实际授权':receiptLabels[receipt.state];
 }
+const notice=computed(()=>{
+  const receipt=item.value?.command;
+  if(!receipt||receipt.id!==submittedReceiptId.value)return '';
+  return receipt.state==='PENDING'?'操作请求已提交，等待后台核验。':`${receiptLabel(receipt)}。`;
+});
 const reasons:Record<string,string>={FULFILLMENT_OPERATOR_DENIED:'当前岗位或人员资格已失效',FULFILLMENT_APPROVAL_UNAVAILABLE:'审批凭据失效或已过期',
   FULFILLMENT_PROVIDER_NOT_APPROVED:'OA 审批结果或申请绑定不匹配',FULFILLMENT_NOT_READY:'交付任务已变化或超时',
   FULFILLMENT_VERSION_CONFLICT:'任务版本已变化',REQUEST_DELIVERY_COMMAND_EXPIRED:'操作请求已超时',
@@ -24,7 +29,7 @@ const reasons:Record<string,string>={FULFILLMENT_OPERATOR_DENIED:'当前岗位�
   DELIVERY_VERIFICATION_FAILED:'OA 查询或后台核验失败'};
 let attempt:{signature:string;key:string}|undefined;
 function reset(){reference.value='';safe.value=false;confirmed.value=false;attempt=undefined;}
-function choose(row:RequestDeliveryItem){selected.value=row.approvalId;error.value='';notice.value='';reset();}
+function choose(row:RequestDeliveryItem){selected.value=row.approvalId;error.value='';submittedReceiptId.value='';reset();}
 async function load(){
   if(loading.value||busy.value)return;
   loading.value=true;error.value='';
@@ -38,10 +43,10 @@ async function act(operation:RequestDeliveryOperation){
     {expectedVersion:row.version,reference:reference.value,actualDeliveryConfirmed:true,contentClass:'GENERAL'};
   const signature=JSON.stringify({id:row.approvalId,operation,...body});
   if(attempt?.signature!==signature)attempt={signature,key:createRequestKey()};
-  busy.value=true;error.value='';notice.value='';
+  busy.value=true;error.value='';submittedReceiptId.value='';
   try{
-    await api(`/fulfillments/intake/${row.approvalId}/${operation==='PREPARE'?'prepare':'deliver'}`,{method:'POST',key:attempt.key,body});
-    notice.value='操作请求已提交，等待后台核验。';reset();
+    const receipt=await api<RequestDeliveryReceipt>(`/fulfillments/intake/${row.approvalId}/${operation==='PREPARE'?'prepare':'deliver'}`,{method:'POST',key:attempt.key,body});
+    submittedReceiptId.value=receipt.id;reset();
     data.value=await api<RequestDeliveryList>(`/fulfillments/intake?group=${encodeURIComponent(group.value)}&page=${page.value}`);
   }catch(e){error.value=errorText(e);if(e instanceof ApiError&&[403,404,409].includes(e.status)){attempt=undefined;data.value=undefined;}}
   finally{busy.value=false;}
