@@ -33,6 +33,7 @@ const row: Parameters<typeof matches>[0] = {
   provider_instance_id: 'instance-1',
   attempts: 1,
   lease_token: null,
+  last_error: null,
   clock: new Date('2026-11-13T00:00:00Z'),
 };
 
