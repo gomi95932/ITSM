@@ -4,7 +4,33 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { createHash } from 'node:crypto';
-import { main, requiredReleaseFiles, schemaFingerprint, validateBusinessAcceptanceConfig, validateConfig, validateRelease, validateRuntimeContainer } from '../../scripts/release.mjs';
+import { inventoryFingerprint, main, recoveryMethod, requiredReleaseFiles, schemaFingerprint,
+  validateBusinessAcceptanceConfig, validateConfig, validateRecoveryProof, validateRelease, validateRuntimeContainer } from '../../scripts/release.mjs';
+
+test('recovery evidence binds table contents and counts to the exact archive',() => {
+  const inventory=[{schema:'public',table:'tickets',rows:'2',sha256:'a'.repeat(64)},
+    {schema:'public',table:'audit_logs',rows:'3',sha256:'b'.repeat(64)}];
+  const metadata={sha256:'c'.repeat(64),inventoryMethod:'public-table-chunked-sha256-v1',inventory,
+    inventorySha256:inventoryFingerprint(inventory)};
+  const proof={method:recoveryMethod,status:'passed',backupSha256:metadata.sha256,
+    inventorySha256:metadata.inventorySha256,tableCount:2,verifiedAt:'2026-11-19T00:00:00Z'};
+  assert.equal(inventoryFingerprint([...inventory].reverse()),metadata.inventorySha256);
+  assert.equal(validateRecoveryProof(metadata,proof),metadata.inventorySha256);
+  for (const change of [p=>{p.backupSha256='d'.repeat(64);},p=>{p.tableCount=1;},
+    p=>{p.inventorySha256='e'.repeat(64);},p=>{p.status='failed';},
+    p=>{p.method='isolated-schema-and-ticket-reads';},p=>{p.verifiedAt='invalid';}]) {
+    const changed=structuredClone(proof); change(changed);
+    assert.throws(()=>validateRecoveryProof(metadata,changed),/RESTORE_DATA_EVIDENCE_REQUIRED/);
+  }
+  for (const change of [m=>{m.inventory[0].rows='1';},m=>{m.inventory[0].sha256='e'.repeat(64);},
+    m=>{m.inventory.pop();},m=>{delete m.inventoryMethod;}]) {
+    const changed=structuredClone(metadata); change(changed);
+    assert.throws(()=>validateRecoveryProof(changed,proof),/RESTORE_DATA_EVIDENCE_REQUIRED/);
+  }
+  for (const bad of [null,[...inventory,inventory[0]],[{...inventory[0],rows:2}],
+    [{...inventory[0],schema:'other'}],[{...inventory[0],sha256:'invalid'}]])
+    assert.throws(()=>inventoryFingerprint(bad),/INVALID_BACKUP_INVENTORY/);
+});
 
 test('release business checks require seeded development identities and fake-only notifications', () => {
   const config=() => ({services:{api:{environment:{NODE_ENV:'development',ENABLE_DEV_AUTH:'true',NOTIFICATION_MODE:'fake'}},

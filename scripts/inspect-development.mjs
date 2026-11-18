@@ -5,7 +5,7 @@ import { lstat, open } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { requireRootOwnedPath } from './promote-release.mjs';
-import { validateRelease, validateRuntimeContainer } from './release.mjs';
+import { recoveryMethod, validateRecoveryProof, validateRelease, validateRuntimeContainer } from './release.mjs';
 
 const installedTools='/opt/itsm/tools/release';
 const installedPaths=Object.freeze({tools:installedTools,releases:'/opt/itsm/releases',
@@ -25,7 +25,7 @@ export function validateInspectionEvidence({sha,requestId,bundle,current,receipt
   if (current?.sha !== sha || current.bundlePath !== bundle || manifest?.sha !== sha
     || promotion?.sha !== sha || promotion.bundlePath !== bundle || receipt?.sha !== sha
     || receipt.requestId !== requestId || receipt.status !== 'succeeded' || receipt.phase !== 'complete'
-    || receipt.restoreCheck !== 'isolated-schema-and-ticket-reads'
+    || !['isolated-schema-and-ticket-reads',recoveryMethod].includes(receipt.restoreCheck)
     || promotion.verificationLevel !== 'approved-root-promoted' || promotion.deploymentPerformed !== false
     || promotion.repository !== 'gomi95932/ITSM' || receipt.repository !== promotion.repository
     || ![receipt.runId,receipt.runAttempt,receipt.artifactId].every(v => Number.isSafeInteger(v) && v > 0)
@@ -35,6 +35,8 @@ export function validateInspectionEvidence({sha,requestId,bundle,current,receipt
     || current.schemaFingerprint !== manifest.schemaFingerprint || promotion.schemaFingerprint !== manifest.schemaFingerprint
     || Object.values(services).some(name => current.images?.[name] !== manifest.images?.[name]
       || receipt.images?.[name] !== manifest.images?.[name] || promotion.images?.[name] !== manifest.images?.[name]))
+    throw new Error('DEPLOYMENT_EVIDENCE_MISMATCH');
+  if (receipt.restoreCheck === recoveryMethod && manifest.recoveryVerification !== recoveryMethod)
     throw new Error('DEPLOYMENT_EVIDENCE_MISMATCH');
   const acceptance=current.businessAcceptance;
   if (current.verificationLevel !== 'synthetic-business' || acceptance?.status !== 'passed'
@@ -158,6 +160,17 @@ export async function inspectDevelopment({sha,requestId},{paths=installedPaths,d
   const metadata=JSON.parse(await privateText(`${backup.path}.json`));
   if (metadata.file !== backup.path || metadata.release !== sha || metadata.sha256 !== backup.sha256
     || await backupHash(backup.path) !== backup.sha256) throw new Error('RECORDED_BACKUP_MISMATCH');
+  if (receipt.restoreCheck === recoveryMethod) {
+    const proof=JSON.parse(await privateText(`${backup.path}.restore.json`));
+    const inventorySha256=validateRecoveryProof(metadata,proof);
+    if (receipt.recoveryEvidence?.inventorySha256 !== inventorySha256
+      || receipt.recoveryEvidence?.tableCount !== proof.tableCount
+      || receipt.recoveryEvidence?.verifiedAt !== proof.verifiedAt
+      || !Number.isFinite(Date.parse(receipt.startedAt))
+      || Date.parse(proof.verifiedAt) > Date.parse(receipt.completedAt)
+      || Date.parse(proof.verifiedAt) < Date.parse(receipt.startedAt))
+      throw new Error('RECORDED_RESTORE_EVIDENCE_MISMATCH');
+  }
   await assertIdle(paths);
   for (let index=0;index<records.length;index++)
     if (await privateText(records[index]) !== texts[index]) throw new Error('DEPLOYMENT_CHANGED_DURING_INSPECTION');
@@ -176,7 +189,8 @@ export async function inspectDevelopment({sha,requestId},{paths=installedPaths,d
     runtime,migrations,readiness:{url:readyUrl,status:'ok'},
     recordedBusinessAcceptance:{runId:current.businessAcceptance.runId,completedAt:current.businessAcceptance.completedAt},
     backup:{path:backup.path,sha256:backup.sha256,checksumVerifiedNow:true,
-      restoreVerification:'recorded-isolated-schema-and-ticket-reads',recordedAt:receipt.completedAt},
+      restoreVerification:`recorded-${receipt.restoreCheck}`,recordedAt:receipt.completedAt,
+      ...(receipt.restoreCheck === recoveryMethod ? {dataIntegrity:receipt.recoveryEvidence} : {})},
     limitations:['No new business transaction or backup restore was executed.','GitHub source was not re-queried.',
       'This is a point-in-time check, not a deployment lock or production acceptance.']};
 }

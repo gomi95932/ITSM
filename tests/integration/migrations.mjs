@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process';
 import { copyFile, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
+import { inventoryFingerprint, recoveryMethod, validateRecoveryProof } from '../../scripts/release.mjs';
 
 if (process.env.GITHUB_ACTIONS !== 'true' || !process.env.ITSM_CI_ENV) throw new Error('DISPOSABLE_GITHUB_CI_ONLY');
 const directory=await mkdtemp(resolve(tmpdir(),'itsm-recovery-ci-'));
@@ -64,17 +65,58 @@ try {
   assert.equal(await sql('SELECT json_agg(s ORDER BY name) FROM schema_migrations s'),before);
 
   const state=resolve(directory,'state'), tickets=await sql('SELECT count(*) FROM tickets');
+  await sql(`CREATE TABLE recovery_evidence_probe(id integer,payload text,recorded_at timestamptz,bytes bytea);
+    INSERT INTO recovery_evidence_probe SELECT n%2050,'recovery-'||(n%2050),
+      '2026-11-01T08:00:00+08'::timestamptz,decode('00ff','hex') FROM generate_series(1,4100) n;`);
   await run('node',['scripts/release.mjs','check','--env',envFile,'--state',state]);
-  await run('node',['scripts/release.mjs','backup','--env',envFile,'--state',state]);
+  let writing=true,writes=0,writerError;
+  const writer=(async () => {
+    while (writing) {
+      await sql(`INSERT INTO recovery_evidence_probe VALUES (${10000+writes},'during-backup',now(),NULL)`);
+      writes++;
+    }
+  })().catch(error => { writerError=error; writing=false; });
+  // Exercise the inventory/dump snapshot binding while source data continues to change.
+  try { await run('node',['scripts/release.mjs','backup','--env',envFile,'--state',state]); }
+  finally { writing=false; await writer; }
+  if (writerError) throw writerError;
+  assert.ok(writes > 0,'recovery fixture must actually write during backup');
   const backupName=(await readdir(resolve(state,'backups'))).find(name=>name.endsWith('.dump'));
   assert.ok(backupName);
   const backup=resolve(state,'backups',backupName);
-  await run('node',['scripts/release.mjs','restore-check','--env',envFile,'--state',state,'--backup',backup]);
+  const metadata=JSON.parse(await readFile(`${backup}.json`,'utf8'));
+  for (const table of ['schema_migrations','tickets','audit_logs','service_catalog','recovery_evidence_probe'])
+    assert.ok(metadata.inventory.some(row=>row.table===table),`recovery evidence must cover ${table}`);
+  const probeRows=BigInt(metadata.inventory.find(row=>row.table==='recovery_evidence_probe').rows);
+  assert.ok(probeRows >= 4100n && probeRows <= BigInt(4100+writes));
+  const restoreArgs=['scripts/release.mjs','restore-check','--env',envFile,'--state',state,'--backup',backup];
+  // A later legitimate write must not be compared with an earlier backup snapshot.
+  await sql("INSERT INTO recovery_evidence_probe VALUES (9000,'after-backup',now(),NULL)");
+  await run('node',restoreArgs);
+  const proof=JSON.parse(await readFile(`${backup}.restore.json`,'utf8'));
+  assert.equal(proof.method,recoveryMethod);
+  validateRecoveryProof(metadata,proof);
+  assert.equal(await sql('SELECT count(*) FROM recovery_evidence_probe'),String(4101+writes));
+  for (const kind of ['missing-row','changed-content','missing-table']) {
+    const changed=structuredClone(metadata);
+    const row=changed.inventory.find(row=>row.table==='recovery_evidence_probe');
+    if (kind === 'missing-row') row.rows=String(BigInt(row.rows)-1n);
+    if (kind === 'changed-content') row.sha256='0'.repeat(64);
+    if (kind === 'missing-table') changed.inventory=changed.inventory.filter(item=>item.table!==row.table);
+    changed.inventorySha256=inventoryFingerprint(changed.inventory);
+    await writeFile(`${backup}.json`,JSON.stringify(changed));
+    const mismatch=await run('node',restoreArgs,{success:false});
+    assert.notEqual(mismatch.code,0,`${kind} must fail even with a valid archive checksum`);
+    assert.equal(await sql("SELECT count(*) FROM pg_database WHERE datname LIKE 'itsm_restore_%'"),'0');
+  }
+  await writeFile(`${backup}.json`,JSON.stringify(metadata));
   assert.equal(await sql('SELECT count(*) FROM tickets'),tickets,'restore check must not change the live fixture database');
   assert.equal(await sql("SELECT count(*) FROM pg_database WHERE datname LIKE 'itsm_restore_%'"),'0','temporary restore database must be removed');
-  const metadata=JSON.parse(await readFile(`${backup}.json`,'utf8'));
   metadata.sha256='0'.repeat(64); await writeFile(`${backup}.json`,JSON.stringify(metadata));
   const corrupt=await run('node',['scripts/release.mjs','restore-check','--env',envFile,'--state',state,'--backup',backup],{success:false});
   assert.notEqual(corrupt.code,0,'corrupt backup must be rejected');
   console.log('Image-bound schema readiness, migration immutability, transaction rollback, backup recovery and live data isolation verified');
-} finally { await rm(directory,{recursive:true,force:true}); }
+} finally {
+  await sql('DROP TABLE IF EXISTS recovery_evidence_probe');
+  await rm(directory,{recursive:true,force:true});
+}

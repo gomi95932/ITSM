@@ -4,7 +4,7 @@ import { chmod, chown, copyFile, link, lstat, mkdir, mkdtemp, readFile, readdir,
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { test } from 'node:test';
-import { requiredReleaseFiles, schemaFingerprint } from '../../scripts/release.mjs';
+import { inventoryFingerprint, recoveryMethod, requiredReleaseFiles, schemaFingerprint } from '../../scripts/release.mjs';
 
 assert.equal(process.getuid(),0,'Only run in disposable Linux CI with sudo, never on the Mac or development server');
 const checkout=fileURLToPath(new URL('../../',import.meta.url));
@@ -52,7 +52,7 @@ async function fixture(t) {
   const images=Object.fromEntries(['api','web','worker','postgres','redis'].map(name =>
     [name,`ghcr.io/gomi95932/itsm-${name}@sha256:${'b'.repeat(64)}`]));
   const manifest={repository:'gomi95932/ITSM',ref:'refs/heads/main',sha,runId:'123',runAttempt:2,
-    images,files,schemaFingerprint:schemaFingerprint(files)};
+    images,files,schemaFingerprint:schemaFingerprint(files),recoveryVerification:recoveryMethod};
   await writeFile(join(bundle,'release.json'),JSON.stringify(manifest),{mode:0o600});
   const source={repository:manifest.repository,runId:123,runAttempt:2,artifactId:456,artifactDigest:`sha256:${'c'.repeat(64)}`};
   const businessAcceptance={status:'passed',runId:'fixture-only',checks:['fixture-only'],completedAt:'2026-11-18T01:00:00Z'};
@@ -129,6 +129,29 @@ test('checks runtime and recorded evidence without changing records or exposing 
   assert.deepEqual(await readdir(f.paths.executions),[`${requestId}.json`]);
   assert.equal(f.calls.filter(args => args[0] === 'ps').length,10);
   assert.equal(f.calls.filter(args => args[0] === 'exec').length,1);
+});
+
+test('reports stronger recovery evidence only with a matching private proof and receipt',async t => {
+  for (const kind of ['valid','missing','checksum','receipt','time']) {
+    const f=await fixture(t);
+    const metadata=JSON.parse(await readFile(`${f.backup}.json`,'utf8'));
+    Object.assign(metadata,{inventoryMethod:'public-table-chunked-sha256-v1',inventory:[],inventorySha256:inventoryFingerprint([])});
+    await writeFile(`${f.backup}.json`,JSON.stringify(metadata));
+    const proof={method:recoveryMethod,status:'passed',backupSha256:metadata.sha256,
+      inventorySha256:metadata.inventorySha256,tableCount:0,verifiedAt:f.receipt.completedAt};
+    const receipt={...f.receipt,restoreCheck:recoveryMethod,startedAt:'2026-11-18T00:59:00Z',
+      recoveryEvidence:{inventorySha256:proof.inventorySha256,tableCount:0,verifiedAt:proof.verifiedAt}};
+    if (kind === 'checksum') proof.backupSha256='0'.repeat(64);
+    if (kind === 'receipt') receipt.recoveryEvidence.inventorySha256='0'.repeat(64);
+    if (kind === 'time') receipt.startedAt='invalid';
+    await writeFile(f.records[1],JSON.stringify(receipt));
+    if (kind !== 'missing') await writeFile(`${f.backup}.restore.json`,JSON.stringify(proof),{mode:0o600});
+    if (kind === 'valid') {
+      const report=await f.inspect({sha,requestId},f.dependencies);
+      assert.equal(report.backup.restoreVerification,`recorded-${recoveryMethod}`);
+      assert.deepEqual(report.backup.dataIntegrity,receipt.recoveryEvidence);
+    } else await assert.rejects(f.inspect({sha,requestId},f.dependencies));
+  }
 });
 
 test('rejects unsafe private records, tools, bundle files and backup links',async t => {
