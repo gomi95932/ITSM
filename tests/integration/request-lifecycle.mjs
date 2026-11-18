@@ -12,6 +12,7 @@ async function request(path,user='agent-1',body,key=randomUUID()){
 }
 async function ok(promise){const result=await promise;assert.equal(result.status,200,JSON.stringify(result));return result.data;}
 const get=(f,user)=>request(`/tickets/${f.ticketId}`,user);
+const rate=(f,user,body,key)=>request(`/tickets/${f.ticketId}/feedback`,user,body,key);
 const action=(f,version,action,user='agent-1',extra={},key=randomUUID())=>
   request(`/tickets/${f.ticketId}/actions`,user,{action,expectedVersion:version,...extra},key);
 const delivery={comment:'Requested service delivered and independently checked',resolutionCategory:'SERVICE_DELIVERED',evidence:'CI verification record'};
@@ -44,6 +45,11 @@ async function completionDenied(f,user='agent-1',operation='RESOLVE'){
 }
 
 const f=await createFulfillmentFixture();await startSla(f);
+assert.equal((await ok(get(f,'employee-1'))).canFeedback,false);
+const earlyFeedback=await rate(f,'employee-1',{rating:5});
+assert.equal(earlyFeedback.status,409);assert.equal(earlyFeedback.data.code,'FEEDBACK_NOT_AVAILABLE');
+assert.notEqual((await sql(`INSERT INTO ticket_feedback(ticket_id,requester_id,rating)
+  VALUES(${q(f.ticketId)},'employee-1',5)`,false)).code,0,'database rejects feedback before closure');
 let detail=await ok(get(f));assert.equal(detail.requestCompletionReady,false);
 let ticket=await ok(action(f,detail.version,'ACCEPT','agent-1',{comment:'I am responsible for delivery'}));
 assert.equal(ticket.assigneeId,'agent-1');assert.equal(ticket.status,'IN_PROGRESS');
@@ -88,6 +94,31 @@ assert.equal((await action(f,ticket.version,'REOPEN','employee-1',{reason:'Termi
 assert.equal(await sql(`SELECT count(*) FROM ticket_events e JOIN audit_logs a ON a.event_id=e.id
   JOIN outbox_events o ON o.event_id=e.id WHERE e.ticket_id=${q(f.ticketId)} AND e.action='CONFIRM'`),'1');
 assert.equal(await sql(`SELECT state FROM request_fulfillments WHERE id=${q(f.id)}`),'DELIVERED','ticket closure is not permission revocation');
+
+assert.equal((await ok(get(f,'employee-1'))).canFeedback,true);
+assert.equal((await ok(get(f,'agent-1'))).canFeedback,false);
+assert.equal((await rate(f,'agent-1',{rating:5})).status,403);
+assert.equal((await rate(f,'employee-2',{rating:5})).status,404);
+assert.notEqual((await sql(`INSERT INTO ticket_feedback(ticket_id,requester_id,rating)
+  VALUES(${q(f.ticketId)},'employee-2',5)`,false)).code,0,'database rejects feedback by another requester');
+const feedbackKey=randomUUID(),feedbackBody={rating:4,comment:'Service delivered as requested'};
+const [feedback,replay]=await Promise.all([
+  ok(rate(f,'employee-1',feedbackBody,feedbackKey)),ok(rate(f,'employee-1',feedbackBody,feedbackKey)),
+]);
+assert.deepEqual(feedback,replay);assert.equal(feedback.rating,4);
+const changedFeedback=await rate(f,'employee-1',{rating:5},feedbackKey);
+assert.equal(changedFeedback.status,409);assert.equal(changedFeedback.data.code,'IDEMPOTENCY_KEY_REUSED');
+assert.equal((await rate(f,'employee-1',{rating:5})).status,409);
+const rated=await ok(get(f,'employee-1'));
+assert.equal(rated.canFeedback,false);assert.equal(rated.feedback.comment,feedbackBody.comment);
+assert.equal(rated.version,ticket.version,'feedback does not change the ticket lifecycle version');
+for(const mutation of [
+  `UPDATE ticket_feedback SET rating=5 WHERE ticket_id=${q(f.ticketId)}`,
+  `DELETE FROM ticket_feedback WHERE ticket_id=${q(f.ticketId)}`,
+])assert.notEqual((await sql(mutation,false)).code,0,'request feedback remains immutable');
+assert.equal(await sql(`SELECT count(*) FROM ticket_events e JOIN audit_logs a ON a.event_id=e.id
+  JOIN outbox_events o ON o.event_id=e.id WHERE e.ticket_id=${q(f.ticketId)} AND e.action='FEEDBACK_SUBMITTED'`),'1');
+assert.equal(await sql(`SELECT state FROM request_fulfillments WHERE id=${q(f.id)}`),'DELIVERED');
 
 // Each missing or stale prerequisite is independently rejected, not just hidden in the UI.
 for(const state of [null,'READY','REVOKE_DUE','REVOKED','BLOCKED']){
@@ -140,4 +171,7 @@ assert.equal(await sql(`SELECT status FROM tickets WHERE id=${q(invalidAuto.tick
 assert.equal(await sql(`SELECT count(*) FROM ticket_events e JOIN audit_logs a ON a.event_id=e.id JOIN outbox_events o ON o.event_id=e.id
   WHERE e.ticket_id=${q(automatic.ticketId)} AND e.action='AUTO_CLOSE'`),'1');
 assert.equal(await sql(`SELECT count(*) FROM ticket_events WHERE ticket_id=${q(invalidAuto.ticketId)} AND action='AUTO_CLOSE'`),'0');
+assert.equal((await ok(get(automatic,'employee-1'))).canFeedback,true);
+assert.equal((await ok(rate(automatic,'employee-1',{rating:5}))).rating,5);
+assert.equal((await ok(get(invalidAuto,'employee-1'))).canFeedback,false);
 console.log('REQ lifecycle verified: personal owner, independent review, completion gates, atomic replay, reopening without duplicate grant, identity/callback/failure boundaries and guarded auto-close');

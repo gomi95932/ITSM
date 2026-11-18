@@ -48,6 +48,7 @@ for(const viewport of [{name:'desktop',width:1440,height:1000},{name:'mobile',wi
     await expect(page.getByRole('region',{name:'申请进度'})).toContainText('已交付');
     await expect(page.getByRole('button',{name:'交付仍有问题',exact:true})).toBeVisible();
     await expect(page.getByRole('button',{name:'确认已交付',exact:true})).toBeVisible();
+    await expect(page.getByRole('region',{name:'服务评价'})).toHaveCount(0);
     await expect(page.getByRole('alert')).toHaveCount(0);
     expect(await page.locator('body').innerText()).not.toContain(f.internalMarker);
     expect(await page.locator('body').innerText()).not.toContain(f.deliveryReference);
@@ -60,6 +61,17 @@ for(const viewport of [{name:'desktop',width:1440,height:1000},{name:'mobile',wi
     await expect(page.getByRole('button',{name:'确认已交付',exact:true})).toHaveCount(0);
     await expect(page.getByRole('button',{name:'交付仍有问题',exact:true})).toHaveCount(0);
     await expect(page.getByRole('region',{name:'申请进度'})).toContainText('已交付');
+    const feedback=page.getByRole('region',{name:'服务评价'});
+    await feedback.getByRole('combobox',{name:'满意度'}).selectOption('4');
+    await feedback.getByRole('textbox',{name:'补充意见（选填）'}).fill('Service delivered as requested');
+    await feedback.getByRole('checkbox',{name:'本次内容不含密码、密钥及安全事件证据'}).check();
+    await feedback.getByRole('button',{name:'提交评价',exact:true}).click();
+    await expect(feedback).toContainText('4 / 5');
+    await expect(feedback.getByRole('button',{name:'提交评价',exact:true})).toHaveCount(0);
+    await page.reload();
+    await expect(feedback).toContainText('Service delivered as requested');
+    expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+    await page.screenshot({path:`test-results/request-lifecycle-feedback-${viewport.name}.png`,fullPage:true});
     expect(serverErrors,'successful lifecycle navigation must not hide API failures').toEqual([]);
   });
 }

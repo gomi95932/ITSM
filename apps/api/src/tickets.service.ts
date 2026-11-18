@@ -405,7 +405,7 @@ export class TicketsService {
             updatedAt: progressRow.fulfillment_updated_at,
           } : null,
         } } : {}),
-        canFeedback:actor.id===ticket.requester_id && ticket.service_type==='INC' && ticket.status==='CLOSED' && !feedback?.rowCount,
+        canFeedback:actor.id===ticket.requester_id && ['INC','REQ'].includes(ticket.service_type) && ticket.status==='CLOSED' && !feedback?.rowCount,
         feedback:feedback?.rows[0] ?? null,
         canCorrectClassification:ticket.service_type!=='REQ' && !!membership.rowCount && ['QUEUED','IN_PROGRESS','WAITING_USER','WAITING_VENDOR'].includes(ticket.status)
           && !ticket.pending_assignee_id && (ticket.assignee_id===actor.id&&processing||(!ticket.assignee_id&&ticket.status==='QUEUED'&&dispatcher)),
@@ -435,7 +435,7 @@ export class TicketsService {
       if(ticket.requester_id!==actor.id)throw new ForbiddenException({code:'FEEDBACK_REQUESTER_REQUIRED'});
       const previous=await this.claim(client,actor.id,`feedback:${id}`,key,input);
       if(previous)return previous as TicketFeedback;
-      if(ticket.service_type!=='INC'||ticket.status!=='CLOSED')throw new ConflictException({code:'FEEDBACK_NOT_AVAILABLE'});
+      if(!['INC','REQ'].includes(ticket.service_type)||ticket.status!=='CLOSED')throw new ConflictException({code:'FEEDBACK_NOT_AVAILABLE'});
       const exists=await client.query('SELECT 1 FROM ticket_feedback WHERE ticket_id=$1',[id]);
       if(exists.rowCount)throw new ConflictException({code:'FEEDBACK_ALREADY_SUBMITTED'});
       const saved=await client.query<{rating:number;comment:string|null;createdAt:Date}>(
