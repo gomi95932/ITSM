@@ -94,7 +94,10 @@ async function poll(client: PoolClient, row: Delivery, userId: string, options: 
 
 export async function deliverNotification(options: Options): Promise<boolean> {
   if (options.mode==='disabled') return false;
-  const selected = await options.transaction(async client => {
+  const selected = await options.transaction<{
+    processed: boolean;
+    dispatch?: { id: string; link: ReturnType<typeof notificationLink> };
+  }>(async client => {
     await client.query('SELECT pg_advisory_xact_lock_shared(71820512)');
     const row = (await client.query<Delivery>(`${deliverySelect}
       WHERE d.state IN ('PENDING','SENDING','DISPATCHING') AND d.next_at<=clock_timestamp()
@@ -139,10 +142,10 @@ export async function deliverNotification(options: Options): Promise<boolean> {
     await client.query(`UPDATE notification_deliveries SET state='DISPATCHING',provider_recipient_hash=$2,
       next_at=clock_timestamp()+interval '60 seconds',last_error=NULL,updated_at=clock_timestamp() WHERE id=$1`,
     [row.id,recipientHash(options,target.userId)]);
-    return { ...processed, id:row.id, link };
+    return { ...processed, dispatch: { id:row.id, link } };
   });
-  if (!selected.id || !selected.link) return selected.processed;
-  const { id, link } = selected;
+  if (!selected.dispatch) return selected.processed;
+  const { id, link } = selected.dispatch;
 
   // Commit the checkpoint before sending so a crash cannot return the item to the send queue.
   await options.transaction(async client => {
