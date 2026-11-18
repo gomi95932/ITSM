@@ -31,7 +31,8 @@ const supportCatalog=computed(()=>catalog.value.filter(item=>item.type!=='REQ'&&
 const requestCatalog=computed(()=>catalog.value.filter(item=>item.type==='REQ'&&item.available));
 const unavailableCatalog=computed(()=>catalog.value.filter(item=>!item.available));
 const openCount=computed(()=>Object.entries(counts.value).filter(([status])=>!['CLOSED','CANCELLED','REJECTED'].includes(status)).reduce((sum,[,count])=>sum+count,0));
-const noticeLabels:Record<string,string>={PENDING:'待发送',SENDING:'平台受理，待确认',DELIVERED:'平台确认发送成功',SIMULATED:'开发模拟',DEAD:'失败待处理',SKIPPED:'已跳过'};
+const noticeLabels:Record<string,string>={PENDING:'待发送',DISPATCHING:'正在提交',SENDING:'平台受理，待确认',DELIVERED:'平台确认发送成功',SIMULATED:'开发模拟',DEAD:'失败待处理',SKIPPED:'已跳过',REVIEW_REQUIRED:'发送结果待核查'};
+const needsNoticeAttention=(item:Delivery)=>['DEAD','REVIEW_REQUIRED'].includes(item.state);
 const title=computed(()=>({mine:'我的工单',catalog:'服务目录',queue:'IT 工作台',notifications:'消息通知',delegations:'代报授权',knowledge:'知识库',reports:'服务报表',roles:'角色授权',routing:'路由告警','routing-config':'派单配置','service-structure':'服务组织','support-structure':'支持组',fulfillments:'交付与回收'})[view.value]);
 let refreshTimer:ReturnType<typeof setInterval>|undefined;
 let generation=0;
@@ -131,7 +132,16 @@ onBeforeUnmount(()=>{window.removeEventListener('hashchange',syncHash);if(refres
           <RoutingConfigPanel v-else-if="view==='routing-config'" :key="user.id" :user="user"/>
           <ServiceStructurePanel v-else-if="view==='service-structure'&&user.canManageRouting" :key="user.id" :user="user"/>
           <SupportStructurePanel v-else-if="view==='support-structure'&&user.canManageRoles" :key="user.id" :user="user"/>
-          <template v-else-if="view==='notifications'"><div class="section-heading"><p class="muted">最近 100 条消息 · {{notificationMode==='fake'?'开发模拟':notificationMode==='dingtalk'?'钉钉通知':'发送未启用'}}</p><span class="count-badge danger">{{notices.filter(item=>item.state==='DEAD').length}} 条待处理</span></div><div class="table-wrap"><table><thead><tr><th>工单</th><th>发送状态</th><th>尝试次数</th><th>异常代码</th><th>更新时间</th><th>操作</th></tr></thead><tbody><tr v-for="item in notices" :key="item.id"><td>{{item.number}}</td><td><span class="status" :class="{failed:item.state==='DEAD'}">{{noticeLabels[item.state]??item.state}}</span></td><td>{{item.attempts}}</td><td class="mono">{{item.lastError??'—'}}</td><td>{{formatDate(item.updatedAt)}}</td><td><button v-if="item.state==='DEAD' && item.canRetry" class="icon-button" title="重试发送" aria-label="重试发送" :disabled="!!retrying" @click="retry(item.id)"><RefreshCw :size="17" :class="{spin:retrying===item.id}"/></button></td></tr></tbody></table><div v-if="!notices.length" class="empty-state"><Bell :size="28"/><p>暂无消息记录</p></div></div></template>
+          <template v-else-if="view==='notifications'">
+            <div class="section-heading"><p class="muted">{{notificationMode==='fake'?'开发模拟':notificationMode==='dingtalk'?'钉钉通知':'发送未启用'}}</p><span class="count-badge danger">{{notices.filter(needsNoticeAttention).length}} 条待处理</span></div>
+            <div class="table-wrap"><table><thead><tr><th>工单</th><th>发送状态</th><th>尝试次数</th><th>异常代码</th><th>更新时间</th><th>操作</th></tr></thead><tbody>
+              <tr v-for="item in notices" :key="item.id">
+                <td>{{item.number}}</td><td><span class="status" :class="{failed:needsNoticeAttention(item)}">{{noticeLabels[item.state]??item.state}}</span></td>
+                <td>{{item.attempts}}</td><td class="mono">{{item.lastError??'—'}}</td><td>{{formatDate(item.updatedAt)}}</td>
+                <td><button v-if="item.state==='DEAD' && item.canRetry" class="icon-button" title="重试投递" aria-label="重试发送" :disabled="!!retrying" @click="retry(item.id)"><RefreshCw :size="17" :class="{spin:retrying===item.id}"/></button></td>
+              </tr>
+            </tbody></table><div v-if="!notices.length" class="empty-state"><Bell :size="28"/><p>暂无消息记录</p></div></div>
+          </template>
           <template v-else>
             <WorkQueueTabs v-if="view==='queue'" :model-value="workQueue" :counts="workQueues" :loading="loading" @update:model-value="selectWorkQueue"/>
             <section class="summary-strip" aria-label="工单概况">

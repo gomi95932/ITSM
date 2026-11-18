@@ -98,6 +98,12 @@ jobs:
         run: node tests/integration/routing-config.mjs
       - name: Verify targeted notification audiences, live revocation and scoped retries
         run: node tests/integration/notification-audience.mjs
+      - name: Verify notification recovery without duplicate sends
+        run: |
+          compose=(docker compose --env-file "$ITSM_CI_ENV" -f infra/compose/compose.yaml)
+          "${compose[@]}" stop worker
+          trap '"${compose[@]}" up -d --no-deps --wait worker' EXIT
+          "${compose[@]}" run --no-deps --rm -T -e ITSM_NOTIFICATION_CI=true --entrypoint node worker --input-type=module < tests/integration/notification-dispatch-runner.mjs
       - name: Verify resolution-based confirmation auto-close
         run: node tests/integration/auto-close.mjs
       - name: Verify requester-only immutable service feedback

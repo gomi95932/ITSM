@@ -123,7 +123,8 @@ onMounted(load);
           <p v-if="ticket.priorityAlert.notificationMode==='disabled'" class="danger-text">P1 通知发送未启用</p>
           <p v-else-if="ticket.priorityAlert.notificationMode==='fake'" class="amber-text">P1 通知：开发模拟，非真实送达</p>
           <p v-if="ticket.priorityAlert.deliveries.DEAD" class="danger-text">{{ticket.priorityAlert.deliveries.DEAD}} 条 P1 通知发送失败</p>
-          <p v-if="ticket.priorityAlert.deliveries.PENDING||ticket.priorityAlert.deliveries.SENDING" class="muted">P1 通知发送中</p>
+          <p v-if="ticket.priorityAlert.deliveries.REVIEW_REQUIRED" class="danger-text" role="status">{{ticket.priorityAlert.deliveries.REVIEW_REQUIRED}} 条 P1 通知发送结果待核查</p>
+          <p v-if="ticket.priorityAlert.deliveries.PENDING||ticket.priorityAlert.deliveries.DISPATCHING||ticket.priorityAlert.deliveries.SENDING" class="muted">P1 通知发送中</p>
           <p v-if="ticket.priorityAlert.deliveries.DELIVERED" class="muted">平台已确认发送 {{ticket.priorityAlert.deliveries.DELIVERED}} 条 P1 通知</p>
         </template>
         <form v-if="ticket.canReviewPriority" class="action-form" @submit.prevent="submitPriorityReview">

@@ -114,6 +114,10 @@ try {
     assert.equal(await canRetry(delivery,person),false,`${person} sees no retry command`);
   assert.equal(await canRetry(delivery,'dispatcher'),true);
   assert.equal(await canRetry(delivery,'lead'),true);
+  await db.query("UPDATE notification_deliveries SET state='REVIEW_REQUIRED' WHERE id=$1",[delivery]);
+  assert.equal(await canRetry(delivery,'lead'),false,'an uncertain send cannot be retried');
+  assert.equal(await retry(delivery,'lead'),404,'retry endpoint must reject an uncertain send');
+  await db.query("UPDATE notification_deliveries SET state='DEAD' WHERE id=$1",[delivery]);
   for (const person of ['peer','owner','admin','reviewer','candidate','expired','future','revoked'])
     assert.equal(await retry(delivery,person),404,`${person} cannot retry`);
   assert.equal((await db.query('SELECT state FROM notification_deliveries WHERE id=$1',[delivery])).rows[0].state,'DEAD');

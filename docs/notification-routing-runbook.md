@@ -2,7 +2,7 @@
 
 ## Scope
 
-This change implements blueprint B10/B11 audience selection and dead-letter retry authorization. It does not enable live DingTalk delivery or prove real DingTalk integration. Existing environment gates remain unchanged. No schema migration is required.
+This change implements blueprint B10/B11 audience selection, restricted retries and recovery when a send outcome is unknown. Live delivery remains subject to DingTalk configuration and acceptance.
 
 ## Recipient Rules
 
@@ -26,6 +26,14 @@ Audience selection runs when the outbox expands and again before each send attem
 Only an effective dispatcher or group lead for the ticket's current owning group may retry a DEAD delivery. Role authorization uses the shared role-change transaction lock and existing live role predicates. Denied retries return 404 and do not reset delivery state. Successful retries retain the delivery ID and provider task ID, reset the existing attempt cycle and write an operational audit. Provider acceptance is not proof of user receipt. Existing attempt limits apply per retry cycle; this change does not introduce a lifetime manual-retry cap.
 
 The notification list returns a live `canRetry` flag per delivery. The web client shows the retry command only for DEAD deliveries with that flag. The flag is presentation guidance, not an authorization token; POST always checks current permissions again.
+
+## Unconfirmed Sends
+
+The worker commits `DISPATCHING` before submitting a live notification. A provable token or configuration failure can return the delivery to the send queue. A timeout, interruption, or missing task ID after the checkpoint moves the delivery to `REVIEW_REQUIRED`. A known provider task may only be queried for a receipt. The worker matches the original enterprise, application and recipient before querying a receipt or recording SLA evidence.
+
+The DingTalk receipt must include the intended recipient in `read_user_id_list` or `unread_user_id_list` and exclude them from the failed, forbidden and invalid recipient lists. The worker preserves the numeric task ID exactly when querying the receipt. First-response timing still uses the configured acceptance notification policy. Confirm that policy in the live acceptance test.
+
+The notification list prioritizes records that require review. The current support group should check the work notification in DingTalk or contact the intended recipient. For a P1 incident, use the approved on-call channel and record the outcome in the ticket timeline. Keep the original delivery record for investigation. Migration 029 moves older in-flight deliveries with unverified send attempts or unbound task IDs to review.
 
 ## Verification
 

@@ -39,7 +39,8 @@ export class WorkspaceController {
       (d.state='DEAD' AND EXISTS(SELECT 1 FROM role_bindings r WHERE r.employee_id=$2 AND r.group_id=t.owner_group_id
         AND r.role_code IN ('DISPATCHER','GROUP_LEAD') AND ${ROLE_EFFECTIVE_SQL})) AS "canRetry"
       FROM notification_deliveries d JOIN outbox_events o ON o.id=d.outbox_id JOIN tickets t ON t.id=o.ticket_id
-      WHERE t.owner_group_id=ANY($1::text[]) ORDER BY d.updated_at DESC LIMIT 100`,[actor.groups,actor.id]);
+      WHERE t.owner_group_id=ANY($1::text[])
+      ORDER BY (d.state='REVIEW_REQUIRED') DESC,d.updated_at DESC,d.id LIMIT 100`,[actor.groups,actor.id]);
     return { mode: process.env.NOTIFICATION_MODE ?? 'disabled', items:result.rows };
   }
   @Get('routing-alerts') async routingAlerts(@Headers() h: H) {
@@ -61,7 +62,9 @@ export class WorkspaceController {
     if (!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(id)) throw new NotFoundException();
     return this.db.transaction(async client => {
       await client.query('SELECT pg_advisory_xact_lock_shared($1)',[ROLE_AUTHORIZATION_LOCK]);
-      const result = await client.query(`UPDATE notification_deliveries d SET state='PENDING',attempts=0,next_at=now(),last_error=NULL,updated_at=now()
+      const result = await client.query(`UPDATE notification_deliveries d SET
+        state=CASE WHEN d.provider_task_id IS NOT NULL THEN 'SENDING' ELSE 'PENDING' END,
+        attempts=0,next_at=now(),last_error=NULL,updated_at=now()
         FROM outbox_events o,tickets t WHERE d.id=$1 AND d.outbox_id=o.id AND o.ticket_id=t.id AND t.owner_group_id=ANY($2::text[])
         AND d.state='DEAD' AND EXISTS(SELECT 1 FROM role_bindings r WHERE r.employee_id=$3 AND r.group_id=t.owner_group_id
           AND r.role_code IN ('DISPATCHER','GROUP_LEAD') AND ${ROLE_EFFECTIVE_SQL}) RETURNING d.id`,[id,actor.groups,actor.id]);

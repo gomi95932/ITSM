@@ -12,6 +12,7 @@ for(const viewport of [{name:'desktop',width:1440,height:1000},{name:'mobile',wi
         {...base,id:'00000000-0000-4000-8000-000000000002',number:'NOTICE-PENDING',state:'PENDING',canRetry:true},
         {...base,id:'00000000-0000-4000-8000-000000000003',number:'NOTICE-ALLOWED',state:'DEAD',canRetry:permitted},
         {...base,id:'00000000-0000-4000-8000-000000000004',number:'NOTICE-LEGACY',state:'DEAD'},
+        {...base,id:'00000000-0000-4000-8000-000000000005',number:'NOTICE-UNCERTAIN',state:'REVIEW_REQUIRED',canRetry:true},
       ]}});
     });
     await page.goto('/');
@@ -20,7 +21,8 @@ for(const viewport of [{name:'desktop',width:1440,height:1000},{name:'mobile',wi
     const allowed=page.getByRole('row').filter({hasText:'NOTICE-ALLOWED'});
     await expect(allowed.getByRole('button',{name:'重试发送',exact:true})).toBeVisible();
     await expect(page.getByRole('button',{name:'重试发送',exact:true})).toHaveCount(1);
-    for(const number of ['NOTICE-DENIED','NOTICE-PENDING','NOTICE-LEGACY']){
+    await expect(page.getByText('发送结果待核查',{exact:true})).toBeVisible();
+    for(const number of ['NOTICE-DENIED','NOTICE-PENDING','NOTICE-LEGACY','NOTICE-UNCERTAIN']){
       const row=page.getByRole('row').filter({hasText:number});
       await expect(row).toBeVisible();
       await expect(row.getByRole('button',{name:'重试发送',exact:true})).toHaveCount(0);

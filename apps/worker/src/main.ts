@@ -7,8 +7,8 @@ import { dingtalkRequestApproval } from './dingtalk-request-approval.js';
 import { maintainRequestFulfillments,processNextRequestDelivery } from './request-fulfillment.js';
 import { fulfillmentReminderMinutes,maintainFulfillmentAttention } from './fulfillment-attention.js';
 import { shouldAutoClose } from './auto-close.js';
-import { notificationLink } from './notification-message.js';
-import { expandNotification, notificationRecipients, refreshFulfillmentNotificationAudiences } from './notification-audience.js';
+import { deliverNotification, NotificationBeforeSendError, parseNotificationResponse, serializeNotificationRequest } from './notification-delivery.js';
+import { expandNotification, refreshFulfillmentNotificationAudiences } from './notification-audience.js';
 
 const db = new Pool({ host:process.env.DB_HOST ?? 'db',database:process.env.DB_NAME ?? 'itsm',user:process.env.DB_USER ?? 'itsm',password:process.env.DB_PASSWORD,
   connectionTimeoutMillis:5000,statement_timeout:30000 });
@@ -37,27 +37,31 @@ const fulfillmentReminders={
   revokeMinutes:fulfillmentReminderMinutes(process.env.FULFILLMENT_REVOKE_REMINDER_MINUTES,60),
 };
 
-async function transaction(fn:(client:PoolClient)=>Promise<void>) {
+async function transaction<T>(fn:(client:PoolClient)=>Promise<T>): Promise<T> {
   const client = await db.connect();
-  try { await client.query('BEGIN'); await fn(client); await client.query('COMMIT'); }
+  try { await client.query('BEGIN'); const result = await fn(client); await client.query('COMMIT'); return result; }
   catch (e) { await client.query('ROLLBACK'); throw e; } finally { client.release(); }
 }
 
-async function provider(path:string,body?:object):Promise<any> {
+async function provider(path: 'asyncsend_v2' | 'getsendresult', body: object) {
   if (!process.env.DINGTALK_APP_KEY || !process.env.DINGTALK_APP_SECRET || !process.env.DINGTALK_AGENT_ID || !process.env.DINGTALK_CORP_ID)
-    throw new Error('DINGTALK_NOT_CONFIGURED');
+    throw new NotificationBeforeSendError('DINGTALK_NOT_CONFIGURED');
   if (!access || access.expires < Date.now()) {
     const url = new URL('https://oapi.dingtalk.com/gettoken');
     url.searchParams.set('appkey',process.env.DINGTALK_APP_KEY); url.searchParams.set('appsecret',process.env.DINGTALK_APP_SECRET);
-    const response = await fetch(url,{ signal:AbortSignal.timeout(10000) }); const data = await response.json() as any;
-    if (!response.ok || data.errcode !== 0 || !data.access_token) throw new Error('TOKEN_FAILED');
-    access = { token:data.access_token,expires:Date.now()+Math.min(data.expires_in ?? 7200,7200)*1000-60000 };
+    try {
+      const response = await fetch(url,{ signal:AbortSignal.timeout(10000),redirect:'error' });
+      const data = await response.json() as { errcode?: number; access_token?: string; expires_in?: number };
+      if (!response.ok || data.errcode!==0 || typeof data.access_token!=='string' || !data.access_token)
+        throw new Error('Invalid DingTalk token response');
+      access = { token:data.access_token,expires:Date.now()+Math.min(data.expires_in ?? 7200,7200)*1000-60000 };
+    } catch { throw new NotificationBeforeSendError('TOKEN_FAILED'); }
   }
   const response = await fetch(`https://oapi.dingtalk.com/topapi/message/corpconversation/${path}?access_token=${encodeURIComponent(access.token)}`,{
-    method:'POST',headers:{ 'Content-Type':'application/json' },body:JSON.stringify(body),signal:AbortSignal.timeout(10000),
+    method:'POST',headers:{ 'Content-Type':'application/json' },body:serializeNotificationRequest(body),signal:AbortSignal.timeout(10000),redirect:'error',
   });
-  const data = await response.json() as any;
-  if (!response.ok || data.errcode !== 0) { access = undefined; throw new Error('PROVIDER_REJECTED'); }
+  const data = parseNotificationResponse(await response.text());
+  if (!response.ok || data?.errcode !== 0) { access = undefined; throw new Error('PROVIDER_REJECTED'); }
   return data;
 }
 
@@ -71,47 +75,10 @@ async function expand() {
   });
 }
 
-async function deliver() {
-  if (mode === 'disabled') return;
-  await transaction(async client => {
-    const result = await client.query(`SELECT d.*,t.id AS ticket_id,t.number,t.requester_id,t.owner_group_id,t.pending_assignee_id,t.pending_group_id,e.action,e.to_status,e.id AS event_id
-      FROM notification_deliveries d JOIN outbox_events o ON o.id=d.outbox_id JOIN ticket_events e ON e.id=o.event_id JOIN tickets t ON t.id=o.ticket_id
-      WHERE d.state IN ('PENDING','SENDING') AND d.next_at<=now() ORDER BY (o.kind='P1_ALERT') DESC,d.next_at,d.id LIMIT 1 FOR UPDATE OF d SKIP LOCKED`);
-    const row = result.rows[0]; if (!row) return;
-    const permitted = await notificationRecipients(client,row.event_id,row.employee_id);
-    const recipient = await client.query(`SELECT e.active,l.ding_user_id FROM employees e
-      LEFT JOIN identity_links l ON l.employee_id=e.id AND l.corp_id=$2 WHERE e.id=$1`,[row.employee_id,process.env.DINGTALK_CORP_ID ?? '']);
-    const user = recipient.rows[0];
-    if (!user?.active || !permitted.length) {
-      await client.query("UPDATE notification_deliveries SET state='SKIPPED',last_error='RECIPIENT_NO_LONGER_AUTHORIZED',updated_at=now() WHERE id=$1",[row.id]); return;
-    }
-    if (mode === 'fake' && process.env.NODE_ENV !== 'production') {
-      await client.query("UPDATE notification_deliveries SET state='SIMULATED',attempts=attempts+1,last_error=NULL,updated_at=now() WHERE id=$1",[row.id]); return;
-    }
-    try {
-      if (mode !== 'dingtalk' || process.env.ENABLE_LIVE_NOTIFICATIONS !== 'true') throw new Error('LIVE_DELIVERY_DISABLED');
-      if (!user.ding_user_id) throw new Error('RECIPIENT_NOT_LINKED');
-      if (row.provider_task_id) {
-        const status = await provider('getsendresult',{ agent_id:process.env.DINGTALK_AGENT_ID,task_id:row.provider_task_id });
-        const sent = status.send_result?.sent_userid_list ?? [];
-        if (!Array.isArray(sent) || !sent.includes(user.ding_user_id)) throw new Error('DELIVERY_NOT_CONFIRMED');
-        await client.query("UPDATE notification_deliveries SET state='DELIVERED',last_error=NULL,updated_at=now() WHERE id=$1",[row.id]);
-        if (['ACCEPT','ACCEPT_HANDOVER','ACCEPT_OFFER'].includes(row.action) && row.employee_id === row.requester_id)
-          await client.query('UPDATE sla_cycles SET responded_at=now() WHERE ticket_id=$1 AND cycle=1 AND responded_at IS NULL',[row.ticket_id]);
-      } else {
-        const data = await provider('asyncsend_v2',{ agent_id:process.env.DINGTALK_AGENT_ID,userid_list:user.ding_user_id,to_all_user:false,
-          msg:{ msgtype:'link',link:notificationLink(process.env.ITSM_PUBLIC_URL ?? '',row) } });
-        if (data.task_id === undefined) throw new Error('TASK_NOT_RETURNED');
-        await client.query("UPDATE notification_deliveries SET state='SENDING',provider_task_id=$2,attempts=0,next_at=now()+interval '5 seconds',updated_at=now() WHERE id=$1",[row.id,String(data.task_id)]);
-      }
-    } catch (error) {
-      const known = error instanceof Error && /^[A-Z_]+$/.test(error.message) ? error.message : 'PROVIDER_UNAVAILABLE';
-      const attempts = row.attempts+1, max = row.provider_task_id ? 20 : 5;
-      await client.query(`UPDATE notification_deliveries SET state=$2,attempts=$3,last_error=$4,next_at=now()+($5 * interval '1 second'),updated_at=now() WHERE id=$1`,
-        [row.id,attempts >= max ? 'DEAD' : row.provider_task_id ? 'SENDING' : 'PENDING',attempts,known,Math.min(3600,5 * 2 ** attempts)]);
-    }
-  });
-}
+const notificationOptions = {
+  transaction, mode, production:process.env.NODE_ENV==='production', live:process.env.ENABLE_LIVE_NOTIFICATIONS==='true',
+  corpId:process.env.DINGTALK_CORP_ID ?? '', agentId:process.env.DINGTALK_AGENT_ID ?? '', publicUrl:process.env.ITSM_PUBLIC_URL ?? '', provider,
+};
 
 async function record(client:PoolClient,row:any,action:string,detail:object,from:string,to:string,previous?:any) {
   const event = randomUUID(), request = randomUUID();
@@ -299,7 +266,7 @@ async function tick() {
       for(let i=0;i<5&&!stopped;i++)if(!await processNextRequestDelivery(db,approvalProvider))break;
     await expand();
     await refreshFulfillmentNotificationAudiences(db);
-    for (let i=0;i<10 && !stopped;i++) await deliver();
+    for (let i=0;i<10 && !stopped;i++) if (!await deliverNotification(notificationOptions)) break;
     await writeFile('/tmp/itsm-worker-heartbeat', String(Date.now()), { mode:0o600 });
   }
   catch { console.error('ITSM worker cycle failed; retrying without logging payloads'); }
