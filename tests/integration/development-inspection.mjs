@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { chmod, copyFile, link, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, chown, copyFile, link, lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { test } from 'node:test';
@@ -10,16 +10,37 @@ assert.equal(process.getuid(),0,'Only run in disposable Linux CI with sudo, neve
 const checkout=fileURLToPath(new URL('../../',import.meta.url));
 const sha='a'.repeat(40),requestId='d'.repeat(32),instant=Date.parse('2026-11-18T01:02:00Z');
 const digest=value => createHash('sha256').update(value).digest('hex');
+const tools=['inspect-development.mjs','release.mjs','promote-release.mjs','stage-release.mjs','verify-release-source.mjs'];
 
 async function fixture(t) {
   const root=await mkdtemp('/run/itsm-inspection-test-');
   t.after(() => rm(root,{recursive:true,force:true}));
   const paths=Object.fromEntries(['tools','releases','state','executions'].map(name => [name,join(root,name)]));
   for (const directory of Object.values(paths)) await mkdir(directory,{mode:0o700});
-  for (const name of ['inspect-development.mjs','release.mjs','promote-release.mjs','stage-release.mjs','verify-release-source.mjs']) {
+  for (const name of tools) {
     const target=join(paths.tools,name);
     await copyFile(join(checkout,'scripts',name),target);
+    await chown(target,0,0);
     await chmod(target,0o600);
+  }
+  const { requireRootOwnedPath }=await import(pathToFileURL(join(paths.tools,'promote-release.mjs')));
+  for (const name of tools) {
+    const path=join(paths.tools,name);
+    try {
+      await requireRootOwnedPath(path);
+    } catch (error) {
+      let cursor=path;
+      const ancestors=[];
+      while (true) {
+        const info=await lstat(cursor);
+        ancestors.push({path:cursor,uid:info.uid,mode:(info.mode & 0o7777).toString(8),
+          links:info.nlink,file:info.isFile(),directory:info.isDirectory(),symlink:info.isSymbolicLink()});
+        if (cursor === '/') break;
+        cursor=dirname(cursor);
+      }
+      t.diagnostic(JSON.stringify({fixtureTrustFailure:ancestors}));
+      throw error;
+    }
   }
   const bundle=join(paths.releases,sha),files=[];
   for (const path of [...requiredReleaseFiles,'scripts/verify-development.mjs','db/migrations/002_inspection_fixture.sql']) {
