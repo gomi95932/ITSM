@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
+import { DEFAULT_CALENDAR } from '@itsm/contracts';
 import { deliverNotification, NotificationBeforeSendError, parseNotificationResponse, serializeNotificationRequest } from './apps/worker/dist/notification-delivery.js';
 
 if (process.env.ITSM_NOTIFICATION_CI !== 'true' || process.env.NODE_ENV === 'production') throw new Error('DISPOSABLE_NOTIFICATION_CI_ONLY');
@@ -41,7 +42,7 @@ async function delivery() {
     subject,description,fields,impact,urgency,priority,status) VALUES ($1,$2,$3,$3,$3,$3,'INC',1,
     'Notification recovery fixture','Disposable CI only','{}','INDIVIDUAL','LOW','P4','IN_PROGRESS')`,[ids.ticket,ids.ticket,fixture]);
   await db.query(`INSERT INTO sla_cycles(ticket_id,cycle,priority,calendar_snapshot,started_at,response_target,resolution_target)
-    VALUES ($1,1,'P4','{}',now(),540,2700)`,[ids.ticket]);
+    VALUES ($1,1,'P4',$2,now(),540,2700)`,[ids.ticket,JSON.stringify(DEFAULT_CALENDAR)]);
   await db.query(`INSERT INTO ticket_events(id,ticket_id,actor_id,action,to_status,detail,request_id)
     VALUES ($1,$2,$3,'ACCEPT','IN_PROGRESS','{}',$4)`,[ids.event,ids.ticket,fixture,randomUUID()]);
   await db.query(`INSERT INTO outbox_events(id,ticket_id,event_id,kind,payload,expanded_at,state)
