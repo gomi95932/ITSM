@@ -99,6 +99,7 @@ export const messages: Record<string,string> = {
   ROLE_VERSION_CONFLICT:'授权已被其他人更新，列表已刷新，请重新核对。',ROLE_STATE_CONFLICT:'授权状态已变化，列表已刷新，请重新核对。',
   ROLE_ADMIN_CONTINUITY_REQUIRED:'至少保留两名有效平台管理员；请先完成接替授权。紧急人员停用仍走现有受控停用渠道。',
   INVALID_REPORT_SERVICE_TYPE:'请选择故障工单或服务请求。',
+  INVALID_REPORT_OWNER_FILTER:'请选择全部负责人、尚未接单或具体处理人后重试。',
   INVALID_REPORT_WINDOW:'请选择有效日期范围，开始与结束日期最多相隔 30 天。',
   REPORT_WINDOW_TOO_LARGE:'查询结果超过 5000 条，请缩小日期范围后重试。',
   INVALID_FEEDBACK:'请选择 1 至 5 分，意见最多 1000 字。',FEEDBACK_NOT_AVAILABLE:'工单须为已关闭的故障或服务请求，当前暂不能评价。',

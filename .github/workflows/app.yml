@@ -189,7 +189,7 @@ jobs:
       - name: Verify browser evidence survived all isolated test phases
         run: |
           for viewport in desktop mobile; do
-            for scene in request-lifecycle-feedback reports-requests request-delivery-completed request-intake-progress; do
+            for scene in request-lifecycle-feedback reports-requests reports-personal request-delivery-completed request-intake-progress; do
               test -s "test-results/${scene}-${viewport}.png"
             done
           done
