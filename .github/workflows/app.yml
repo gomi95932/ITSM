@@ -74,6 +74,8 @@ jobs:
           '
       - name: Exercise workspace permissions, SLA and voice draft invariants
         run: node tests/integration/workspace.mjs
+      - name: Verify immediate session revocation after employee or identity changes
+        run: node tests/integration/identity-revocation.mjs
       - name: Verify ordinary intake blocks sensitive payloads without persistence
         run: |
           node tests/integration/intake-policy.mjs
