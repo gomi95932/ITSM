@@ -120,7 +120,7 @@ jobs:
       - name: Install CI browser
         run: npx playwright install --with-deps chromium
       - name: Exercise desktop and mobile employee and agent flows
-        run: npx playwright test
+        run: npx playwright test --output test-results/workspace
       - name: Verify REQ policy versions, publisher scope and fail-closed OA boundary
         run: node tests/integration/request-catalog.mjs
       - name: Verify durable OA and controlled manual fulfillment without enabling live service requests
@@ -162,7 +162,7 @@ jobs:
       - name: Verify desktop and mobile first-delivery workspace against synthetic provider
         env:
           ITSM_DELIVERY_CI_ENABLED: 'true'
-        run: npx playwright test tests/e2e/request-delivery.spec.ts
+        run: npx playwright test tests/e2e/request-delivery.spec.ts --output test-results/request-delivery
       - name: Restore default closed manual-delivery boundary
         if: ${{ always() && steps.enable-manual-delivery.outcome != 'skipped' && steps.enable-manual-delivery.outcome != '' }}
         run: |
@@ -185,7 +185,14 @@ jobs:
             "${compose[@]}" up -d --no-deps --wait --wait-timeout 90 api
           "${compose[@]}" up -d --no-deps --force-recreate --wait --wait-timeout 90 web
           node tests/integration/request-intake.mjs
-          ITSM_REQUEST_INTAKE_CI_ENABLED=true npx playwright test tests/e2e/request-intake.spec.ts
+          ITSM_REQUEST_INTAKE_CI_ENABLED=true npx playwright test tests/e2e/request-intake.spec.ts --output test-results/request-intake
+      - name: Verify browser evidence survived all isolated test phases
+        run: |
+          for viewport in desktop mobile; do
+            for scene in request-lifecycle-feedback reports-requests request-delivery-completed request-intake-progress; do
+              test -s "test-results/${scene}-${viewport}.png"
+            done
+          done
       - uses: actions/upload-artifact@v4
         if: always()
         with:

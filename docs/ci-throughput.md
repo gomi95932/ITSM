@@ -58,6 +58,22 @@ outdated commits; it does not establish a shorter duration for a single run.
 - A canceled run is superseded, not passed. Review the completed checks for
   the exact PR/head or release SHA before merging or deploying.
 
+## Browser evidence retention
+
+The general, manual-delivery and request-intake browser phases use separate
+Playwright output directories below `test-results/`. Scene screenshots keep
+their explicit filenames in the parent directory. A later Playwright
+invocation must not clean that parent and erase earlier screenshots or
+failure traces. Before artifact upload, the workflow checks both desktop
+and mobile evidence for request feedback, separate request reports, first
+delivery and employee intake progress. Upload still runs on failure so
+available partial evidence can be inspected.
+
+Run `44254124986` passed its tests but its final artifact contained only six
+request-intake images. That artifact cannot prove the visual appearance of
+the earlier feedback scenes. The output-directory change is a candidate
+fix, not retroactive visual acceptance of missing screenshots.
+
 ## Validation
 
 On 2026-11-15, a read-only check confirmed the development readiness
