@@ -137,14 +137,24 @@ for (const query of [`UPDATE ticket_responsibility_history SET status='IN_PROGRE
 // Run the actual migration against an isolated legacy-shaped table, then roll back all DDL.
 const migration = await readFile(new URL('../../db/migrations/031_responsibility_history.sql', import.meta.url), 'utf8');
 const schema = `history_${randomUUID().replaceAll('-', '')}`;
+const legacyGenId = randomUUID();
 const baseline = await sql(`BEGIN; CREATE SCHEMA ${schema}; SET LOCAL search_path=${schema},public;
   CREATE TABLE tickets (LIKE public.tickets INCLUDING ALL);
   INSERT INTO tickets SELECT * FROM public.tickets WHERE id=${q(source.ticketId)};
+  INSERT INTO tickets(id,number,requester_id,submitted_by_id,owner_group_id,service_code,service_type,
+    form_version,subject,description,fields,impact,urgency,priority,status,created_at)
+    VALUES(${q(legacyGenId)},${q(`GEN-${legacyGenId}`)},'employee-1','employee-1',${q(source.groupId)},
+      'GEN-OTHER','GEN',1,'Synthetic legacy GEN','Disposable migration fixture','{}','INDIVIDUAL','MEDIUM','P3',
+      'PENDING_ASSIGNMENT','2025-06-10 09:00:00+08');
   ${migration}
   DO $$ BEGIN
     IF NOT EXISTS(SELECT 1 FROM ticket_responsibility_history h JOIN tickets t ON t.id=h.ticket_id
       CROSS JOIN responsibility_recording r WHERE h.source='BASELINE' AND h.revision=1 AND h.observed_at=r.started_at
         AND h.observed_at>t.created_at+interval '1 day') THEN RAISE EXCEPTION 'LEGACY_HISTORY_BACKFILLED'; END IF;
+  END $$;
+  DO $$ BEGIN
+    IF NOT EXISTS(SELECT 1 FROM ticket_responsibility_history WHERE ticket_id=${q(legacyGenId)} AND source='BASELINE' AND revision=1
+      AND service_type='GEN' AND service_code='GEN-OTHER') THEN RAISE EXCEPTION 'LEGACY_GEN_BASELINE_MISSING'; END IF;
   END $$;
   UPDATE tickets SET status='WAITING_VENDOR',version=version+1 WHERE id=${q(source.ticketId)};
   DO $$ BEGIN

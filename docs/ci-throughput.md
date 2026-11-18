@@ -99,8 +99,20 @@ and does not prove the candidate passes. Previous `bb3943a` passed complete
 Application CI run `44254124986`; that result does not validate later code.
 
 The account owner must inspect Billing & plans, payment status and Actions
-budgets/limits. Do not raise a paid limit, change repository visibility,
+budgets/limits. Do not raise a paid limit, change repository visibility without owner authorization,
 disable checks, or install a privileged self-hosted runner as a workaround.
 After the account can start jobs, rerun the exact latest PR checks and
 record their final results. Avoid repeatedly retrying while this condition
 persists. Server readiness is not an alternative to the missing checks.
+
+Later on 2026-11-18 the repository owner changed visibility to public;
+the API confirmed `PUBLIC`. Rerunning the same-SHA checks started jobs:
+Bootstrap run `44280746877` passed, while Application CI `44280746968`,
+attempt 2, completed with a real GEN-intake test failure after its security,
+build, typecheck and unit-test steps passed. The historical journal's
+candidate service-type constraint rejected the already-supported GEN type.
+Billing no longer blocked this attempt; that fact is not a passing CI result.
+The candidate correction and regression fixtures need a new full run.
+Public source/history and Actions output require the owner's separate
+confidentiality review; a passing secret scan does not approve internal
+addresses, architecture documents or business information for disclosure.

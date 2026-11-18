@@ -21,7 +21,7 @@ CREATE TABLE ticket_responsibility_history (
   assignee_name text,
   status text NOT NULL,
   service_code text NOT NULL,
-  service_type text NOT NULL CHECK(service_type IN ('INC','REQ')),
+  service_type text NOT NULL CHECK(service_type IN ('INC','REQ','GEN')),
   pending_group_id text,
   pending_assignee_id text,
   assignment_kind text,

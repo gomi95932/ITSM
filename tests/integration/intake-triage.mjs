@@ -47,6 +47,9 @@ for(const code of ['INC-NONEXISTENT','INC-TRIAGE-OFF','INC-TRIAGE-HIDDEN'])asser
 assert.equal((await create(requester,{serviceCode:'REQ-ACCOUNT'})).status,503,'GEN must not unlock request fulfillment');
 assert.equal((await create(requester,{requesterId:'employee-2'})).status,400);
 const cancelCreated=await create();assert.equal(cancelCreated.status,201,JSON.stringify(cancelCreated));
+assert.equal(await sql(`SELECT count(*) FROM ticket_responsibility_history WHERE ticket_id=${quote(cancelCreated.data.id)}
+  AND revision=1 AND source='CREATED' AND service_type='GEN' AND service_code='GEN-OTHER'`),'1',
+  'GEN creation must commit with its responsibility observation');
 const cancelTicket=cancelCreated.data,cancelPath=`/tickets/${cancelTicket.id}/actions`,cancelBody={action:'CANCEL',expectedVersion:cancelTicket.version},cancelKey=randomUUID();
 assert.equal((await request(cancelPath,peer,cancelBody)).status,403,'visible agent cannot cancel for the requester');
 assert.equal((await request(cancelPath,requester,{...cancelBody,expectedVersion:cancelTicket.version+1})).status,409,'stale version cannot cancel');
@@ -106,6 +109,10 @@ assert.equal((await classify(before,owner,{reason:'Changed body'},correctionKey)
 assert.equal(await sql(`SELECT json_build_object('sla',(SELECT row_to_json(s) FROM sla_cycles s WHERE s.ticket_id=t.id),'updated',updated_at,
   'original',original_catalog_snapshot,'fields',original_fields,'owner',owner_group_id,'assignee',assignee_id,'priority',priority)::text FROM tickets t WHERE id=${quote(t.id)}`),preserved);
 detail=(await request(`/tickets/${t.id}`,owner)).data;assert.equal(detail.serviceCode,'INC-NET');assert.equal(detail.originalServiceCode,'GEN-OTHER');
+assert.ok(Number(await sql(`SELECT count(*) FROM ticket_responsibility_history WHERE ticket_id=${quote(t.id)}
+  AND service_type='GEN' AND service_code='GEN-OTHER'`))>0,'original GEN observations remain after classification');
+assert.equal(await sql(`SELECT service_type||':'||service_code FROM ticket_responsibility_history WHERE ticket_id=${quote(t.id)}
+  ORDER BY revision DESC LIMIT 1`),'INC:INC-NET','classification appends the corrected service without rewriting GEN history');
 assert.equal((await classify(t)).status,409,'same classification is rejected');
 assert.equal(await sql(`SELECT count(*) FROM ticket_events e JOIN audit_logs a ON a.event_id=e.id JOIN outbox_events o ON o.event_id=e.id
   WHERE e.ticket_id=${quote(t.id)} AND e.action='CLASSIFICATION_CORRECTED' AND a.before_value->>'serviceCode'='GEN-OTHER' AND a.after_value->>'serviceCode'='INC-NET'`),'1');

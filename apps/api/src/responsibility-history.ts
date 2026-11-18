@@ -1,8 +1,10 @@
+import type { TicketType } from '@itsm/contracts';
+
 export type ResponsibilityInterval = {
   ticketId: string; number: string; revision: number; source: 'CREATED' | 'BASELINE' | 'CHANGE';
   recordedAt: Date; from: Date; until: Date; elapsedSeconds: number; clockAdjusted: boolean;
   groupName: string; assigneeId: string | null; assigneeName: string | null; status: string;
-  pendingAcceptance: boolean; serviceCode: string; serviceType: 'INC' | 'REQ';
+  pendingAcceptance: boolean; serviceCode: string; serviceType: TicketType;
   historyOrigin: 'CREATED' | 'BASELINE'; firstRecordedAt: Date;
 };
 
