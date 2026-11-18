@@ -123,7 +123,9 @@ try {
 
   const moved = await delivery();
   calls = [];
+  answer = async () => taskResponse;
   await deliver();
+  assert.equal((await row(moved)).provider_task_id,taskId,'persist the submission before changing the recipient identity');
   await db.query('UPDATE identity_links SET ding_user_id=$2 WHERE corp_id=$1',[corpId,`${userId}-changed`]);
   await due(moved);
   await deliver();
