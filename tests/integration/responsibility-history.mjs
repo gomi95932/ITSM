@@ -145,7 +145,7 @@ const baseline = await sql(`BEGIN; CREATE SCHEMA ${schema}; SET LOCAL search_pat
     form_version,subject,description,fields,impact,urgency,priority,status,created_at)
     VALUES(${q(legacyGenId)},${q(`GEN-${legacyGenId}`)},'employee-1','employee-1',${q(source.groupId)},
       'GEN-OTHER','GEN',1,'Synthetic legacy GEN','Disposable migration fixture','{}','INDIVIDUAL','MEDIUM','P3',
-      'PENDING_ASSIGNMENT','2025-06-10 09:00:00+08');
+      'QUEUED','2025-06-10 09:00:00+08');
   ${migration}
   DO $$ BEGIN
     IF NOT EXISTS(SELECT 1 FROM ticket_responsibility_history h JOIN tickets t ON t.id=h.ticket_id

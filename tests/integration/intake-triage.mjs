@@ -89,7 +89,7 @@ const action=async(ticket,user,name,fields={})=>{
   assert.equal(response.status,200,JSON.stringify(response));return response.data;
 };
 t=await action(t,owner,'ACCEPT',{comment:'Triage started'});
-t=await action(t,owner,'REQUEST_INFO',{comment:'Please clarify the network location',dueAt:new Date(Date.now()+86400000).toISOString()});
+t=await action(t,owner,'REQUEST_INFO',{comment:'Please clarify the network location',waitingReason:'USER_INFORMATION',dueAt:new Date(Date.now()+86400000).toISOString()});
 t=await action(t,proxy,'ADD_INFO',{comment:'Office floor two'});
 const classify=(ticket,user=owner,extra={},key)=>request(`/tickets/${ticket.id}/classification`,user,{expectedVersion:ticket.version,serviceCode:'INC-NET',formVersion:1,fields:{location:'Office floor two'},reason:'Confirmed network issue',...extra},key);
 assert.equal((await classify(t,requester)).status,403);assert.equal((await classify(t,peer)).status,403);

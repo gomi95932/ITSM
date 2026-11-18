@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { ownerMatches, reportMetrics, reportOwnerFilter, reportServiceFilter, responsibilitySummary,
-  serviceMatches, serviceSummary, type ReportMetricItem } from './report-metrics.js';
+  serviceMatches, serviceSummary, waitingSummary, type ReportMetricItem } from './report-metrics.js';
 
 const item = (changes: Partial<ReportMetricItem> = {}): ReportMetricItem => ({ status: 'IN_PROGRESS', reopenCount: 0,
   rating: null, overdueEver: false, unapprovedCalendar: false, firstResponse: null, resolution: null,
   assigneeId: 'agent-a', assigneeName: 'Engineer A', assigneeActive: true, pendingAssigneeId: null,
-  acceptedHandoverCount: 0, ...changes });
+  acceptedHandoverCount: 0, waiting: null, ...changes });
 
 test('personal report filters are explicit and cannot combine an identity with all or unassigned', () => {
   assert.deepEqual(reportOwnerFilter(undefined, undefined), { ownerScope: 'ALL', employeeId: null });
@@ -76,4 +76,20 @@ test('service aggregates retain distinct codes, complete metrics and recorded ha
   assert.equal(responsibilitySummary(rows).find(row => row.employeeId === 'agent-a')?.metrics.acceptedHandovers, 3);
   assert.equal(reportMetrics([]).acceptedHandovers, 0);
   assert.deepEqual(serviceSummary([]), []);
+});
+
+test('waiting distribution separates unrecorded legacy reasons and follow-up deadlines from SLA breaches', () => {
+  const known = { reason:'VENDOR_PARTS', since:'2026-11-17T01:00:00.000Z', dueAt:'2026-11-18T01:00:00.000Z', followUpOverdue:true } as const;
+  const unknown = { reason:'UNRECORDED', since:null, dueAt:null, followUpOverdue:null } as const;
+  const rows = [item({ status:'WAITING_VENDOR', waiting:known }),item({ status:'WAITING_VENDOR',waiting:unknown }),
+    item({ status:'WAITING_USER',waiting:unknown }),item({ status:'WAITING_VENDOR',waiting:{...known,followUpOverdue:false} })];
+  assert.equal(reportMetrics(rows).waitingFollowUpOverdue,1);
+  assert.equal(reportMetrics(rows).overdueTickets,0,'follow-up deadlines never imply an SLA breach');
+  assert.equal(reportMetrics(rows).waitingUnrecorded,2);
+  assert.deepEqual(waitingSummary(rows),[
+    {status:'WAITING_VENDOR',reason:'VENDOR_PARTS',tickets:2,followUpOverdue:1},
+    {status:'WAITING_USER',reason:'UNRECORDED',tickets:1,followUpOverdue:null},
+    {status:'WAITING_VENDOR',reason:'UNRECORDED',tickets:1,followUpOverdue:null},
+  ]);
+  assert.deepEqual(waitingSummary([]),[]);
 });

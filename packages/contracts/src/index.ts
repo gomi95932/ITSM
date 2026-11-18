@@ -1,6 +1,7 @@
 export const API_PREFIX = 'api/v1';
 export * from './service-structure.js';
 export * from './service-structure-template.js';
+export * from './waiting.js';
 export { DEFAULT_CALENDAR, SLA_TARGETS, serviceMinutes, type ServiceCalendar } from './sla.js';
 export { assignmentDeadline } from './assignment.js';
 export type {SupportChangeKind,SupportChangeInput,SupportChangeDecision,SupportGroupView,SupportChangeView,SupportMemberView,SupportStructureView,SupportMembersView,SupportPeopleView,SupportAuditView,SupportDependencyKind,SupportDependenciesView} from './support.js';
@@ -23,7 +24,7 @@ export interface TicketListResponse {
   counts: Partial<Record<TicketStatus, number>>;
   workQueues?: WorkQueueCounts;
 }
-export const TICKET_ACTIONS = ['ACCEPT', 'REQUEST_INFO', 'ADD_INFO', 'WAIT_VENDOR', 'RESOLVE', 'CONFIRM', 'REOPEN', 'CANCEL', 'REASSIGN', 'INITIATE_HANDOVER', 'ACCEPT_HANDOVER', 'DECLINE_HANDOVER', 'CANCEL_HANDOVER', 'ASSIGN_OFFER', 'ACCEPT_OFFER', 'DECLINE_OFFER', 'CANCEL_OFFER', 'CONTINUATION_PROPOSE', 'CONTINUATION_APPROVE', 'CONTINUATION_REJECT', 'CONTINUATION_REVOKE'] as const;
+export const TICKET_ACTIONS = ['ACCEPT', 'REQUEST_INFO', 'ADD_INFO', 'WAIT_VENDOR', 'RESUME_VENDOR', 'RESOLVE', 'CONFIRM', 'REOPEN', 'CANCEL', 'REASSIGN', 'INITIATE_HANDOVER', 'ACCEPT_HANDOVER', 'DECLINE_HANDOVER', 'CANCEL_HANDOVER', 'ASSIGN_OFFER', 'ACCEPT_OFFER', 'DECLINE_OFFER', 'CANCEL_OFFER', 'CONTINUATION_PROPOSE', 'CONTINUATION_APPROVE', 'CONTINUATION_REJECT', 'CONTINUATION_REVOKE'] as const;
 export type TicketAction = typeof TICKET_ACTIONS[number];
 export type TicketType = 'INC' | 'REQ' | 'GEN';
 export type Impact = 'COMPANY' | 'DEPARTMENT' | 'INDIVIDUAL';
@@ -64,6 +65,7 @@ export interface TicketActionInput {
   comment?: string;
   reason?: string;
   dueAt?: string;
+  waitingReason?: import('./waiting.js').WaitReason;
   vendorReference?: string;
   vendorOwner?: string;
   resolutionCategory?: string;
@@ -121,6 +123,7 @@ export interface TicketView extends TicketReceipt {
   priorityReviewReason: string | null;
   canReviewPriority?: boolean;
   canFeedback?: boolean;
+  waiting?: import('./waiting.js').TicketWaiting | null;
   feedback?: TicketFeedback | null;
   priorityAlert?: { reviewersAvailable: boolean; overdue: boolean; notificationMode: string; deliveries: Record<string, number> };
   events?: { action: string; fromStatus: string | null; toStatus: string; detail: Record<string, string>; createdAt: string }[];

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { createFulfillmentFixture } from '../support/fulfillment.mjs';
+import { retireSupportGroup } from '../support/support-groups.mjs';
 
 if (process.env.GITHUB_ACTIONS !== 'true' || !process.env.ITSM_CI_ENV) throw new Error('DISPOSABLE_GITHUB_CI_ONLY');
 const base = 'http://127.0.0.1:8088/api/v1';
@@ -292,6 +293,7 @@ await sql(`INSERT INTO tickets(id,number,requester_id,submitted_by_id,owner_grou
 const oversized = await request(`/reports/summary${limitWindow}`, 'agent-1');
 assert.equal(oversized.status, 503, JSON.stringify(oversized));
 assert.equal(oversized.data.code, 'REPORT_WINDOW_TOO_LARGE', 'filters cannot hide a truncated full group cohort');
-await sql(`UPDATE support_groups SET enabled=false WHERE id=${quote(limitGroup)}`);
+await assert.rejects(sql(`UPDATE support_groups SET enabled=false WHERE id=${quote(limitGroup)}`), /SUPPORT_GROUP_DEPENDENCIES/);
+await retireSupportGroup(limitGroup);
 assert.equal((await request(`/reports/summary${limitWindow}`, 'agent-1')).status, 404);
 console.log('Reports verified: scoped INC/REQ, service and current-owner filters, catalog rename/unpublish, accepted-only group handovers, full-cohort limits, inactive groups, whole-ticket SLA and feedback');

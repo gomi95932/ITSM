@@ -1,3 +1,5 @@
+import type { TicketWaiting } from '@itsm/contracts';
+
 export type ReportOwnerScope = 'ALL' | 'UNASSIGNED' | 'PERSON';
 export type ReportOwnerFilter = { ownerScope: ReportOwnerScope; employeeId: string | null };
 export type ReportServiceFilter = { serviceCode: string | null };
@@ -24,6 +26,7 @@ export type ReportMetricItem = {
   resolution: { completed: boolean; overdue: boolean } | null;
   assigneeId: string | null; assigneeName: string | null; assigneeActive: boolean | null;
   pendingAssigneeId: string | null; acceptedHandoverCount: number;
+  waiting: TicketWaiting | null;
 };
 
 const terminal = new Set(['CLOSED', 'CANCELLED', 'REJECTED']);
@@ -34,6 +37,8 @@ export function reportMetrics(items: readonly ReportMetricItem[]) {
     pendingAcceptance: items.filter(i => !terminal.has(i.status) && i.pendingAssigneeId !== null).length,
     waitingUser: items.filter(i => i.status === 'WAITING_USER').length,
     waitingVendor: items.filter(i => i.status === 'WAITING_VENDOR').length,
+    waitingFollowUpOverdue: items.filter(i => i.waiting?.followUpOverdue === true).length,
+    waitingUnrecorded: items.filter(i => i.waiting?.reason === 'UNRECORDED').length,
     awaitingConfirmation: items.filter(i => i.status === 'PENDING_CONFIRMATION').length,
     acceptedHandovers: items.reduce((total, item) => total + item.acceptedHandoverCount, 0),
     responded: items.filter(i => i.firstResponse?.responded).length,
@@ -45,6 +50,21 @@ export function reportMetrics(items: readonly ReportMetricItem[]) {
     rated: ratings.length,
     satisfactionAverage: ratings.length ? Math.round(ratings.reduce((a, b) => a + b, 0) / ratings.length * 100) / 100 : null,
     unapprovedCalendarTickets: items.filter(i => i.unapprovedCalendar).length };
+}
+
+export function waitingSummary(items: readonly ReportMetricItem[]) {
+  const groups = new Map<string, { status: string; reason: TicketWaiting['reason']; tickets: number; followUpOverdue: number | null }>();
+  for (const item of items) {
+    if (!item.waiting || !['WAITING_USER','WAITING_VENDOR'].includes(item.status)) continue;
+    const key = `${item.status}:${item.waiting.reason}`;
+    const group = groups.get(key) ?? { status: item.status, reason: item.waiting.reason, tickets: 0,
+      followUpOverdue: item.waiting.reason === 'UNRECORDED' ? null : 0 };
+    group.tickets++;
+    if (item.waiting.followUpOverdue === true && group.followUpOverdue !== null) group.followUpOverdue++;
+    groups.set(key, group);
+  }
+  return [...groups.values()].sort((a, b) => (b.followUpOverdue ?? 0) - (a.followUpOverdue ?? 0) || b.tickets - a.tickets
+    || a.status.localeCompare(b.status) || a.reason.localeCompare(b.reason));
 }
 
 export function ownerMatches(item: Pick<ReportMetricItem, 'assigneeId'>, filter: ReportOwnerFilter): boolean {

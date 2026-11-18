@@ -1,6 +1,6 @@
 import type { Pool, PoolClient } from 'pg';
 
-type Audience = { requester?: boolean; owner?: boolean; pending?: boolean; queue?: boolean; escalation?: boolean; reviewer?: boolean; platformAdmin?: boolean; fulfillment?: boolean; deliveryFailure?: boolean };
+type Audience = { requester?: boolean; owner?: boolean; pending?: boolean; queue?: boolean; escalation?: boolean; reviewer?: boolean; platformAdmin?: boolean; fulfillment?: boolean; deliveryFailure?: boolean; waiting?: boolean };
 const audiences: Readonly<Record<string, Audience>> = {
   SUBMIT_AND_ROUTE: { requester:true, owner:true, queue:true },
   REQUEST_APPROVED: { requester:true, owner:true, queue:true },
@@ -9,6 +9,9 @@ const audiences: Readonly<Record<string, Audience>> = {
   REQUEST_INFO: { requester:true, owner:true },
   ADD_INFO: { requester:true, owner:true },
   WAIT_VENDOR: { owner:true },
+  RESUME_VENDOR: { requester:true, owner:true },
+  WAITING_USER_FOLLOW_UP_DUE: { waiting:true },
+  WAITING_VENDOR_FOLLOW_UP_DUE: { waiting:true },
   RESOLVE: { requester:true, owner:true },
   CONFIRM: { requester:true, owner:true },
   REOPEN: { requester:true, owner:true, queue:true },
@@ -55,6 +58,19 @@ export async function notificationRecipients(client: Pick<PoolClient,'query'>, e
   if (!event.rowCount) return [];
   const a = notificationAudience(event.rows[0]!.action);
   if (!Object.keys(a).length) return [];
+  if (a.waiting) {
+    const recipients = await client.query<{id:string}>(`SELECT e.id FROM ticket_waiting_active_signals s
+      JOIN tickets t ON t.id=s.ticket_id JOIN employees e ON e.active
+      WHERE s.event_id=$1 AND ($2::text IS NULL OR e.id=$2) AND (
+        (s.waiting_status='WAITING_USER' AND e.id=t.requester_id) OR
+        (e.id=t.assignee_id AND ticket_processing_eligible(t.id,e.id)) OR
+        ((t.assignee_id IS NULL OR NOT ticket_processing_eligible(t.id,t.assignee_id)) AND EXISTS(
+          SELECT 1 FROM role_bindings r JOIN group_memberships m ON m.employee_id=r.employee_id AND m.group_id=r.group_id
+          WHERE r.employee_id=e.id AND r.group_id=s.group_id AND r.role_code='GROUP_LEAD' AND r.status='ACTIVE'
+            AND r.valid_from<=clock_timestamp() AND r.valid_to>clock_timestamp()))
+      ) ORDER BY e.id`,[eventId,employeeId]);
+    return recipients.rows.map(row=>row.id);
+  }
   if(a.deliveryFailure){
     const recipients=await client.query<{id:string}>(`SELECT e.id FROM ticket_events v
       JOIN request_delivery_commands c ON c.id::text=v.detail->>'commandId'
@@ -112,6 +128,22 @@ export async function refreshFulfillmentNotificationAudiences(db: Pick<Pool,'con
     await client.query('SELECT pg_advisory_xact_lock_shared(71820512)');
     const pending=await client.query<{id:string;event_id:string}>(`SELECT o.id,o.event_id FROM outbox_events o
       JOIN request_fulfillment_active_signals s ON s.event_id=o.event_id AND s.ticket_id=o.ticket_id
+      WHERE o.expanded_at IS NOT NULL
+        AND (o.audience_checked_at IS NULL OR o.audience_checked_at<=clock_timestamp()-interval '60 seconds')
+      ORDER BY o.audience_checked_at NULLS FIRST,o.created_at,o.id LIMIT 20 FOR UPDATE OF o SKIP LOCKED`);
+    for (const event of pending.rows) await expandNotification(client,event.id,event.event_id);
+    await client.query('COMMIT');
+  } catch (error) { await client.query('ROLLBACK'); throw error; }
+  finally { client.release(); }
+}
+
+export async function refreshWaitingNotificationAudiences(db: Pick<Pool,'connect'>): Promise<void> {
+  const client = await db.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock_shared(71820512)');
+    const pending = await client.query<{id:string;event_id:string}>(`SELECT o.id,o.event_id FROM outbox_events o
+      JOIN ticket_waiting_active_signals s ON s.event_id=o.event_id AND s.ticket_id=o.ticket_id
       WHERE o.expanded_at IS NOT NULL
         AND (o.audience_checked_at IS NULL OR o.audience_checked_at<=clock_timestamp()-interval '60 seconds')
       ORDER BY o.audience_checked_at NULLS FIRST,o.created_at,o.id LIMIT 20 FOR UPDATE OF o SKIP LOCKED`);

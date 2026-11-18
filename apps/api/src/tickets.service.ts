@@ -11,12 +11,13 @@ import { ownershipDenial } from './ticket-ownership.js';
 import { canDispatch, canManageContinuity, ROLE_AUTHORIZATION_LOCK } from './role-policy.js';
 import { blockRequestApprovalOnCancellation, enqueueRequestApproval } from '@itsm/workflow';
 import { requestIntakePolicy } from './request-intake-policy.js';
+import { ticketWaiting, type WaitingRow } from './ticket-waiting.js';
 
 export function canViewRequestProgress(actorId: string, requesterId: string, serviceType: string): boolean {
   return actorId === requesterId && serviceType === 'REQ';
 }
 
-type TicketRow = {
+type TicketRow = WaitingRow & {
   id: string; number: string; requester_id: string; owner_group_id: string;
   service_code: string; service_type: string; form_version: number; subject: string;
   description: string; fields: Record<string, unknown>; impact: string; urgency: string;
@@ -30,12 +31,13 @@ type TicketRow = {
   submitted_by_id: string; delegation_id: string | null; original_catalog_snapshot: Record<string,unknown>;
   service_routing_snapshot: Record<string,unknown>;
   responsibility_epoch: number;
+  waiting_clock: Date;
 };
 type TicketResponseRow = Omit<TicketRow, 'assignment_due_at'> & { assignment_due_at: Date | string | null };
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const keys = new Set(['contentClass', 'serviceCode', 'formVersion', 'subject', 'description', 'impact', 'urgency', 'fields', 'draftId', 'delegationId', 'requestedValidityDays']);
-const actionKeys = new Set(['contentClass', 'action', 'expectedVersion', 'comment', 'reason', 'dueAt', 'vendorReference', 'vendorOwner', 'resolutionCategory', 'evidence', 'targetGroupId', 'targetAssigneeId', 'continuationId']);
+const actionKeys = new Set(['contentClass', 'action', 'expectedVersion', 'comment', 'reason', 'dueAt', 'waitingReason', 'vendorReference', 'vendorOwner', 'resolutionCategory', 'evidence', 'targetGroupId', 'targetAssigneeId', 'continuationId']);
 const names = `(SELECT display_name FROM employees WHERE id=t.assignee_id) AS assignee_name,
   (SELECT display_name FROM employees WHERE id=t.pending_assignee_id) AS pending_assignee_name,
   (SELECT name FROM support_groups WHERE id=t.owner_group_id) AS owner_group_name`;
@@ -282,12 +284,13 @@ export class TicketsService {
       serviceCode:row.service_code,serviceType:row.service_type,formVersion:row.form_version,
       requesterId:row.requester_id,submittedById:row.submitted_by_id,delegationId:row.delegation_id,
       priorityCandidateAt:row.priority_candidate_at,priorityReviewedAt:row.priority_reviewed_at,
-      priorityReviewedBy:row.priority_reviewed_by,priorityReviewReason:row.priority_review_reason };
+      priorityReviewedBy:row.priority_reviewed_by,priorityReviewReason:row.priority_review_reason,
+      waitingReason:row.waiting_reason_code,waitingSince:row.waiting_since,waitingDueAt:row.waiting_due_at };
   }
 
   private async accessible(client: PoolClient, actor: Identity, id: string, lock = false): Promise<TicketRow> {
     if (!uuid.test(id)) throw new NotFoundException();
-    const result = await client.query<TicketRow>(`SELECT t.*,${names} FROM tickets t WHERE id=$1 AND (requester_id=$2 OR owner_group_id IN
+    const result = await client.query<TicketRow>(`SELECT t.*,clock_timestamp() AS waiting_clock,${names} FROM tickets t WHERE id=$1 AND (requester_id=$2 OR owner_group_id IN
       (SELECT group_id FROM group_memberships WHERE employee_id=$2) OR (pending_assignee_id=$2 AND pending_group_id IN
       (SELECT group_id FROM group_memberships WHERE employee_id=$2)) OR owner_group_id IN
       (SELECT group_id FROM priority_reviewers WHERE employee_id=$2) OR ${delegatedAccess('$2')}) ${lock ? 'FOR UPDATE OF t' : ''}`,
@@ -384,7 +387,8 @@ export class TicketsService {
           if(!(error instanceof ConflictException)) throw error;
         }
       }
-      return { ...this.publicTicket(ticket),canAddInfo:actor.id===ticket.requester_id||delegated,
+      return { ...this.publicTicket(ticket),waiting:ticketWaiting(ticket,ticket.waiting_clock),
+        canAddInfo:actor.id===ticket.requester_id||delegated,
         canClaim:!!membership.rowCount&&(await client.query<{eligible:boolean}>('SELECT service_position_eligible($1,$2,$3) AS eligible',
           [JSON.stringify(ticket.service_routing_snapshot),actor.id,ticket.owner_group_id])).rows[0].eligible,
         canDispatchQueued:dispatcher,
@@ -627,7 +631,7 @@ export class TicketsService {
           throw new ConflictException({code:'REQUEST_DELIVERY_ALREADY_STARTED'});
         await blockRequestApprovalOnCancellation(client,id);
       }
-      if(['REQUEST_INFO','WAIT_VENDOR','RESOLVE'].includes(body.action))await this.requireProcessing(client,ticket,actor.id);
+      if(['REQUEST_INFO','WAIT_VENDOR','RESUME_VENDOR','RESOLVE'].includes(body.action))await this.requireProcessing(client,ticket,actor.id);
       if(ticket.service_type==='REQ'&&['RESOLVE','CONFIRM'].includes(body.action)
         && !(await client.query<{ready:boolean}>('SELECT request_ticket_completion_ready($1) AS ready',[id])).rows[0].ready)
         throw new ConflictException({code:'REQUEST_COMPLETION_NOT_READY'});
@@ -686,13 +690,22 @@ export class TicketsService {
         assignmentKind=null;assignmentDueAt=null;assignmentOfferedAt=null;assignmentPolicyVersionId=null;
       }
       const before = ticket.status;
+      let waitingReason=ticket.waiting_reason_code,waitingSince=ticket.waiting_since,waitingDueAt=ticket.waiting_due_at;
+      if(['REQUEST_INFO','WAIT_VENDOR'].includes(body.action)) {
+        const clock=(await client.query<{clock:Date}>('SELECT clock_timestamp() AS clock')).rows[0].clock;
+        if(Date.parse(body.dueAt!)<=clock.getTime())throw new BadRequestException({code:'WAITING_FOLLOW_UP_MUST_BE_FUTURE'});
+        waitingReason=body.waitingReason!;waitingSince=clock;waitingDueAt=new Date(body.dueAt!);
+      }
       const updated = await client.query<TicketRow>(`UPDATE tickets SET status=$2,owner_group_id=$3,assignee_id=$4,pending_group_id=$5,
         pending_assignee_id=$6,assignment_kind=$7,assignment_state=$8,assignment_offered_at=$9,assignment_due_at=$10,
-        assignment_policy_version_id=$11,version=version+1,updated_at=now() WHERE id=$1 RETURNING *`,
-        [id,next,group,assignee,pendingGroup,pendingAssignee,assignmentKind,assignmentState,assignmentOfferedAt,assignmentDueAt,assignmentPolicyVersionId]);
+        assignment_policy_version_id=$11,waiting_reason_code=$12,waiting_since=$13,waiting_due_at=$14,
+        version=version+1,updated_at=now() WHERE id=$1 RETURNING *`,
+        [id,next,group,assignee,pendingGroup,pendingAssignee,assignmentKind,assignmentState,assignmentOfferedAt,assignmentDueAt,assignmentPolicyVersionId,
+          waitingReason,waitingSince,waitingDueAt]);
       await this.sla.action(client,id,body.action,ticket.priority);
       await this.record(client, updated.rows[0], actor.id, body.action, before,
         { comment: body.comment, reason: body.reason, dueAt: body.dueAt, continuationId,
+          ...(['REQUEST_INFO','WAIT_VENDOR'].includes(body.action)?{waitingReason:body.waitingReason,waitingSince:waitingSince?.toISOString()}:{}),
           ...(continuationId?{authorizedAssigneeId:ticket.assignee_id,responsibilityEpoch:ticket.responsibility_epoch}:{}),
           vendorReference: body.vendorReference, vendorOwner: body.vendorOwner, resolutionCategory: body.resolutionCategory, evidence: body.evidence,
           ...(['REASSIGN','INITIATE_HANDOVER','ASSIGN_OFFER'].includes(body.action) || body.action.endsWith('_HANDOVER') || body.action.endsWith('_OFFER') ? {

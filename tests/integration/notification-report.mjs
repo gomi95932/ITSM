@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { createNotificationReportFixture } from '../support/notification-report.mjs';
 import { createFulfillmentFixture, fulfillmentSql as sql, literal as q } from '../support/fulfillment.mjs';
+import { retireSupportGroup } from '../support/support-groups.mjs';
 
 if (process.env.GITHUB_ACTIONS!=='true' || !process.env.ITSM_CI_ENV
   || process.env.ITSM_NOTIFICATION_REPORT_WORKER_STOPPED!=='true') throw new Error('STOPPED_DISPOSABLE_CI_WORKER_ONLY');
@@ -49,9 +50,8 @@ const unknown=await report(fixture.groupId,'&serviceType=REQ&state=OTHER');
 assert.equal(unknown.data.items.length,1); assert.equal(unknown.data.items[0].reason,'OTHER');
 assert.deepEqual((await report(fixture.groupId,'')).data.items,[],'default INC does not include REQ');
 assert.equal((await report(fixture.groupId,'&serviceType=REQ','employee-1')).status,404);
-await sql(`UPDATE support_groups SET enabled=false WHERE id=${q(fixture.groupId)}`);
-assert.equal((await report()).status,404,'disabled groups are not report scopes');
-await sql(`UPDATE support_groups SET enabled=true WHERE id=${q(fixture.groupId)}`);
+await assert.rejects(sql(`UPDATE support_groups SET enabled=false WHERE id=${q(fixture.groupId)}`), /SUPPORT_GROUP_DEPENDENCIES/);
+assert.equal((await report()).status,200,'active dependencies prevent retirement without removing report access');
 for(const extra of ['&serviceType=ALL','&serviceType=REQ&serviceType=INC','&state=unknown','&state=DEAD&state=PENDING'])
   assert.equal((await report(fixture.groupId,extra)).status,400,extra);
 assert.equal((await report(fixture.groupId,'&serviceType=REQ',viewer,'2025-02-30')).status,400);
@@ -66,6 +66,9 @@ assert.deepEqual((await report()).data.items,[],'old group loses current-owner s
 const destination=await report(target.groupId,'&serviceType=REQ','agent-1');
 assert.equal(destination.data.metrics.deliveries,11);
 assert.equal(JSON.stringify(destination.data).includes(fixture.marker),false);
+await sql(`UPDATE service_catalog SET published=false WHERE code=${q(fixture.serviceCode)}`);
+await retireSupportGroup(fixture.groupId);
+assert.equal((await report()).status,404,'reviewed retirement removes the former reporting scope');
 
 // Exhaust the full authorized cohort before filtering: no partial totals, even when DEAD has no matches.
 const crowded=await createFulfillmentFixture({state:null});

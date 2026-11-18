@@ -26,10 +26,18 @@ assert.deepEqual(race.map(item=>item.status).sort(),[200,409]);ticket=race.find(
 assert.equal((await detail()).canProcess,true);
 assert.equal((await detail()).canClaim,false,'exception never restores general position appointment');
 assert.equal((await ok(request(`/tickets/${ticket.id}`,'employee-1'))).continuations,undefined,'employee view never exposes internal grant records');
-ticket=await ok(action(ticket,f.owner,'WAIT_VENDOR',{comment:'跟进厂商处理',vendorReference:'CI-REF',vendorOwner:'当前责任人'}));
+ticket=await ok(action(ticket,f.owner,'WAIT_VENDOR',{comment:'跟进厂商处理',vendorReference:'CI-REF',vendorOwner:'当前责任人',
+  waitingReason:'VENDOR_SUPPORT',dueAt:new Date(Date.now()+3600000).toISOString()}));
 assert.equal((await detail()).canProcess,true,'ordinary version changes do not invalidate the scoped grant');
+ticket=await ok(action(ticket,f.owner,'RESUME_VENDOR',{comment:'厂商响应后继续验证'}));
+assert.equal(ticket.status,'IN_PROGRESS');
+assert.equal((await detail()).waiting,null);
+assert.equal(await sql(`SELECT row_to_json(s)::text FROM sla_cycles s WHERE ticket_id=${quote(ticket.id)}`),sla);
+ticket=await ok(action(ticket,f.owner,'WAIT_VENDOR',{comment:'继续跟进厂商验证',vendorReference:'CI-REF-2',vendorOwner:'当前责任人',
+  waitingReason:'VENDOR_SUPPORT',dueAt:new Date(Date.now()+3600000).toISOString()}));
 ticket=await ok(action(ticket,f.lead,'CONTINUATION_REVOKE',{continuationId:grant.id,reason:'提前结束临时授权'}));
 assert.equal((await action(ticket,f.owner,'RESOLVE',resolution)).data.code,'TICKET_CONTINUITY_REQUIRED');
+assert.equal((await action(ticket,f.owner,'RESUME_VENDOR',{comment:'已撤权，不得恢复处理'})).data.code,'TICKET_CONTINUITY_REQUIRED');
 assert.equal(await sql(`SELECT row_to_json(s)::text FROM sla_cycles s WHERE ticket_id=${quote(ticket.id)}`),sla);
 
 // A separately reviewed grant expires at the API boundary, without a worker scan.
@@ -40,6 +48,7 @@ assert.equal((await detail()).canProcess,true);
 await new Promise(resolve=>setTimeout(resolve,12500));
 assert.equal((await detail()).canProcess,false);
 assert.equal((await action(ticket,f.owner,'RESOLVE',resolution)).data.code,'TICKET_CONTINUITY_REQUIRED');
+assert.equal((await action(ticket,f.owner,'RESUME_VENDOR',{comment:'授权已到期，不得恢复处理'})).data.code,'TICKET_CONTINUITY_REQUIRED');
 
 ticket=await ok(action(ticket,f.owner,'CONTINUATION_PROPOSE',{reason:'交接前短期支持',dueAt:new Date(Date.now()+3600000).toISOString()}));
 grant=(await detail()).continuations.find(item=>item.current&&item.status==='PENDING');

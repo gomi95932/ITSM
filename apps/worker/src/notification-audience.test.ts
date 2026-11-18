@@ -2,6 +2,12 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { notificationAudience } from './notification-audience.js';
 
+test('waiting reminders recheck current waiting episode and current people instead of a fixed broadcast',()=>{
+  for(const action of ['WAITING_USER_FOLLOW_UP_DUE','WAITING_VENDOR_FOLLOW_UP_DUE'])
+    assert.deepEqual(notificationAudience(action),{waiting:true});
+  assert.deepEqual(notificationAudience('WAITING_UNKNOWN_FOLLOW_UP_DUE'),{});
+});
+
 test('approval results notify the requester and approval opens only the dispatch queue',()=>{
   assert.deepEqual(notificationAudience('REQUEST_APPROVED'),{requester:true,owner:true,queue:true});
   assert.deepEqual(notificationAudience('REQUEST_REJECTED'),{requester:true,owner:true});
@@ -28,13 +34,14 @@ test('continuity and supervisor handover notify named owner and escalation witho
 });
 
 test('only named public progress events include the requester', () => {
-  for (const action of ['SUBMIT_AND_ROUTE','ACCEPT','REQUEST_INFO','ADD_INFO','RESOLVE','CONFIRM','REOPEN','CANCEL','AUTO_CLOSE','ACCEPT_HANDOVER','ACCEPT_OFFER','CLASSIFICATION_CORRECTED','PRIORITY_REVIEWED'])
+  for (const action of ['SUBMIT_AND_ROUTE','ACCEPT','REQUEST_INFO','ADD_INFO','RESUME_VENDOR','RESOLVE','CONFIRM','REOPEN','CANCEL','AUTO_CLOSE','ACCEPT_HANDOVER','ACCEPT_OFFER','CLASSIFICATION_CORRECTED','PRIORITY_REVIEWED'])
     assert.equal(notificationAudience(action).requester,true,action);
   for (const action of ['WAIT_VENDOR','REASSIGN','ASSIGN_OFFER','ASSIGNMENT_EXPIRED','DECLINE_OFFER','CANCEL_OFFER','DECLINE_HANDOVER','CANCEL_HANDOVER','SLA_BREACH','OWNERSHIP_RECOVERED','OWNERSHIP_ESCALATION_REQUIRED','P1_CANDIDATE','P1_REVIEW_OVERDUE','P1_REVIEW_ROUTED','FEEDBACK_SUBMITTED'])
     assert.equal(notificationAudience(action).requester,undefined,action);
 });
 
 test('candidate, queue and escalation notifications are explicit, not group broadcasts', () => {
+  assert.deepEqual(notificationAudience('RESUME_VENDOR'),{requester:true,owner:true});
   assert.equal(notificationAudience('REASSIGN').pending,true);
   assert.equal(notificationAudience('ASSIGN_OFFER').pending,true);
   assert.equal(notificationAudience('ASSIGNMENT_EXPIRED').escalation,true);

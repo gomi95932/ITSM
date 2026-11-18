@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { nextTick, onMounted, ref } from 'vue';
 import { BarChart3, Bell, History, Search } from 'lucide-vue-next';
-import type { SessionUser } from '@itsm/contracts';
+import type { SessionUser,TicketWaiting } from '@itsm/contracts';
 import { api, errorText } from '../api';
-import { formatDate, statuses } from '../labels';
+import { formatDate, statuses,waitingReasons } from '../labels';
 import ResponsibilityHistoryPanel from './ResponsibilityHistoryPanel.vue';
 import NotificationReportPanel from './NotificationReportPanel.vue';
 
@@ -30,18 +30,21 @@ const selectedService = ref('');
 const groups = ref<{id:string;name:string}[]>([]), loading = ref(false), error = ref('');
 type Item = { id:string;number:string;createdAt:string;status:string;priority:string;reopenCount:number;rating:number|null;
   serviceCode:string;serviceName:string;acceptedHandoverCount:number;
+  waiting:TicketWaiting|null;
   assigneeId:string|null;assigneeName:string|null;assigneeActive:boolean|null;
   pendingAssigneeId:string|null;pendingAssigneeName:string|null;assignmentKind:'OFFER'|'HANDOVER'|null;
   firstResponse:{responded:boolean;minutes:number;target:number;overdue:boolean}|null;
   resolution:{completed:boolean;minutes:number;target:number;overdue:boolean}|null;overdueEver:boolean;unapprovedCalendar:boolean };
 type Metrics = {tickets:number;active:number;pendingAcceptance:number;waitingUser:number;waitingVendor:number;awaitingConfirmation:number;
   acceptedHandovers:number;
+  waitingFollowUpOverdue:number;waitingUnrecorded:number;
   responded:number;firstResponseOverdue:number;resolved:number;resolutionOverdue:number;overdueTickets:number;reopenedTickets:number;
   rated:number;satisfactionAverage:number|null;unapprovedCalendarTickets:number};
 type Responsibility = {employeeId:string|null;name:string|null;active:boolean|null;metrics:Metrics};
 type Service = {serviceCode:string;name:string;metrics:Metrics};
 type Report = { serviceType:'INC'|'REQ';asOf:string;ownerFilter:{ownerScope:'ALL'|'UNASSIGNED'|'PERSON';employeeId:string|null};
-  responsibility:Responsibility[];services:Service[];metrics:Metrics;items:Item[] };
+  responsibility:Responsibility[];services:Service[];metrics:Metrics;items:Item[];
+  waiting:{status:string;reason:TicketWaiting['reason'];tickets:number;followUpOverdue:number|null}[] };
 const report = ref<Report>();
 const owners = ref<Responsibility[]>([]);
 const services = ref<Service[]>([]);
@@ -134,12 +137,16 @@ const completion = (item:Item, type:Report['serviceType']) => item.resolution?.c
             <td :class="{'danger-text':service.metrics.overdueTickets}">{{service.metrics.overdueTickets}}</td><td>{{service.metrics.reopenedTickets}}</td><td>{{service.metrics.satisfactionAverage??'—'}}</td>
           </tr></tbody></table></div>
       </section>
-      <div class="table-wrap report-table"><table aria-label="工单指标明细"><thead><tr><th>工单</th><th>服务</th><th>创建时间</th><th>状态</th><th>当前责任</th><th>首响 / 目标</th><th>{{report.serviceType === 'REQ' ? '交付 / 目标' : '解决 / 目标'}}</th><th>本组已接收交接</th><th>重开</th><th>评价</th></tr></thead>
+      <section v-if="report.waiting.length" class="responsibility-section" aria-label="等待原因分布"><h2>等待原因分布</h2>
+        <div class="table-wrap report-table"><table aria-label="等待原因统计"><thead><tr><th>等待状态</th><th>原因</th><th>工单数</th><th>跟进已到期</th></tr></thead><tbody><tr v-for="item in report.waiting" :key="`${item.status}:${item.reason}`"><td>{{statuses[item.status]}}</td><td>{{waitingReasons[item.reason]}}</td><td>{{item.tickets}}</td><td :class="{'danger-text':item.followUpOverdue}">{{item.reason==='UNRECORDED'?'未记录':item.followUpOverdue}}</td></tr></tbody></table></div>
+      </section>
+      <div class="table-wrap report-table"><table aria-label="工单指标明细"><thead><tr><th>工单</th><th>服务</th><th>创建时间</th><th>状态</th><th>当前责任</th><th>等待跟进</th><th>首响 / 目标</th><th>{{report.serviceType === 'REQ' ? '交付 / 目标' : '解决 / 目标'}}</th><th>本组已接收交接</th><th>重开</th><th>评价</th></tr></thead>
         <tbody><tr v-for="item in report.items" :key="item.id"><td><button class="ticket-link" @click="emit('open',item.id)">{{item.number}}</button></td>
           <td class="service-name">{{item.serviceName}}<small>{{item.serviceCode}}</small></td>
           <td>{{formatDate(item.createdAt)}}</td><td>{{statuses[item.status as keyof typeof statuses] ?? item.status}}</td>
           <td>{{item.assigneeName??'尚未接单'}}<span v-if="item.assigneeActive===false" class="owner-warning">已停用</span>
             <small v-if="item.pendingAssigneeId" class="pending-owner">{{item.assignmentKind==='HANDOVER'?'交接待接收':'派单待接收'}}：{{item.pendingAssigneeName}}</small></td>
+          <td><template v-if="item.waiting">{{waitingReasons[item.waiting.reason]}}<small v-if="item.waiting.dueAt" class="pending-owner" :class="{'danger-text':item.waiting.followUpOverdue}">{{formatDate(item.waiting.dueAt)}}{{item.waiting.followUpOverdue?' · 已到期':''}}</small></template><template v-else>—</template></td>
           <td :class="{'danger-text':item.firstResponse?.overdue}">{{item.firstResponse ? `${item.firstResponse.responded?'已响':'待响'} · ${minutes(item.firstResponse.minutes)} / ${item.firstResponse.target}` : '—'}}</td>
           <td :class="{'danger-text':item.resolution?.overdue}">{{item.resolution ? `${completion(item,report.serviceType)} · ${minutes(item.resolution.minutes)} / ${item.resolution.target}` : '—'}}</td>
           <td>{{item.acceptedHandoverCount}}</td><td>{{item.reopenCount}}</td><td>{{item.rating ?? '—'}}</td></tr></tbody></table>

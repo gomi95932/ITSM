@@ -71,6 +71,7 @@ try {
   await client.query('UPDATE tickets SET assignee_id=$2 WHERE id=$1',[ticket,id('owner')]);
   const accepted=await audience('ACCEPT',['requester','owner']);
   await audience('WAIT_VENDOR',['owner']);
+  await audience('RESUME_VENDOR',['requester','owner']);
   await audience('P1_CANDIDATE',['owner','dispatcher','lead','reviewer']);
   await audience('SLA_BREACH',['owner','dispatcher','lead']);
   await audience('INTERNAL_COMMENT',[]);

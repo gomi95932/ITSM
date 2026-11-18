@@ -3,7 +3,8 @@ import { serviceMinutes, type ServiceCalendar } from '@itsm/contracts';
 import { AuthService } from './auth.service.js';
 import { Database } from './database.service.js';
 import { ownerMatches, reportMetrics, reportOwnerFilter, reportServiceFilter, responsibilitySummary,
-  serviceMatches, serviceSummary } from './report-metrics.js';
+  serviceMatches, serviceSummary, waitingSummary } from './report-metrics.js';
+import { ticketWaiting } from './ticket-waiting.js';
 import { historicalResponsibilitySummary, intervalMetrics, type ResponsibilityInterval } from './responsibility-history.js';
 import { notificationFilter, notificationMatches, notificationMetrics, notificationReason, notificationState,
   type NotificationReportItem } from './notification-report.js';
@@ -147,7 +148,7 @@ export class ReportsController {
         JOIN support_groups g ON g.id=m.group_id WHERE e.id=$1 AND e.active AND g.enabled AND m.group_id=$2`, [actor.id, groupId]);
       if (!membership.rowCount) throw new NotFoundException();
       const tickets = await client.query(`SELECT t.id,t.number,t.status,t.priority,t.created_at,f.rating,
-        t.service_code,c.name AS service_name,
+        t.service_code,c.name AS service_name,t.waiting_reason_code,t.waiting_since,t.waiting_due_at,
         t.assignee_id,a.display_name AS assignee_name,a.active AS assignee_active,
         t.pending_assignee_id,p.display_name AS pending_assignee_name,t.assignment_kind,
         (SELECT count(*)::int FROM ticket_events ev WHERE ev.ticket_id=t.id AND ev.action='REOPEN') AS reopen_count,
@@ -181,6 +182,7 @@ export class ReportsController {
         });
         const first = measured[0], latest = measured.at(-1);
         return { id: ticket.id, number: ticket.number, createdAt: ticket.created_at, status: ticket.status,
+          waiting:ticketWaiting(ticket,membership.rows[0].clock),
           serviceCode: ticket.service_code as string, serviceName: ticket.service_name as string,
           acceptedHandoverCount: ticket.accepted_handover_count as number,
           priority: ticket.priority, reopenCount: ticket.reopen_count as number, rating: ticket.rating as number | null,
@@ -202,7 +204,7 @@ export class ReportsController {
         ownerAttribution: 'CURRENT_ASSIGNEE', ownerFilter, serviceFilter, asOf: membership.rows[0].clock,
         handoverBasis: 'RECORDED_ACCEPT_HANDOVER_IN_GROUP', serviceNameBasis: 'CURRENT_CATALOG',
         responsibility: responsibilitySummary(items), services: serviceSummary(owned),
-        metrics: reportMetrics(filtered), items: filtered };
+        waiting:waitingSummary(filtered), metrics: reportMetrics(filtered), items: filtered };
     });
   }
 }

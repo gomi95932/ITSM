@@ -62,12 +62,13 @@ const classified=await request(`/tickets/${f.ticketId}/classification`,'agent-1'
 assert.equal(classified.status,409);assert.equal(classified.data.code,'CLASSIFICATION_NOT_ALLOWED');
 
 ticket=await ok(action(f,ticket.version,'REQUEST_INFO','agent-1',{
-  comment:'Confirm the requested scope',dueAt:new Date(Date.now()+3600000).toISOString()}));
+  comment:'Confirm the requested scope',waitingReason:'USER_INFORMATION',dueAt:new Date(Date.now()+3600000).toISOString()}));
 let sla=(await ok(get(f))).sla.at(-1);assert.equal(sla.pauseReason,'USER');assert.equal(sla.paused,true);
 ticket=await ok(action(f,ticket.version,'ADD_INFO','employee-1',{comment:'Requested scope confirmed'}));
 sla=(await ok(get(f))).sla.at(-1);assert.equal(sla.paused,false);assert.equal(sla.pauseReason,null);
 ticket=await ok(action(f,ticket.version,'WAIT_VENDOR','agent-1',{
-  comment:'Waiting for vendor validation',vendorReference:'VENDOR-CI-1',vendorOwner:'CI engineer'}));
+  comment:'Waiting for vendor validation',vendorReference:'VENDOR-CI-1',vendorOwner:'CI engineer',
+  waitingReason:'VENDOR_SUPPORT',dueAt:new Date(Date.now()+3600000).toISOString()}));
 assert.equal(ticket.status,'WAITING_VENDOR');await completionDenied(f);
 const task=await ok(request(`/fulfillments/${f.id}`,'agent-2'));
 await ok(request(`/fulfillments/${f.id}/review`,'agent-2',{

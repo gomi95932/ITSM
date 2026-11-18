@@ -6,9 +6,10 @@ import { maintainRequestApprovals,processNextRequestApproval } from './request-a
 import { dingtalkRequestApproval } from './dingtalk-request-approval.js';
 import { maintainRequestFulfillments,processNextRequestDelivery } from './request-fulfillment.js';
 import { fulfillmentReminderMinutes,maintainFulfillmentAttention } from './fulfillment-attention.js';
+import { maintainWaitingFollowUps } from './waiting-follow-up.js';
 import { shouldAutoClose } from './auto-close.js';
 import { deliverNotification, NotificationBeforeSendError, parseNotificationResponse, serializeNotificationRequest } from './notification-delivery.js';
-import { expandNotification, refreshFulfillmentNotificationAudiences } from './notification-audience.js';
+import { expandNotification, refreshFulfillmentNotificationAudiences, refreshWaitingNotificationAudiences } from './notification-audience.js';
 
 const db = new Pool({ host:process.env.DB_HOST ?? 'db',database:process.env.DB_NAME ?? 'itsm',user:process.env.DB_USER ?? 'itsm',password:process.env.DB_PASSWORD,
   connectionTimeoutMillis:5000,statement_timeout:30000 });
@@ -260,12 +261,13 @@ async function timers() {
 let ticks = 0;
 async function tick() {
   try {
-    if (ticks++ % 15 === 0) { await recoverOwnership(); await expireAssignments(); await priorityReviewTimers(); await maintainRequestApprovals(db); await maintainRequestFulfillments(db); await maintainFulfillmentAttention(db,fulfillmentReminders); await timers(); }
+    if (ticks++ % 15 === 0) { await recoverOwnership(); await expireAssignments(); await priorityReviewTimers(); await maintainRequestApprovals(db); await maintainRequestFulfillments(db); await maintainFulfillmentAttention(db,fulfillmentReminders); await maintainWaitingFollowUps(db); await timers(); }
     if(approvalProvider)for(let i=0;i<5&&!stopped;i++)if(!await processNextRequestApproval(db,approvalProvider))break;
     if(approvalProvider&&process.env.ENABLE_MANUAL_REQUEST_DELIVERY==='true')
       for(let i=0;i<5&&!stopped;i++)if(!await processNextRequestDelivery(db,approvalProvider))break;
     await expand();
     await refreshFulfillmentNotificationAudiences(db);
+    await refreshWaitingNotificationAudiences(db);
     for (let i=0;i<10 && !stopped;i++) if (!await deliverNotification(notificationOptions)) break;
     await writeFile('/tmp/itsm-worker-heartbeat', String(Date.now()), { mode:0o600 });
   }

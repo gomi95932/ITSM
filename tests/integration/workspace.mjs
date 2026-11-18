@@ -31,11 +31,12 @@ let version=1;
 async function action(user,action,extra={}){const result=await request(`/tickets/${id}/actions`,user,'POST',{action,expectedVersion:version,...extra});assert.equal(result.status,200,JSON.stringify(result));version=result.data.version;return result;}
 assert.equal((await request(`/tickets/${id}/actions`,'agent-1','POST',{action:'ACCEPT',expectedVersion:version})).status,400);
 await action('agent-1','ACCEPT',{comment:'正在排查 WMS 登录问题'});
-await action('agent-1','REQUEST_INFO',{comment:'请提供报错时间',dueAt:new Date(Date.now()+3600000).toISOString()});
+await action('agent-1','REQUEST_INFO',{comment:'请提供报错时间',waitingReason:'USER_INFORMATION',dueAt:new Date(Date.now()+3600000).toISOString()});
 assert.equal((await request(`/tickets/${id}`)).data.sla[0].paused,true);
 await action('employee-1','ADD_INFO',{comment:'今天上午十点开始'});
 assert.equal((await request(`/tickets/${id}`)).data.sla[0].paused,false);
-await action('agent-1','WAIT_VENDOR',{comment:'联系厂商',vendorReference:'vendor-001',vendorOwner:'service desk'});
+await action('agent-1','WAIT_VENDOR',{comment:'联系厂商',vendorReference:'vendor-001',vendorOwner:'service desk',
+  waitingReason:'VENDOR_SUPPORT',dueAt:new Date(Date.now()+3600000).toISOString()});
 assert.equal((await request(`/tickets/${id}`)).data.sla[0].paused,false);
 await action('agent-1','RESOLVE',{comment:'已恢复',resolutionCategory:'FIX',evidence:'登录验证'});
 assert.equal((await request(`/tickets/${id}`)).data.sla[0].completed,true);

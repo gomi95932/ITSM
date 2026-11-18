@@ -135,6 +135,14 @@ jobs:
         run: node tests/integration/fulfillment-attention.mjs
       - name: Verify service report boundaries and lifecycle metrics
         run: node tests/integration/reports.mjs
+      - name: Verify structured waiting, follow-up deadlines, ownership continuity and scoped reports
+        run: node tests/integration/ticket-waiting.mjs
+      - name: Verify waiting reminders, live recipient qualification, atomic recovery and concurrent deduplication
+        run: |
+          compose=(docker compose --env-file "$ITSM_CI_ENV" -f infra/compose/compose.yaml)
+          "${compose[@]}" stop worker
+          trap 'result=$?; "${compose[@]}" up -d --no-deps --wait --wait-timeout 90 worker || result=1; exit "$result"' EXIT
+          node tests/integration/waiting-follow-up.mjs
       - name: Verify historical responsibility capture, legacy baseline and scoped interval reports
         run: node tests/integration/responsibility-history.mjs
       - name: Verify scoped notification reports, private-field filtering and full-cohort limits
@@ -199,7 +207,7 @@ jobs:
       - name: Verify browser evidence survived all isolated test phases
         run: |
           for viewport in desktop mobile; do
-            for scene in request-lifecycle-feedback reports-requests reports-personal reports-history reports-notifications request-delivery-completed request-intake-progress; do
+            for scene in request-lifecycle-feedback reports-requests reports-personal reports-history reports-notifications waiting-detail waiting-reports request-delivery-completed request-intake-progress; do
               test -s "test-results/${scene}-${viewport}.png"
             done
           done

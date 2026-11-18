@@ -1,5 +1,6 @@
 import { BadRequestException, ConflictException } from '@nestjs/common';
-import type { TicketActionInput, TicketStatus } from '@itsm/contracts';
+import { waitReasonMatches, type TicketActionInput, type TicketStatus } from '@itsm/contracts';
+import { isWaitingDeadline } from './ticket-waiting.js';
 
 export type ActorRole = 'requester' | 'agent';
 
@@ -11,7 +12,7 @@ export function transition(status: TicketStatus, role: ActorRole, input: Omit<Ti
         QUEUED: { ACCEPT: 'IN_PROGRESS', REASSIGN: 'QUEUED', ASSIGN_OFFER: 'QUEUED' },
         IN_PROGRESS: { ACCEPT: 'IN_PROGRESS', REQUEST_INFO: 'WAITING_USER', WAIT_VENDOR: 'WAITING_VENDOR', RESOLVE: 'PENDING_CONFIRMATION', REASSIGN: 'IN_PROGRESS', ASSIGN_OFFER:'IN_PROGRESS' },
         WAITING_USER: { ACCEPT: 'WAITING_USER', REASSIGN: 'WAITING_USER' },
-        WAITING_VENDOR: { ACCEPT: 'WAITING_VENDOR', RESOLVE: 'PENDING_CONFIRMATION', REASSIGN: 'WAITING_VENDOR' },
+        WAITING_VENDOR: { ACCEPT: 'WAITING_VENDOR', RESUME_VENDOR: 'IN_PROGRESS', RESOLVE: 'PENDING_CONFIRMATION', REASSIGN: 'WAITING_VENDOR' },
         PENDING_CONFIRMATION: { ACCEPT: 'PENDING_CONFIRMATION', REASSIGN: 'PENDING_CONFIRMATION' },
       }
     : {
@@ -32,21 +33,25 @@ export function transition(status: TicketStatus, role: ActorRole, input: Omit<Ti
   if (action === 'ACCEPT_HANDOVER' && !input.comment?.trim()) throw new BadRequestException({ code: 'HUMAN_RESPONSE_REQUIRED' });
   if (action === 'ACCEPT_OFFER' && !input.comment?.trim()) throw new BadRequestException({ code: 'HUMAN_RESPONSE_REQUIRED' });
   if (['DECLINE_HANDOVER','CANCEL_HANDOVER','DECLINE_OFFER','CANCEL_OFFER'].includes(action) && !input.reason?.trim()) throw new BadRequestException({ code: 'HANDOVER_REASON_REQUIRED' });
-  if (action === 'REQUEST_INFO' && (!input.comment?.trim() || !validFutureDate(input.dueAt)))
+  if (action === 'REQUEST_INFO' && (!input.comment?.trim() || !isWaitingDeadline(input.dueAt)))
     throw new BadRequestException({ code: 'INFO_REQUEST_REQUIRES_QUESTION_AND_DUE_DATE' });
   if (action === 'WAIT_VENDOR' && (!input.vendorReference?.trim() || !input.comment?.trim()))
     throw new BadRequestException({ code: 'VENDOR_REFERENCE_REQUIRED' });
   if (action === 'WAIT_VENDOR' && !input.vendorOwner?.trim())
     throw new BadRequestException({ code: 'VENDOR_OWNER_REQUIRED' });
+  if (action === 'WAIT_VENDOR' && !isWaitingDeadline(input.dueAt))
+    throw new BadRequestException({ code: 'WAITING_FOLLOW_UP_REQUIRED' });
+  if (['REQUEST_INFO','WAIT_VENDOR'].includes(action) && !waitReasonMatches(action, input.waitingReason))
+    throw new BadRequestException({ code: 'WAITING_REASON_REQUIRED' });
+  if (!['REQUEST_INFO','WAIT_VENDOR'].includes(action) && input.waitingReason !== undefined)
+    throw new BadRequestException({ code: 'INVALID_WAITING_REASON' });
   if (action === 'ADD_INFO' && !input.comment?.trim())
     throw new BadRequestException({ code: 'SUPPLEMENT_REQUIRED' });
+  if (action === 'RESUME_VENDOR' && !input.comment?.trim())
+    throw new BadRequestException({ code: 'VENDOR_RESUME_COMMENT_REQUIRED' });
   if (action === 'RESOLVE' && (!input.comment?.trim() || !input.resolutionCategory?.trim() || !input.evidence?.trim()))
     throw new BadRequestException({ code: 'RESOLUTION_DETAILS_REQUIRED' });
   if (action === 'REOPEN' && !input.reason?.trim())
     throw new BadRequestException({ code: 'REOPEN_REASON_REQUIRED' });
   return next;
-}
-
-function validFutureDate(value: string | undefined): boolean {
-  return !!value && !Number.isNaN(Date.parse(value)) && Date.parse(value) > Date.now();
 }
