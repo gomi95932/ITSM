@@ -100,7 +100,10 @@ for (const viewport of [{ name:'desktop', width:1440, height:900 }, { name:'mobi
       WHERE id=${literal(owned.ticketId)};
       UPDATE tickets SET created_at=${literal(`${day} 11:00:00+08`)},pending_group_id=owner_group_id,pending_assignee_id='agent-2',
         assignment_kind='OFFER',assignment_state='PENDING',assignment_offered_at=now()
-      WHERE id=${literal(offered.ticketId)}`);
+      WHERE id=${literal(offered.ticketId)};
+      INSERT INTO ticket_events(ticket_id,actor_id,action,from_status,to_status,detail,request_id)
+        VALUES(${literal(owned.ticketId)},'agent-1','ACCEPT_HANDOVER','IN_PROGRESS','IN_PROGRESS',
+          jsonb_build_object('targetGroupId',${literal(owned.groupId)}),'CI-only-report-handover')`);
     await page.setViewportSize({ width:viewport.width, height:viewport.height });
     await page.goto('/');
     await page.getByRole('combobox',{ name:'开发身份' }).selectOption('agent-1');
@@ -119,7 +122,19 @@ for (const viewport of [{ name:'desktop', width:1440, height:900 }, { name:'mobi
     await expect(detail.getByRole('button',{ name:`REQ-${offered.ticketId}`, exact:true })).toBeVisible();
     await expect(owner.locator('option[value="PERSON:agent-1"]')).toHaveCount(1);
     await expect(owner.locator('option[value="PERSON:agent-2"]')).toHaveCount(0);
+    const service = page.getByRole('combobox',{ name:'服务目录', exact:true });
+    const summary = page.getByRole('table',{ name:'服务指标汇总' });
+    await expect(summary.getByRole('row')).toHaveCount(3);
+    await expect(summary.getByRole('row').filter({ hasText:owned.serviceCode }).getByRole('cell').nth(4)).toHaveText('1');
+    await expect(summary.getByRole('row').filter({ hasText:offered.serviceCode }).getByRole('cell').nth(4)).toHaveText('0');
+    await service.selectOption(offered.serviceCode);
+    await expect(detail).toHaveCount(0);
+    await page.getByRole('button',{ name:'查询', exact:true }).click();
+    await expect(detail.getByRole('button',{ name:`REQ-${owned.ticketId}`, exact:true })).toHaveCount(0);
+    await expect(detail.getByRole('button',{ name:`REQ-${offered.ticketId}`, exact:true })).toBeVisible();
+    await expect(summary.getByRole('row')).toHaveCount(3);
     await owner.selectOption('UNASSIGNED');
+    await expect(service).toHaveValue('');
     await expect(detail).toHaveCount(0);
     await page.getByRole('button',{ name:'查询', exact:true }).click();
     await expect(detail.getByRole('button',{ name:`REQ-${owned.ticketId}`, exact:true })).toHaveCount(0);
@@ -130,10 +145,14 @@ for (const viewport of [{ name:'desktop', width:1440, height:900 }, { name:'mobi
     await page.getByRole('button',{ name:'查询', exact:true }).click();
     await expect(detail.getByRole('button',{ name:`REQ-${owned.ticketId}`, exact:true })).toBeVisible();
     await expect(detail.getByRole('button',{ name:`REQ-${offered.ticketId}`, exact:true })).toHaveCount(0);
+    await expect(summary.getByRole('row')).toHaveCount(2);
+    await expect(page.getByText('本组已接收交接 1 次',{ exact:false })).toBeVisible();
+    await expect(service.locator(`option[value="${offered.serviceCode}"]`)).toHaveCount(0);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.screenshot({ path:`test-results/reports-personal-${viewport.name}.png`, fullPage:true });
     await page.getByRole('combobox',{ name:'工单类型' }).selectOption('INC');
     await expect(owner).toHaveValue('ALL');
+    await expect(service).toHaveValue('');
     await expect(detail).toHaveCount(0);
     await page.getByRole('button',{ name:'查询', exact:true }).click();
     await expect(page.getByText('新增故障',{ exact:true })).toBeVisible();

@@ -1,5 +1,12 @@
 export type ReportOwnerScope = 'ALL' | 'UNASSIGNED' | 'PERSON';
 export type ReportOwnerFilter = { ownerScope: ReportOwnerScope; employeeId: string | null };
+export type ReportServiceFilter = { serviceCode: string | null };
+
+export function reportServiceFilter(value: unknown): ReportServiceFilter | null {
+  if (value === undefined) return { serviceCode: null };
+  return typeof value === 'string' && value.length <= 200 && value.trim() === value && value.length > 0
+    ? { serviceCode: value } : null;
+}
 
 export function reportOwnerFilter(scope: unknown, employeeId: unknown): ReportOwnerFilter | null {
   const ownerScope = scope === undefined ? 'ALL' : scope;
@@ -16,7 +23,7 @@ export type ReportMetricItem = {
   firstResponse: { responded: boolean; overdue: boolean } | null;
   resolution: { completed: boolean; overdue: boolean } | null;
   assigneeId: string | null; assigneeName: string | null; assigneeActive: boolean | null;
-  pendingAssigneeId: string | null;
+  pendingAssigneeId: string | null; acceptedHandoverCount: number;
 };
 
 const terminal = new Set(['CLOSED', 'CANCELLED', 'REJECTED']);
@@ -28,6 +35,7 @@ export function reportMetrics(items: readonly ReportMetricItem[]) {
     waitingUser: items.filter(i => i.status === 'WAITING_USER').length,
     waitingVendor: items.filter(i => i.status === 'WAITING_VENDOR').length,
     awaitingConfirmation: items.filter(i => i.status === 'PENDING_CONFIRMATION').length,
+    acceptedHandovers: items.reduce((total, item) => total + item.acceptedHandoverCount, 0),
     responded: items.filter(i => i.firstResponse?.responded).length,
     firstResponseOverdue: items.filter(i => i.firstResponse?.overdue).length,
     resolved: items.filter(i => i.resolution?.completed).length,
@@ -54,4 +62,19 @@ export function responsibilitySummary(items: readonly ReportMetricItem[]) {
     name: rows[0].assigneeName, active: rows[0].assigneeActive, metrics: reportMetrics(rows) }))
     .sort((a, b) => b.metrics.active - a.metrics.active || b.metrics.tickets - a.metrics.tickets
       || (a.employeeId ?? '').localeCompare(b.employeeId ?? ''));
+}
+
+export function serviceMatches(item: { serviceCode: string }, filter: ReportServiceFilter): boolean {
+  return filter.serviceCode === null || item.serviceCode === filter.serviceCode;
+}
+
+export function serviceSummary(items: readonly (ReportMetricItem & { serviceCode: string; serviceName: string })[]) {
+  const byService = new Map<string, typeof items[number][]>();
+  for (const item of items) {
+    const rows = byService.get(item.serviceCode);
+    if (rows) rows.push(item); else byService.set(item.serviceCode, [item]);
+  }
+  return [...byService].map(([serviceCode, rows]) => ({ serviceCode, name: rows[0].serviceName,
+    metrics: reportMetrics(rows) })).sort((a, b) => b.metrics.active - a.metrics.active
+      || b.metrics.tickets - a.metrics.tickets || a.serviceCode.localeCompare(b.serviceCode));
 }

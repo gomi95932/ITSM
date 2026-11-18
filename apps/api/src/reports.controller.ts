@@ -2,7 +2,8 @@ import { BadRequestException, Controller, Get, Headers, NotFoundException, Query
 import { serviceMinutes, type ServiceCalendar } from '@itsm/contracts';
 import { AuthService } from './auth.service.js';
 import { Database } from './database.service.js';
-import { ownerMatches, reportMetrics, reportOwnerFilter, responsibilitySummary } from './report-metrics.js';
+import { ownerMatches, reportMetrics, reportOwnerFilter, reportServiceFilter, responsibilitySummary,
+  serviceMatches, serviceSummary } from './report-metrics.js';
 import { historicalResponsibilitySummary, intervalMetrics, type ResponsibilityInterval } from './responsibility-history.js';
 import { notificationFilter, notificationMatches, notificationMetrics, notificationReason, notificationState,
   type NotificationReportItem } from './notification-report.js';
@@ -128,25 +129,32 @@ export class ReportsController {
   @Get('summary') async summary(@Headers('x-dev-user') devUser?: string, @Headers('cookie') cookie?: string,
     @Query('groupId') groupId?: string, @Query('from') from?: string, @Query('to') to?: string,
     @Query('serviceType') serviceType: string = 'INC',
-    @Query('ownerScope') ownerScope?: string, @Query('employeeId') employeeId?: string) {
+    @Query('ownerScope') ownerScope?: string, @Query('employeeId') employeeId?: string,
+    @Query('serviceCode') serviceCode?: string) {
     const actor = await this.auth.identity({ devUser, cookie });
     if (!groupId || !actor.groups.includes(groupId)) throw new NotFoundException();
     if (serviceType !== 'INC' && serviceType !== 'REQ') throw new BadRequestException({ code: 'INVALID_REPORT_SERVICE_TYPE' });
     const ownerFilter = reportOwnerFilter(ownerScope, employeeId);
     if (!ownerFilter) throw new BadRequestException({ code: 'INVALID_REPORT_OWNER_FILTER' });
+    const serviceFilter = reportServiceFilter(serviceCode);
+    if (!serviceFilter) throw new BadRequestException({ code: 'INVALID_REPORT_SERVICE_FILTER' });
     const start = reportDate(from), end = reportDate(to);
     const days = (end.getTime() - start.getTime()) / 86400000;
     if (days < 0 || days > 30) throw new BadRequestException({ code: 'INVALID_REPORT_WINDOW' });
     return this.db.transaction(async client => {
       await client.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY');
       const membership = await client.query(`SELECT now() AS clock FROM group_memberships m JOIN employees e ON e.id=m.employee_id
-        WHERE e.id=$1 AND e.active AND m.group_id=$2`, [actor.id, groupId]);
+        JOIN support_groups g ON g.id=m.group_id WHERE e.id=$1 AND e.active AND g.enabled AND m.group_id=$2`, [actor.id, groupId]);
       if (!membership.rowCount) throw new NotFoundException();
       const tickets = await client.query(`SELECT t.id,t.number,t.status,t.priority,t.created_at,f.rating,
+        t.service_code,c.name AS service_name,
         t.assignee_id,a.display_name AS assignee_name,a.active AS assignee_active,
         t.pending_assignee_id,p.display_name AS pending_assignee_name,t.assignment_kind,
-        (SELECT count(*)::int FROM ticket_events ev WHERE ev.ticket_id=t.id AND ev.action='REOPEN') AS reopen_count
+        (SELECT count(*)::int FROM ticket_events ev WHERE ev.ticket_id=t.id AND ev.action='REOPEN') AS reopen_count,
+        (SELECT count(*)::int FROM ticket_events ev WHERE ev.ticket_id=t.id AND ev.action='ACCEPT_HANDOVER'
+          AND ev.detail->>'targetGroupId'=$1) AS accepted_handover_count
         FROM tickets t LEFT JOIN ticket_feedback f ON f.ticket_id=t.id
+        JOIN service_catalog c ON c.code=t.service_code
         LEFT JOIN employees a ON a.id=t.assignee_id LEFT JOIN employees p ON p.id=t.pending_assignee_id
         WHERE t.service_type=$4 AND t.owner_group_id=$1
           AND t.created_at>=($2::date::timestamp AT TIME ZONE 'Asia/Shanghai')
@@ -173,6 +181,8 @@ export class ReportsController {
         });
         const first = measured[0], latest = measured.at(-1);
         return { id: ticket.id, number: ticket.number, createdAt: ticket.created_at, status: ticket.status,
+          serviceCode: ticket.service_code as string, serviceName: ticket.service_name as string,
+          acceptedHandoverCount: ticket.accepted_handover_count as number,
           priority: ticket.priority, reopenCount: ticket.reopen_count as number, rating: ticket.rating as number | null,
           assigneeId: ticket.assignee_id as string | null, assigneeName: ticket.assignee_name as string | null,
           assigneeActive: ticket.assignee_active as boolean | null,
@@ -186,10 +196,13 @@ export class ReportsController {
           overdueEver: measured.some(c => c.responseOverdue || c.resolutionOverdue),
           unapprovedCalendar: measured.some(c => !c.calendarApproved), cycles: measured };
       });
-      const filtered = items.filter(item => ownerMatches(item, ownerFilter));
+      const owned = items.filter(item => ownerMatches(item, ownerFilter));
+      const filtered = owned.filter(item => serviceMatches(item, serviceFilter));
       return { groupId, from, to, serviceType, timeZone: 'Asia/Shanghai', attribution: 'CURRENT_OWNER_GROUP',
-        ownerAttribution: 'CURRENT_ASSIGNEE', ownerFilter, asOf: membership.rows[0].clock,
-        responsibility: responsibilitySummary(items), metrics: reportMetrics(filtered), items: filtered };
+        ownerAttribution: 'CURRENT_ASSIGNEE', ownerFilter, serviceFilter, asOf: membership.rows[0].clock,
+        handoverBasis: 'RECORDED_ACCEPT_HANDOVER_IN_GROUP', serviceNameBasis: 'CURRENT_CATALOG',
+        responsibility: responsibilitySummary(items), services: serviceSummary(owned),
+        metrics: reportMetrics(filtered), items: filtered };
     });
   }
 }

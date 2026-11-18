@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { ownerMatches, reportMetrics, reportOwnerFilter, responsibilitySummary, type ReportMetricItem } from './report-metrics.js';
+import { ownerMatches, reportMetrics, reportOwnerFilter, reportServiceFilter, responsibilitySummary,
+  serviceMatches, serviceSummary, type ReportMetricItem } from './report-metrics.js';
 
 const item = (changes: Partial<ReportMetricItem> = {}): ReportMetricItem => ({ status: 'IN_PROGRESS', reopenCount: 0,
   rating: null, overdueEver: false, unapprovedCalendar: false, firstResponse: null, resolution: null,
-  assigneeId: 'agent-a', assigneeName: 'Engineer A', assigneeActive: true, pendingAssigneeId: null, ...changes });
+  assigneeId: 'agent-a', assigneeName: 'Engineer A', assigneeActive: true, pendingAssigneeId: null,
+  acceptedHandoverCount: 0, ...changes });
 
 test('personal report filters are explicit and cannot combine an identity with all or unassigned', () => {
   assert.deepEqual(reportOwnerFilter(undefined, undefined), { ownerScope: 'ALL', employeeId: null });
@@ -48,4 +50,30 @@ test('personal metrics use the same whole-ticket SLA, feedback and terminal-stat
   assert.deepEqual(responsibilitySummary(rows)[0].metrics, metrics);
   assert.equal(reportMetrics([]).satisfactionAverage, null);
   assert.deepEqual(responsibilitySummary([]), []);
+});
+
+test('service filtering rejects ambiguous input and unknown codes select no other service', () => {
+  assert.deepEqual(reportServiceFilter(undefined), { serviceCode: null });
+  assert.deepEqual(reportServiceFilter('INC-WMS'), { serviceCode: 'INC-WMS' });
+  for (const value of ['', ' ', ' INC-WMS', 'INC-WMS ', ['INC-WMS'], {}, null, 1, 'x'.repeat(201)])
+    assert.equal(reportServiceFilter(value), null);
+  assert.equal(serviceMatches({ serviceCode: 'INC-WMS' }, { serviceCode: null }), true);
+  assert.equal(serviceMatches({ serviceCode: 'INC-WMS' }, { serviceCode: 'INC-ERP' }), false);
+});
+
+test('service aggregates retain distinct codes, complete metrics and recorded handover totals', () => {
+  const rows = [{ ...item({ acceptedHandoverCount: 2 }), serviceCode: 'INC-WMS', serviceName: 'Shared name' },
+    { ...item({ status: 'CLOSED', acceptedHandoverCount: 1, rating: 4 }), serviceCode: 'INC-WMS', serviceName: 'Shared name' },
+    { ...item({ status: 'QUEUED', assigneeId: null, pendingAssigneeId: 'agent-b' }), serviceCode: 'INC-ERP', serviceName: 'Shared name' }];
+  const summary = serviceSummary(rows);
+  assert.equal(summary.length, 2, 'catalog display names are not stable grouping keys');
+  const wms = summary.find(row => row.serviceCode === 'INC-WMS')!;
+  assert.equal(wms.metrics.acceptedHandovers, 3);
+  assert.equal(wms.metrics.tickets, 2);
+  assert.equal(wms.metrics.satisfactionAverage, 4);
+  assert.equal(summary.find(row => row.serviceCode === 'INC-ERP')?.metrics.acceptedHandovers, 0);
+  assert.equal(reportMetrics(rows).acceptedHandovers, 3);
+  assert.equal(responsibilitySummary(rows).find(row => row.employeeId === 'agent-a')?.metrics.acceptedHandovers, 3);
+  assert.equal(reportMetrics([]).acceptedHandovers, 0);
+  assert.deepEqual(serviceSummary([]), []);
 });

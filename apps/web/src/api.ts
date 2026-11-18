@@ -100,6 +100,7 @@ export const messages: Record<string,string> = {
   ROLE_ADMIN_CONTINUITY_REQUIRED:'至少保留两名有效平台管理员；请先完成接替授权。紧急人员停用仍走现有受控停用渠道。',
   INVALID_REPORT_SERVICE_TYPE:'请选择故障工单或服务请求。',
   INVALID_REPORT_OWNER_FILTER:'请选择全部负责人、尚未接单或具体处理人后重试。',
+  INVALID_REPORT_SERVICE_FILTER:'请选择单个有效服务，或选择全部服务后重试。',
   INVALID_REPORT_WINDOW:'请选择有效日期范围，开始与结束日期最多相隔 30 天。',
   REPORT_WINDOW_TOO_LARGE:'查询结果超过 5000 条，请缩小日期范围后重试。',
   REPORT_HISTORY_WINDOW_TOO_LARGE:'历史责任区间超过 5000 条，请缩小日期范围后重试。',
