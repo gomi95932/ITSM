@@ -40,6 +40,8 @@ jobs:
         run: sudo -n env -i PATH=/usr/bin:/bin "$(command -v node)" tests/integration/release-promotion.mjs
       - name: Verify approved deployment execution boundary in disposable root-owned CI fixtures
         run: sudo -n env -i PATH=/usr/bin:/bin "$(command -v node)" tests/integration/approved-deployment.mjs
+      - name: Verify read-only development inspection and drift detection in disposable root-owned CI fixtures
+        run: sudo -n env -i PATH=/usr/bin:/bin "$(command -v node)" tests/integration/development-inspection.mjs
       - name: Validate fixed approved deployment service template
         run: systemd-analyze verify infra/systemd/itsm-deploy-approved@.service
       - name: Set disposable CI configuration path

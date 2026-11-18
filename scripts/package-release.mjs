@@ -18,6 +18,7 @@ paths.push('scripts/stage-release.mjs');
 paths.push('scripts/extract-release.py');
 paths.push('scripts/promote-release.mjs');
 paths.push('scripts/execute-approved-deployment.mjs');
+paths.push('scripts/inspect-development.mjs');
 paths.push('infra/systemd/itsm-deploy-approved@.service');
 const images={};
 for (const name of ['api','web','worker','postgres','redis']) {

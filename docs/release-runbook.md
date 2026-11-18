@@ -119,6 +119,30 @@ sudo systemctl --no-pager --full status itsm-deploy-approved@ddddddddddddddddddd
 
 CI 在临时 root-owned Linux 夹具中覆盖批准、可信路径、来源、基线、重放及失败阶段，子发布调用使用 mock；它只证明编排拒绝路径。真正发布工具的容器及业务验收仍由 main 发布包演练和开发服务器现场验收证明，不能用这些夹具宣称服务器可发布。
 
+### 2.3 已部署版本的只读核验（新增代码候选）
+
+`inspect-development.mjs` 用于日常检查或部署后的证据复核。新发布包将此文件纳入哈希清单，但不会自动安装到受信工具目录。管理员先核对同一提交的 CI、源文件及哈希，再以 root:root 0600 安装至 `/opt/itsm/tools/release/inspect-development.mjs`；它依赖同目录的 `release.mjs`、`promote-release.mjs`、`stage-release.mjs` 与 `verify-release-source.mjs`。沿用 2.2 节的可信路径和运行时要求，不新增通用 sudo 授权。旧发布包无需为检查而改写清单或补放文件。
+
+核验命令要求精确的已部署 40 位 SHA 和成功部署回执的 32 位 requestId，不能传 `main`、任意目录、Docker 参数或 Shell。以下变量须从受控部署记录取得，不能使用示例夹具值：
+
+```sh
+sudo -H /usr/bin/node /opt/itsm/tools/release/inspect-development.mjs "$SHA" "$REQUEST_ID"
+```
+
+检查内容：
+
+- 当前状态、提升证明、成功部署回执与发布包中的 SHA、来源运行/attempt、artifact、镜像和迁移指纹一致；发布包文件哈希及私有路径有效。
+- db、Redis、API、worker、Web 每项仅有一个正在运行的 `itsm-dev` 容器；项目/服务标签正确、健康、实际镜像 ID 匹配记录的 digest。
+- 数据库迁移账本的完整名称及 checksum 集合与发布包一致；回环 8088 就绪接口返回预期服务。
+- 成功回执指定的备份仍在固定私有备份目录，元数据匹配该版本，重新计算的文件 SHA256 一致。
+- 检查前后没有发布操作锁、记录变化或容器成员变化；发现变化即失败，不清锁、不重启、不修复数据。
+
+成功输出 `verificationLevel=read-only-runtime-and-recorded-evidence`。报告只包含明确筛选的字段，不输出容器环境、原始 inspect、数据库密码、GitHub 凭据或完整私有记录。源码来源、合成业务验收及隔离恢复是部署时的历史证据；运行镜像、迁移、就绪和备份 checksum 是本次观察。该工具没有重新查询 GitHub、执行新的业务事务或恢复数据库，也没有检查容器全部安全设置；它不能代替新版本发布验收、恢复演练或真实钉钉/OA 验收。
+
+核验是瞬时观察，不取得部署锁；即使前后检查通过，也不保证之后版本不变。若失败，保留现场并按错误及部署回执排查，不自动重放部署。需要新的合成业务验收或备份恢复时，仍按第 4 节在批准窗口执行。
+
+单元测试验证证据绑定与迁移比较；独立 Linux root 夹具验证私有路径、错版/不健康容器、账本偏差、备份篡改及检查期间状态变化。外部 Docker/HTTP 在夹具中使用 mock，实际容器与恢复仍由现有 CI 发布包演练及开发机验收证明。本节新增入口尚待安装和现场验证，不代表服务器已经具备该命令。
+
 ## 3. 检查与部署
 
 从已验证的版本目录执行；`SHA` 必须是本次批准的完整提交值：
