@@ -122,7 +122,7 @@ jobs:
         run: node tests/integration/fulfillment.mjs
       - name: Verify approved request delivery, independent review, confirmation and guarded closure
         run: node tests/integration/request-lifecycle.mjs
-      - name: Verify fulfillment reminders, current recipients, overdue escalation and atomic deduplication
+      - name: Verify fulfillment reminders, late appointments, recovery rollback and concurrent deduplication
         run: node tests/integration/fulfillment-attention.mjs
       - name: Verify service report boundaries and lifecycle metrics
         run: node tests/integration/reports.mjs

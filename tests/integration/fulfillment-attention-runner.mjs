@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
 import { maintainFulfillmentAttention } from './apps/worker/dist/fulfillment-attention.js';
-import { notificationRecipients,expandNotification } from './apps/worker/dist/notification-audience.js';
+import { notificationRecipients,expandNotification,refreshFulfillmentNotificationAudiences } from './apps/worker/dist/notification-audience.js';
 
 if(process.env.ITSM_ATTENTION_CI!=='true'||process.env.NODE_ENV==='production')throw new Error('DISPOSABLE_ATTENTION_CI_ONLY');
 const db=new Pool({host:process.env.DB_HOST,database:process.env.DB_NAME,user:process.env.DB_USER,password:process.env.DB_PASSWORD,max:5});
@@ -38,13 +38,22 @@ async function signals(client,id){
     JOIN outbox_events o ON o.event_id=s.event_id WHERE s.fulfillment_id=$1 ORDER BY s.kind`,[id])).rows;
 }
 async function recipients(client,event){return notificationRecipients(client,event);}
+async function configureAppointments(client,change){
+  const config=structuredClone((await client.query(`SELECT v.config FROM service_structure_current c
+    JOIN service_structure_versions v ON v.version=c.version WHERE c.id`)).rows[0].config);
+  change(config.appointments);
+  await client.query(`INSERT INTO service_structure_versions(version,config)
+    SELECT version+1,$1 FROM service_structure_current WHERE id`,[JSON.stringify(config)]);
+  await client.query('UPDATE service_structure_current SET version=version+1 WHERE id');
+}
 async function expectFailure(client,action,pattern){
   await client.query('SAVEPOINT expected_failure');
   try{await assert.rejects(action,pattern);}finally{await client.query('ROLLBACK TO SAVEPOINT expected_failure');}
 }
 
 // Uncommitted fixtures are invisible to the live CI worker. Production scan transactions become nested savepoints.
-function isolatedPool(client,{failOutbox=false}={}){
+function isolatedPool(client,{failOutbox=false,failDeliveryAt=0,audienceIds=null}={}){
+  let deliveryInserts=0;
   return {
     async query(){
       return client.query(`SELECT approval_id FROM request_fulfillment_attention_pending WHERE group_id IN ($1,$2)
@@ -56,6 +65,12 @@ function isolatedPool(client,{failOutbox=false}={}){
         if(text==='COMMIT')return client.query('RELEASE SAVEPOINT attention_scan');
         if(text==='ROLLBACK')return client.query('ROLLBACK TO SAVEPOINT attention_scan');
         if(failOutbox&&text.includes('INSERT INTO outbox_events'))throw new Error('CI_OUTBOX_FAILURE');
+        if(text.includes('INSERT INTO notification_deliveries')&&++deliveryInserts===failDeliveryAt)
+          throw new Error('CI_DELIVERY_FAILURE');
+        if(text.startsWith('SELECT o.id,o.event_id FROM outbox_events o'))
+          return client.query(text.replace('WHERE o.expanded_at IS NOT NULL',
+            `WHERE s.group_id IN ($1,$2) ${audienceIds?'AND o.id=ANY($3::uuid[]) ':''}AND o.expanded_at IS NOT NULL`),
+          audienceIds?[group,other,audienceIds]:[group,other]);
         return client.query(text,params);
       },release(){},
     };},
@@ -209,6 +224,97 @@ try{
     JOIN outbox_events o ON o.event_id=e.id WHERE s.fulfillment_id=$1`,[atomic.id])).rows[0];
   assert.equal(audit.count,'1');
 
+  // Recover recipients on the original active signal after a real appointment is added.
+  await client.query('SAVEPOINT audience_recovery');
+  await configureAppointments(client,appointments=>{
+    appointments.find(item=>item.positionId===position&&item.employeeId===person('peer')).enabled=false;
+  });
+  const late=await fixture(client),completed=await fixture(client),oldResponsibility=await fixture(client);
+  const closedRecovery=await fixture(client,{expired:true});
+  await client.query("UPDATE tickets SET status='CLOSED' WHERE id=$1",[closedRecovery.ticket]);
+  await maintainFulfillmentAttention(pool,policy);
+  const recoverySignals=[];
+  for(const task of [late,completed,oldResponsibility,closedRecovery]){
+    const [signal]=await signals(client,task.id);recoverySignals.push(signal);
+    await expandNotification(client,signal.outbox_id,signal.event_id);
+  }
+  const lateSignal=recoverySignals[0];
+  assert.equal((await client.query('SELECT count(*) FROM notification_deliveries WHERE outbox_id=$1',
+    [lateSignal.outbox_id])).rows[0].count,'0','initially vacant review position has no notification recipient');
+  const originalExpansion=(await client.query('SELECT expanded_at FROM outbox_events WHERE id=$1',[lateSignal.outbox_id])).rows[0].expanded_at;
+  const lateFacts=async()=>(await client.query(`SELECT f.version,t.version AS ticket_version,t.status,f.state,
+    (SELECT count(*) FROM ticket_events WHERE ticket_id=t.id) AS events,
+    (SELECT count(*) FROM audit_logs WHERE ticket_id=t.id) AS audits,
+    (SELECT count(*) FROM outbox_events WHERE ticket_id=t.id) AS outbox,
+    (SELECT count(*) FROM request_fulfillment_signals WHERE fulfillment_id=f.id) AS signals
+    FROM request_fulfillments f JOIN tickets t ON t.id=f.ticket_id WHERE f.id=$1`,[late.id])).rows[0];
+  const originalFacts=await lateFacts();
+  await client.query('INSERT INTO group_memberships(employee_id,group_id) VALUES($1,$2)',[person('outsider'),group]);
+  await configureAppointments(client,appointments=>appointments.push({id:randomUUID(),positionId:position,
+    employeeId:person('outsider'),duty:'BACKUP',enabled:true,
+    validFrom:new Date(Date.now()-60000).toISOString(),validTo:new Date(Date.now()+86400000).toISOString()}));
+  await client.query(`SELECT perform_request_fulfillment_action($1,$2,'REVIEW','CI-LATE-REVIEW',NULL)`,
+    [completed.approval,person('outsider')]);
+  await client.query('UPDATE tickets SET owner_group_id=$2 WHERE id=$1',[oldResponsibility.ticket,other]);
+  const recoveryIds=recoverySignals.map(signal=>signal.outbox_id);
+  await client.query('UPDATE outbox_events SET audience_checked_at=NULL WHERE id=ANY($1::uuid[])',[recoveryIds]);
+  const recoveryPool=isolatedPool(client,{audienceIds:recoveryIds});
+  await refreshFulfillmentNotificationAudiences(recoveryPool);
+  const deliveries=async id=>(await client.query('SELECT * FROM notification_deliveries WHERE outbox_id=$1 ORDER BY employee_id',[id])).rows;
+  assert.deepEqual((await deliveries(lateSignal.outbox_id)).map(row=>row.employee_id),[person('outsider')],
+    'newly appointed reviewer receives the original uncompleted task');
+  assert.deepEqual(await deliveries(recoverySignals[1].outbox_id),[],'completed review must not gain late recipients');
+  assert.deepEqual(await deliveries(recoverySignals[2].outbox_id),[],'former responsibility group must not regain recipients');
+  assert.ok((await deliveries(recoverySignals[3].outbox_id)).some(row=>row.employee_id===person('outsider')),
+    'closed-ticket access revocation still recovers a newly appointed operator');
+  assert.deepEqual(await lateFacts(),originalFacts,'audience recovery does not create signals, audit events or business changes');
+  assert.equal((await client.query('SELECT expanded_at FROM outbox_events WHERE id=$1',[lateSignal.outbox_id])).rows[0].expanded_at.getTime(),
+    originalExpansion.getTime(),'preserve the original expansion timestamp');
+  const checked=(await client.query('SELECT audience_checked_at FROM outbox_events WHERE id=$1',[lateSignal.outbox_id])).rows[0].audience_checked_at;
+  await refreshFulfillmentNotificationAudiences(recoveryPool);
+  assert.equal((await client.query('SELECT audience_checked_at FROM outbox_events WHERE id=$1',[lateSignal.outbox_id])).rows[0].audience_checked_at.getTime(),
+    checked.getTime(),'recently checked events are throttled');
+  for(const state of ['PENDING','SENDING','DELIVERED','SKIPPED','DEAD','SIMULATED']){
+    await client.query(`UPDATE notification_deliveries SET state=$2,attempts=4,last_error='CI_PRESERVED',provider_task_id='CI_TASK'
+      WHERE outbox_id=$1`,[lateSignal.outbox_id,state]);
+    const previous=await deliveries(lateSignal.outbox_id);
+    await client.query("UPDATE outbox_events SET audience_checked_at=clock_timestamp()-interval '61 seconds' WHERE id=$1",[lateSignal.outbox_id]);
+    await refreshFulfillmentNotificationAudiences(recoveryPool);
+    assert.deepEqual(await deliveries(lateSignal.outbox_id),previous,`${state} deliveries are never revived or rewritten`);
+  }
+
+  // Each recovery transaction must roll back all deliveries and freshness stamps on failure.
+  await configureAppointments(client,appointments=>{
+    appointments.find(item=>item.positionId===position&&item.employeeId===person('outsider')).enabled=false;
+  });
+  const waiting=[];
+  for(let i=0;i<21;i++)waiting.push(await fixture(client));
+  await maintainFulfillmentAttention(pool,policy);
+  const waitingIds=[];
+  for(const task of waiting){
+    const [signal]=await signals(client,task.id);waitingIds.push(signal.outbox_id);
+    await expandNotification(client,signal.outbox_id,signal.event_id);
+  }
+  await client.query('UPDATE outbox_events SET audience_checked_at=NULL WHERE id=ANY($1::uuid[])',[waitingIds]);
+  await configureAppointments(client,appointments=>{
+    appointments.find(item=>item.positionId===position&&item.employeeId===person('outsider')).enabled=true;
+  });
+  const countWaiting=async()=>(await client.query(`SELECT count(*) FROM notification_deliveries
+    WHERE outbox_id=ANY($1::uuid[])`,[waitingIds])).rows[0].count;
+  await assert.rejects(refreshFulfillmentNotificationAudiences(isolatedPool(client,
+    {audienceIds:waitingIds,failDeliveryAt:2})),/CI_DELIVERY_FAILURE/);
+  assert.equal(await countWaiting(),'0','failed batch rolls back earlier delivery inserts');
+  assert.equal((await client.query(`SELECT count(*) FROM outbox_events WHERE id=ANY($1::uuid[])
+    AND audience_checked_at IS NOT NULL`,[waitingIds])).rows[0].count,'0','failed batch rolls back freshness stamps');
+  const waitingPool=isolatedPool(client,{audienceIds:waitingIds});
+  await refreshFulfillmentNotificationAudiences(waitingPool);
+  assert.equal(await countWaiting(),'20','one recovery poll respects its 20-event bound');
+  await refreshFulfillmentNotificationAudiences(waitingPool);
+  assert.equal(await countWaiting(),'21','recent events cannot starve the remaining event');
+  await refreshFulfillmentNotificationAudiences(waitingPool);
+  assert.equal(await countWaiting(),'21','repeated recovery does not duplicate deliveries');
+  await client.query('ROLLBACK TO SAVEPOINT audience_recovery');
+
   const batch=[];
   for(let i=0;i<101;i++)batch.push((await fixture(client)).id);
   const batchCount=async()=>(await client.query(`SELECT count(*) FROM request_fulfillment_signals
@@ -228,7 +334,29 @@ try{
     assert.equal((await db.query('SELECT count(*) FROM audit_logs WHERE event_id=$1',[signal.event_id])).rows[0].count,'1');
     assert.equal((await db.query('SELECT count(*) FROM outbox_events WHERE event_id=$1',[signal.event_id])).rows[0].count,'1');
   }
-  console.log('Fulfillment attention verified: atomic signals, current qualified recipients, persisted deadlines, closed-ticket revocation, lead escalation, suppression and concurrent deduplication');
+  const concurrentSignal=concurrentSignals.find(signal=>signal.kind==='REVOKE_REQUIRED');
+  const concurrentPool={async connect(){
+    const connection=await db.connect();
+    return {query(text,params){
+      return text.startsWith('SELECT o.id,o.event_id FROM outbox_events o')
+        ?connection.query(text.replace('WHERE o.expanded_at IS NOT NULL',
+          'WHERE o.id=$1 AND o.expanded_at IS NOT NULL'),[concurrentSignal.outbox_id])
+        :connection.query(text,params);
+    },release(){connection.release();}};
+  }};
+  client=await db.connect();await client.query('BEGIN');
+  await client.query('SELECT id FROM outbox_events WHERE id=$1 FOR UPDATE',[concurrentSignal.outbox_id]);
+  await expandNotification(client,concurrentSignal.outbox_id,concurrentSignal.event_id);
+  await client.query('UPDATE outbox_events SET audience_checked_at=NULL WHERE id=$1',[concurrentSignal.outbox_id]);
+  await refreshFulfillmentNotificationAudiences(concurrentPool);
+  assert.equal((await client.query('SELECT audience_checked_at FROM outbox_events WHERE id=$1',
+    [concurrentSignal.outbox_id])).rows[0].audience_checked_at,null,'another worker skips a locked outbox without changing it');
+  await client.query('COMMIT');client.release();client=null;
+  await Promise.all([refreshFulfillmentNotificationAudiences(concurrentPool),refreshFulfillmentNotificationAudiences(concurrentPool)]);
+  assert.deepEqual((await db.query('SELECT employee_id FROM notification_deliveries WHERE outbox_id=$1 ORDER BY employee_id',
+    [concurrentSignal.outbox_id])).rows.map(row=>row.employee_id),await recipients(db,concurrentSignal.event_id),
+  'independent recovery workers do not duplicate recipient deliveries');
+  console.log('Fulfillment attention verified: atomic signals, late appointments, unchanged delivery states, bounded fair recovery, rollback, closed-ticket revocation and concurrent deduplication');
 }finally{
   if(client){await client.query('ROLLBACK');client.release();}
   await db.end();

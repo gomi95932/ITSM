@@ -8,7 +8,7 @@ import { maintainRequestFulfillments,processNextRequestDelivery } from './reques
 import { fulfillmentReminderMinutes,maintainFulfillmentAttention } from './fulfillment-attention.js';
 import { shouldAutoClose } from './auto-close.js';
 import { notificationLink } from './notification-message.js';
-import { expandNotification, notificationRecipients } from './notification-audience.js';
+import { expandNotification, notificationRecipients, refreshFulfillmentNotificationAudiences } from './notification-audience.js';
 
 const db = new Pool({ host:process.env.DB_HOST ?? 'db',database:process.env.DB_NAME ?? 'itsm',user:process.env.DB_USER ?? 'itsm',password:process.env.DB_PASSWORD,
   connectionTimeoutMillis:5000,statement_timeout:30000 });
@@ -63,6 +63,7 @@ async function provider(path:string,body?:object):Promise<any> {
 
 async function expand() {
   await transaction(async client => {
+    await client.query('SELECT pg_advisory_xact_lock_shared(71820512)');
     const result = await client.query("SELECT id,event_id FROM outbox_events WHERE expanded_at IS NULL ORDER BY (kind='P1_ALERT') DESC,created_at LIMIT 20 FOR UPDATE SKIP LOCKED");
     for (const event of result.rows) {
       await expandNotification(client,event.id,event.event_id);
@@ -297,6 +298,7 @@ async function tick() {
     if(approvalProvider&&process.env.ENABLE_MANUAL_REQUEST_DELIVERY==='true')
       for(let i=0;i<5&&!stopped;i++)if(!await processNextRequestDelivery(db,approvalProvider))break;
     await expand();
+    await refreshFulfillmentNotificationAudiences(db);
     for (let i=0;i<10 && !stopped;i++) await deliver();
     await writeFile('/tmp/itsm-worker-heartbeat', String(Date.now()), { mode:0o600 });
   }
