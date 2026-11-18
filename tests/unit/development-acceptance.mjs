@@ -61,8 +61,9 @@ test('development acceptance does not leak response errors or configuration in f
   });
 });
 
-test('development acceptance can repeat without touching an existing ticket', async () => {
+test('development acceptance verifies the owner and feedback on isolated synthetic tickets', async () => {
   const runs = [];
+  let fault;
   const fetchImpl = async (url, options) => {
     assert.equal(options.redirect, 'error');
     const path = new URL(url).pathname.replace('/api/v1', '');
@@ -89,7 +90,7 @@ test('development acceptance can repeat without touching an existing ticket', as
       if (JSON.stringify(run.payload) !== JSON.stringify(body)) return reply({}, 409);
       return reply({ id: run.id, status: 'QUEUED', version: 1, ownerGroupId: 'service-desk' }, 201);
     }
-    const match = /^\/tickets\/([a-f0-9-]+)(\/actions)?$/.exec(path);
+    const match = /^\/tickets\/([a-f0-9-]+)(\/actions|\/feedback)?$/.exec(path);
     assert.ok(match, `unexpected request ${options.method} ${path}`);
     const run = runs.find(item => item.id === match[1]);
     assert.ok(run, 'only this verifier\'s synthetic tickets may be addressed');
@@ -97,9 +98,16 @@ test('development acceptance can repeat without touching an existing ticket', as
     if (!match[2]) {
       assert.equal(options.method, 'GET');
       return reply({ id: run.id, status: run.status, version: run.version,
+        assigneeId: run.assigneeId, feedback: run.feedback, canFeedback: !run.feedback,
         events: Array.from({ length: run.version }, () => ({ detail: {} })) });
     }
     assert.equal(options.method, 'POST');
+    if (match[2] === '/feedback') {
+      assert.equal(user, 'employee-1');
+      assert.equal(run.status, 'CLOSED');
+      if (fault !== 'feedback') run.feedback = { rating: body.rating, comment: body.comment };
+      return reply({ rating: body.rating, comment: body.comment });
+    }
     const actionKey = options.headers['idempotency-key'];
     if (run.actions.has(actionKey)) return reply(run.actions.get(actionKey));
     if (body.expectedVersion !== run.version || run.status === 'CLOSED'
@@ -107,9 +115,10 @@ test('development acceptance can repeat without touching an existing ticket', as
     const next = { ACCEPT: 'IN_PROGRESS', RESOLVE: 'PENDING_CONFIRMATION', CONFIRM: 'CLOSED' }[body.action];
     assert.ok(next);
     if (body.action === 'CONFIRM') assert.equal(user, 'employee-1');
+    if (body.action === 'ACCEPT' && fault !== 'owner') run.assigneeId = user;
     run.status = next;
     run.version++;
-    const result = { id: run.id, status: run.status, version: run.version };
+    const result = { id: run.id, status: run.status, version: run.version, assigneeId: run.assigneeId };
     run.actions.set(actionKey, result);
     return reply(result);
   };
@@ -121,5 +130,12 @@ test('development acceptance can repeat without touching an existing ticket', as
   assert.notEqual(first.runId, second.runId);
   assert.notEqual(first.ticketIds[0], second.ticketIds[0]);
   assert.equal(runs.length, 2);
-  assert.ok(runs.every(run => run.status === 'CLOSED' && run.version === 4));
+  assert.ok(runs.every(run => run.status === 'CLOSED' && run.version === 4 && run.feedback.rating === 4));
+  assert.ok(first.checks.includes('personal-ownership'));
+  assert.ok(first.checks.includes('requester-feedback'));
+
+  fault = 'owner';
+  await assert.rejects(verifyDevelopment(options), { message: 'ACCEPTANCE_PERSONAL_OWNER_REQUIRED' });
+  fault = 'feedback';
+  await assert.rejects(verifyDevelopment(options), { message: 'ACCEPTANCE_FEEDBACK_PERSISTENCE_FAILED' });
 });

@@ -77,6 +77,7 @@ export async function verifyDevelopment({ baseUrl, allowSyntheticWrites = false,
     const accepted = await request(`${path}/actions`, 'agent-1', 'POST', acceptBody, key('accept'));
     check(accepted, 200, 'ACCEPTANCE_ACCEPT_FAILED');
     require(accepted.data.status === 'IN_PROGRESS' && accepted.data.version === 2, 'ACCEPTANCE_ACCEPT_VERSION_FAILED');
+    require(accepted.data.assigneeId === 'agent-1', 'ACCEPTANCE_PERSONAL_OWNER_REQUIRED');
     const acceptReplay = await request(`${path}/actions`, 'agent-1', 'POST', acceptBody, key('accept'));
     check(acceptReplay, 200, 'ACCEPTANCE_ACTION_REPLAY_FAILED');
     require(acceptReplay.data.version === 2, 'ACCEPTANCE_ACTION_REPLAY_FAILED');
@@ -98,8 +99,24 @@ export async function verifyDevelopment({ baseUrl, allowSyntheticWrites = false,
     require(detail.data.status === 'CLOSED' && detail.data.version === 4 && Array.isArray(detail.data.events)
       && detail.data.events.length === 4 && detail.data.events.every(event => !('evidence' in (event.detail ?? {}))),
     'ACCEPTANCE_EMPLOYEE_DETAIL_FAILED');
+    require(detail.data.assigneeId === 'agent-1', 'ACCEPTANCE_PERSONAL_OWNER_REQUIRED');
     check(await request(path, 'employee-2'), 404, 'ACCEPTANCE_CLOSED_CROSS_USER_FAILED');
-    report.checks.push('action-idempotency', 'stale-write-conflict', 'agent-resolution', 'requester-confirmation', 'internal-evidence-hidden');
+    report.checks.push('action-idempotency', 'stale-write-conflict', 'personal-ownership', 'agent-resolution',
+      'requester-confirmation', 'internal-evidence-hidden');
+
+    stage = 'feedback';
+    const feedbackBody = { contentClass: 'GENERAL', rating: 4, comment: 'Synthetic acceptance feedback' };
+    check(await request(`${path}/feedback`, 'employee-2', 'POST', feedbackBody, key('other-feedback')),
+      404, 'ACCEPTANCE_CROSS_USER_FEEDBACK_FAILED');
+    const feedback = await request(`${path}/feedback`, 'employee-1', 'POST', feedbackBody, key('feedback'));
+    check(feedback, 200, 'ACCEPTANCE_FEEDBACK_FAILED');
+    const evaluated = await request(path, 'employee-1');
+    check(evaluated, 200, 'ACCEPTANCE_FEEDBACK_READ_FAILED');
+    require(evaluated.data.feedback?.rating === feedbackBody.rating
+      && evaluated.data.feedback?.comment === feedbackBody.comment && evaluated.data.canFeedback === false
+      && evaluated.data.status === 'CLOSED' && evaluated.data.version === closed.data.version,
+    'ACCEPTANCE_FEEDBACK_PERSISTENCE_FAILED');
+    report.checks.push('requester-feedback');
     return { ...report, status: 'passed', completedAt: new Date().toISOString() };
   } catch (error) {
     const failure = new Error(error instanceof Error && /^[A-Z_]+$/.test(error.message) ? error.message : 'DEVELOPMENT_ACCEPTANCE_FAILED');
