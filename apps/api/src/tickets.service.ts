@@ -9,6 +9,8 @@ import { SlaService } from './sla.service.js';
 import { IntakePolicyService } from './intake-policy.service.js';
 import { ownershipDenial } from './ticket-ownership.js';
 import { canDispatch, canManageContinuity, ROLE_AUTHORIZATION_LOCK } from './role-policy.js';
+import { enqueueRequestApproval } from '@itsm/workflow';
+import { requestIntakePolicy } from './request-intake-policy.js';
 
 export function canViewRequestProgress(actorId: string, requesterId: string, serviceType: string): boolean {
   return actorId === requesterId && serviceType === 'REQ';
@@ -32,7 +34,7 @@ type TicketRow = {
 type TicketResponseRow = Omit<TicketRow, 'assignment_due_at'> & { assignment_due_at: Date | string | null };
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const keys = new Set(['contentClass', 'serviceCode', 'formVersion', 'subject', 'description', 'impact', 'urgency', 'fields', 'draftId', 'delegationId']);
+const keys = new Set(['contentClass', 'serviceCode', 'formVersion', 'subject', 'description', 'impact', 'urgency', 'fields', 'draftId', 'delegationId', 'requestedValidityDays']);
 const actionKeys = new Set(['contentClass', 'action', 'expectedVersion', 'comment', 'reason', 'dueAt', 'vendorReference', 'vendorOwner', 'resolutionCategory', 'evidence', 'targetGroupId', 'targetAssigneeId', 'continuationId']);
 const names = `(SELECT display_name FROM employees WHERE id=t.assignee_id) AS assignee_name,
   (SELECT display_name FROM employees WHERE id=t.pending_assignee_id) AS pending_assignee_name,
@@ -74,6 +76,8 @@ function validateBody(body: unknown): asserts body is CreateTicketInput {
     || !['HIGH', 'MEDIUM', 'LOW'].includes(String(b.urgency))
     || (b.draftId !== undefined && (typeof b.draftId !== 'string' || !uuid.test(b.draftId)))
     || (b.delegationId !== undefined && (typeof b.delegationId !== 'string' || !uuid.test(b.delegationId)))
+    || (b.requestedValidityDays !== undefined && (!Number.isSafeInteger(b.requestedValidityDays)
+      || (b.requestedValidityDays as number) < 1 || (b.requestedValidityDays as number) > 3650))
     || !b.fields || typeof b.fields !== 'object' || Array.isArray(b.fields) || JSON.stringify(b.fields).length > 16000)
     throw new BadRequestException({ code: 'INVALID_TICKET' });
 }
@@ -119,7 +123,7 @@ export class TicketsService {
     return grant.rows[0]?.requester_id;
   }
 
-  private async catalogFor(client:PoolClient,actor:string,requester:string,code:string,version:number,fields:Record<string,unknown>) {
+  private async catalogFor(client:PoolClient,actor:string,requester:string,code:string,version:number,fields:Record<string,unknown>,creating=false) {
     const catalog=await client.query(`SELECT * FROM service_catalog WHERE code=$1 AND published AND
       (visible_groups='[]'::jsonb OR (EXISTS(SELECT 1 FROM group_memberships WHERE employee_id=$2 AND visible_groups ? group_id)
         AND EXISTS(SELECT 1 FROM group_memberships WHERE employee_id=$3 AND visible_groups ? group_id))) FOR SHARE`,[code,actor,requester]);
@@ -132,7 +136,20 @@ export class TicketsService {
     if(Object.keys(fields).some(key=>!schema.some(field=>field.key===key))||schema.some(field=>{
       const value=fields[field.key];return value!==undefined&&(typeof value!=='string'||value.length>500||(field.options&&!field.options.includes(value)));
     }))throw new BadRequestException({code:'INVALID_SERVICE_FIELDS'});
-    if(!['INC','GEN'].includes(service.type))throw new ServiceUnavailableException({code:'REQUEST_APPROVAL_POLICY_NOT_CONFIGURED'});
+    if(service.type==='REQ'){
+      if(!creating)throw new ConflictException({code:'REQUEST_CLASSIFICATION_NOT_ALLOWED'});
+      service.intakePolicy=requestIntakePolicy(process.env,code,version);
+      if(!service.intakePolicy)throw new ServiceUnavailableException({code:'REQUEST_APPROVAL_POLICY_NOT_CONFIGURED'});
+      const revision=await client.query('SELECT snapshot FROM request_catalog_versions WHERE service_code=$1 AND form_version=$2',[code,version]);
+      const snapshot=revision.rows[0]?.snapshot;
+      if(!snapshot?.approval?.steps?.length || !Number.isInteger(snapshot.maxValidityDays)
+        || snapshot.maxValidityDays<1 || snapshot.maxValidityDays>3650
+        || canonical(snapshot)!==canonical({code,formVersion:version,published:true,name:service.name,description:service.description,
+          groupId:service.group_id,visibleGroups:service.visible_groups,fields:service.field_schema,
+          approval:snapshot.approval,maxValidityDays:snapshot.maxValidityDays}))
+        throw new ServiceUnavailableException({code:'REQUEST_APPROVAL_POLICY_NOT_CONFIGURED'});
+      service.catalogSnapshot=snapshot;
+    }else if(!['INC','GEN'].includes(service.type))throw new ServiceUnavailableException({code:'REQUEST_APPROVAL_POLICY_NOT_CONFIGURED'});
     const route=await client.query(`SELECT r.*,p."groupId",v.config FROM service_position_routes r
       JOIN support_positions p ON p.id=r."primaryPositionId"
       JOIN service_structure_versions v ON v.version=r.version WHERE r."serviceCode"=$1`,[code]);
@@ -213,16 +230,30 @@ export class TicketsService {
         const draft = await client.query('SELECT id FROM voice_drafts WHERE id=$1 AND employee_id=$2 AND expires_at>now() AND ticket_id IS NULL FOR UPDATE',[body.draftId,actor.id]);
         if (!draft.rowCount) throw new ConflictException({ code:'DRAFT_EXPIRED' });
       }
-      const service=await this.catalogFor(client,actor.id,requester,body.serviceCode,body.formVersion,body.fields);
+      const service=await this.catalogFor(client,actor.id,requester,body.serviceCode,body.formVersion,body.fields,true);
+      const request=service.type==='REQ';
+      if(request ? !Number.isInteger(body.requestedValidityDays)||Number(body.requestedValidityDays)>service.catalogSnapshot.maxValidityDays
+        : body.requestedValidityDays!==undefined)throw new BadRequestException({code:'INVALID_REQUEST_VALIDITY'});
       const numberResult = await client.query<{ n: string }>("SELECT nextval('ticket_number_seq')::text AS n");
       const number = `ITSM-${numberResult.rows[0].n.padStart(8, '0')}`;
       const created = await client.query<TicketRow>(`INSERT INTO tickets(number,requester_id,owner_group_id,service_code,service_type,form_version,subject,description,fields,impact,urgency,priority,status,priority_review_state,priority_candidate_at,submitted_by_id,delegation_id)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'QUEUED',CASE WHEN $12='P1' THEN 'PENDING' ELSE 'NOT_REQUIRED' END,CASE WHEN $12='P1' THEN now() ELSE NULL END,$13,$14) RETURNING *`,
-        [number, requester, service.group_id, body.serviceCode, service.type, body.formVersion, body.subject.trim(), body.description.trim(), JSON.stringify(body.fields), body.impact, body.urgency, priority(body.impact, body.urgency),actor.id,body.delegationId??null]);
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$15,CASE WHEN $12='P1' THEN 'PENDING' ELSE 'NOT_REQUIRED' END,CASE WHEN $12='P1' THEN now() ELSE NULL END,$13,$14) RETURNING *`,
+        [number, requester, service.group_id, body.serviceCode, service.type, body.formVersion, body.subject.trim(), body.description.trim(), JSON.stringify(body.fields), body.impact, body.urgency, priority(body.impact, body.urgency),actor.id,body.delegationId??null,request?'WAITING_APPROVAL':'QUEUED']);
       const ticket = created.rows[0];
       if (body.draftId) await client.query('UPDATE voice_drafts SET ticket_id=$2 WHERE id=$1',[body.draftId,ticket.id]);
-      await client.query('UPDATE tickets SET catalog_snapshot=$2,original_catalog_snapshot=$2,original_fields=fields,service_routing_snapshot=$3 WHERE id=$1', [ticket.id,JSON.stringify({ code: body.serviceCode, name: service.name, formVersion: service.form_version, fields: service.field_schema }),JSON.stringify(service.routingSnapshot)]);
+      await client.query('UPDATE tickets SET catalog_snapshot=$2,original_catalog_snapshot=$2,original_fields=fields,service_routing_snapshot=$3 WHERE id=$1', [ticket.id,JSON.stringify(service.catalogSnapshot??{ code: body.serviceCode, name: service.name, formVersion: service.form_version, fields: service.field_schema }),JSON.stringify(service.routingSnapshot)]);
       await this.sla.start(client,ticket.id,ticket.priority);
+      if(request){
+        const deadline=await client.query<{expires:Date}>('SELECT now()+($1 * interval \'1 minute\') AS expires',[service.intakePolicy.approvalTimeoutMinutes]);
+        try{await enqueueRequestApproval(client,{ticketId:ticket.id,corpId:service.intakePolicy.corpId,
+          expiresAt:deadline.rows[0].expires,requestedValidityDays:body.requestedValidityDays!});}
+        catch(error){
+          const reason=error instanceof Error?error.message:'';
+          if(['APPROVAL_IDENTITY_UNAVAILABLE','APPROVAL_MANAGER_MAPPING_UNAVAILABLE','APPROVAL_SEPARATION_REQUIRED',
+            'APPROVAL_CATALOG_NOT_READY'].includes(reason))throw new ConflictException({code:reason});
+          throw error;
+        }
+      }
       await this.record(client, ticket, actor.id, 'SUBMIT_AND_ROUTE', null, { groupId: ticket.owner_group_id,requesterId:requester,submittedById:actor.id,delegationId:body.delegationId??null,serviceCode:body.serviceCode,routing:service.routingSnapshot }, requestId);
       if (ticket.priority_review_state === 'PENDING') {
         await client.query("INSERT INTO priority_review_signals(ticket_id,kind) VALUES ($1,'CANDIDATE')",[ticket.id]);

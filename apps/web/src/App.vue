@@ -27,6 +27,9 @@ const emptyWorkQueues=():WorkQueueCounts=>({all:0,assigned:0,incoming:0,outgoing
 const workQueues=ref<WorkQueueCounts>(emptyWorkQueues());
 const selected=ref(''),creating=ref(false),initialCode=ref(''),notices=ref<Delivery[]>([]),notificationMode=ref('disabled'),retrying=ref('');
 const pages=computed(()=>Math.max(1,Math.ceil(total.value/20)));
+const supportCatalog=computed(()=>catalog.value.filter(item=>item.type!=='REQ'&&item.available));
+const requestCatalog=computed(()=>catalog.value.filter(item=>item.type==='REQ'&&item.available));
+const unavailableCatalog=computed(()=>catalog.value.filter(item=>!item.available));
 const openCount=computed(()=>Object.entries(counts.value).filter(([status])=>!['CLOSED','CANCELLED','REJECTED'].includes(status)).reduce((sum,[,count])=>sum+count,0));
 const noticeLabels:Record<string,string>={PENDING:'待发送',SENDING:'平台受理，待确认',DELIVERED:'平台确认发送成功',SIMULATED:'开发模拟',DEAD:'失败待处理',SKIPPED:'已跳过'};
 const title=computed(()=>({mine:'我的工单',catalog:'服务目录',queue:'IT 工作台',notifications:'消息通知',delegations:'代报授权',knowledge:'知识库',reports:'服务报表',roles:'角色授权',routing:'路由告警','routing-config':'派单配置','service-structure':'服务组织','support-structure':'支持组',fulfillments:'交付与回收'})[view.value]);
@@ -108,7 +111,17 @@ onBeforeUnmount(()=>{window.removeEventListener('hashchange',syncHash);if(refres
         <TicketDetail v-else-if="selected" :key="`${user.id}:${selected}`" :id="selected" :user="user" @back="back" @changed="load(true)"/>
         <template v-else>
           <div class="page-title"><div><p class="eyebrow">{{['queue','reports','routing','routing-config','service-structure','support-structure','fulfillments'].includes(view)?'SUPPORT OPERATIONS':'IT SERVICE DESK'}}</p><h1>{{title}}</h1></div><button v-if="view==='mine'||view==='catalog'" class="primary" @click="create()"><Plus :size="18"/>提交报障</button><button v-else-if="!['delegations','knowledge','reports','roles','routing','routing-config','service-structure','support-structure','fulfillments'].includes(view)" class="icon-button" title="刷新" aria-label="刷新列表" :disabled="loading" @click="load()"><RefreshCw :size="19" :class="{spin:loading}"/></button></div>
-          <template v-if="view==='catalog'"><section class="catalog-section"><div class="section-heading"><h2>故障与支持</h2><span class="muted">{{catalog.filter(item=>item.available).length}} 项服务</span></div><div class="catalog-grid"><button v-for="item in catalog.filter(item=>item.available)" :key="item.code" class="catalog-item" @click="create(item.code)"><span class="service-icon"><Network v-if="item.code==='INC-NET'" :size="22"/><Monitor v-else-if="item.code==='INC-PC'" :size="22"/><Send v-else-if="item.code==='INC-MAIL'" :size="22"/><LayoutGrid v-else :size="22"/></span><span><strong>{{item.name}}</strong><small>{{item.description}}</small></span><ArrowRight :size="18"/></button></div></section><section class="catalog-section"><h2>服务申请</h2><div class="request-catalog"><div v-for="item in catalog.filter(item=>!item.available)" :key="item.code"><span>{{item.name}}</span><span class="muted">暂未开放</span></div></div></section></template>
+          <template v-if="view==='catalog'">
+            <section class="catalog-section" aria-labelledby="support-catalog-title">
+              <div class="section-heading"><h2 id="support-catalog-title">故障与支持</h2><span class="muted">{{supportCatalog.length}} 项服务</span></div>
+              <div class="catalog-grid"><button v-for="item in supportCatalog" :key="item.code" class="catalog-item" @click="create(item.code)"><span class="service-icon"><Network v-if="item.code==='INC-NET'" :size="22"/><Monitor v-else-if="item.code==='INC-PC'" :size="22"/><Send v-else-if="item.code==='INC-MAIL'" :size="22"/><LayoutGrid v-else :size="22"/></span><span><strong>{{item.name}}</strong><small>{{item.description}}</small></span><ArrowRight :size="18"/></button></div>
+            </section>
+            <section class="catalog-section" aria-labelledby="request-catalog-title">
+              <h2 id="request-catalog-title">服务申请</h2>
+              <div v-if="requestCatalog.length" class="catalog-grid"><button v-for="item in requestCatalog" :key="item.code" class="catalog-item" @click="create(item.code)"><span class="service-icon"><ClipboardList :size="22"/></span><span><strong>{{item.name}}</strong><small>{{item.description}}</small></span><ArrowRight :size="18"/></button></div>
+              <div class="request-catalog"><div v-for="item in unavailableCatalog" :key="item.code"><span>{{item.name}}</span><span class="muted">暂未开放</span></div></div>
+            </section>
+          </template>
           <DelegationsPanel v-else-if="view==='delegations'" :user="user"/>
           <FulfillmentPanel v-else-if="view==='fulfillments'" :key="user.id" @open="openTicket"/>
           <KnowledgePanel v-else-if="view==='knowledge'" :key="user.id" :user="user"/>

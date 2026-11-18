@@ -54,6 +54,7 @@ export interface CreateTicketInput {
   fields: Record<string, unknown>;
   draftId?: string;
   delegationId?: string;
+  requestedValidityDays?: number;
 }
 
 export interface TicketActionInput {
@@ -85,7 +86,7 @@ export interface TicketFeedback {
 }
 
 export interface CatalogField { key: string; label: string; required: boolean; options?: string[] }
-export interface CatalogItem { code: string; name: string; description: string; type: TicketType; formVersion: number; fields: CatalogField[]; available: boolean }
+export interface CatalogItem { code: string; name: string; description: string; type: TicketType; formVersion: number; fields: CatalogField[]; available: boolean; maxValidityDays?: number | null }
 export const MANAGED_ROLE_CODES=['PLATFORM_ADMIN','DISPATCHER','GROUP_LEAD'] as const;
 export type ManagedRoleCode=typeof MANAGED_ROLE_CODES[number];
 export interface RoleBindingInput {

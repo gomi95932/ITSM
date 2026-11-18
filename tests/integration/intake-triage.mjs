@@ -92,7 +92,9 @@ const classify=(ticket,user=owner,extra={},key)=>request(`/tickets/${ticket.id}/
 assert.equal((await classify(t,requester)).status,403);assert.equal((await classify(t,peer)).status,403);
 assert.equal((await classify(t,owner,{fields:{}})).status,400);
 assert.equal((await classify(t,owner,{formVersion:2})).status,409);
-assert.equal((await classify(t,owner,{serviceCode:'REQ-ACCOUNT',fields:{}})).status,503);
+const requestClassification=await classify(t,owner,{serviceCode:'REQ-ACCOUNT',fields:{}});
+assert.equal(requestClassification.status,409);
+assert.equal(requestClassification.data.code,'REQUEST_CLASSIFICATION_NOT_ALLOWED');
 assert.equal((await classify(t,owner,{serviceCode:'INC-TRIAGE-APP',fields:{}})).status,409);
 assert.equal((await classify(t,owner,{serviceCode:'INC-TRIAGE-HIDDEN',fields:{}})).status,400,'both actor and requester must see target catalog');
 assert.equal((await classify(t,owner,{reason:'password=blocked-triage-sentinel'})).status,403);

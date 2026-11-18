@@ -22,6 +22,12 @@ export async function api<T>(path: string,options: { method?: string; body?: unk
   return data as T;
 }
 export const messages: Record<string,string> = {
+  INVALID_REQUEST_VALIDITY:'请填写服务允许范围内的申请有效天数；报障无需填写此项。',
+  APPROVAL_IDENTITY_UNAVAILABLE:'申请人或审批人尚未关联有效的企业钉钉账号，请联系服务台核对。',
+  APPROVAL_MANAGER_MAPPING_UNAVAILABLE:'直线经理信息尚未核验或即将过期，请联系服务台更新后再提交。',
+  APPROVAL_SEPARATION_REQUIRED:'申请人、代报人和各级审批人须相互独立，请联系服务台调整审批配置。',
+  APPROVAL_CATALOG_NOT_READY:'申请目录与审批配置不一致，请刷新目录或联系服务台。',
+  REQUEST_CLASSIFICATION_NOT_ALLOWED:'服务申请须从申请入口提交，不能通过报障分类纠偏发起。',
   INVALID_DELIVERY_RESOLUTION:'请核对核查结果、独立外部记录编号及实际核查声明。',
   INVALID_DELIVERY_FAILURE_FILTER:'核查队列筛选条件无效，请重新选择。',
   DELIVERY_FAILURE_UNRESOLVED:'此申请存在未核清的交付登记失败，请先完成独立核查，不能直接重新登记。',

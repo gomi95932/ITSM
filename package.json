@@ -3,7 +3,7 @@
   "private": true,
   "workspaces": ["apps/*", "packages/*"],
   "scripts": {
-    "build": "npm run build -w @itsm/contracts && npm run build -w @itsm/api && npm run build -w @itsm/worker && npm run build -w @itsm/web",
+    "build": "npm run build -w @itsm/contracts && npm run build -w @itsm/workflow && npm run build -w @itsm/api && npm run build -w @itsm/worker && npm run build -w @itsm/web",
     "test": "npm run test --workspaces --if-present && node --test tests/unit/*.mjs",
     "typecheck": "npm run typecheck --workspaces --if-present"
   },

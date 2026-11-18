@@ -139,9 +139,13 @@ jobs:
       - name: Verify support group lifecycle, dependency guards and historical preservation
         run: node tests/integration/support-group-lifecycle.mjs
       - name: Enable manual delivery HTTP boundary in disposable CI only
+        id: enable-manual-delivery
         env:
           ENABLE_MANUAL_REQUEST_DELIVERY: 'true'
-        run: docker compose --env-file "$ITSM_CI_ENV" -f infra/compose/compose.yaml up -d --no-deps --wait --wait-timeout 90 api
+        run: |
+          compose=(docker compose --env-file "$ITSM_CI_ENV" -f infra/compose/compose.yaml)
+          "${compose[@]}" up -d --no-deps --wait --wait-timeout 90 api
+          "${compose[@]}" up -d --no-deps --force-recreate --wait --wait-timeout 90 web
       - name: Verify queued delivery intent, worker reinspection, concurrency and atomic receipts
         run: node tests/integration/request-delivery.mjs
       - name: Verify failed delivery investigation, independent resolution and blocked retries
@@ -151,8 +155,28 @@ jobs:
           ITSM_DELIVERY_CI_ENABLED: 'true'
         run: npx playwright test tests/e2e/request-delivery.spec.ts
       - name: Restore default closed manual-delivery boundary
-        if: always() && env.ITSM_CI_ENV != ''
-        run: docker compose --env-file "$ITSM_CI_ENV" -f infra/compose/compose.yaml up -d --no-deps --wait --wait-timeout 90 api
+        if: ${{ always() && steps.enable-manual-delivery.outcome != 'skipped' && steps.enable-manual-delivery.outcome != '' }}
+        run: |
+          compose=(docker compose --env-file "$ITSM_CI_ENV" -f infra/compose/compose.yaml)
+          "${compose[@]}" up -d --no-deps --wait --wait-timeout 90 api
+          "${compose[@]}" up -d --no-deps --force-recreate --wait --wait-timeout 90 web
+      - name: Verify atomic request intake and employee progress with synthetic approval identities
+        run: |
+          compose=(docker compose --env-file "$ITSM_CI_ENV" -f infra/compose/compose.yaml)
+          default_boundary() {
+            "${compose[@]}" up -d --no-deps --wait --wait-timeout 90 api &&
+            "${compose[@]}" up -d --no-deps --force-recreate --wait --wait-timeout 90 web &&
+            "${compose[@]}" exec -T api sh -ec 'test "$ENABLE_REQUEST_INTAKE" = false && test "$ENABLE_LIVE_OA_APPROVAL" = false && test "$ENABLE_MANUAL_REQUEST_DELIVERY" = false'
+          }
+          trap 'result=$?; default_boundary || result=1; exit "$result"' EXIT
+          "${compose[@]}" exec -T worker sh -ec 'test "$ENABLE_LIVE_OA_APPROVAL" = false && test "$ENABLE_LIVE_NOTIFICATIONS" = false'
+          ENABLE_REQUEST_INTAKE=true ENABLE_LIVE_OA_APPROVAL=true ENABLE_MANUAL_REQUEST_DELIVERY=true \
+            REQUEST_INTAKE_CATALOG_VERSIONS=REQ-INTAKE-CI@1,REQ-INTAKE-UI@1 REQUEST_APPROVAL_TIMEOUT_MINUTES=60 \
+            DINGTALK_CORP_ID=ci-intake-corp DINGTALK_APP_KEY=ci-placeholder DINGTALK_APP_SECRET=ci-placeholder \
+            "${compose[@]}" up -d --no-deps --wait --wait-timeout 90 api
+          "${compose[@]}" up -d --no-deps --force-recreate --wait --wait-timeout 90 web
+          node tests/integration/request-intake.mjs
+          ITSM_REQUEST_INTAKE_CI_ENABLED=true npx playwright test tests/e2e/request-intake.spec.ts
       - uses: actions/upload-artifact@v4
         if: always()
         with:

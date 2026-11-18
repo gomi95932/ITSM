@@ -3,6 +3,7 @@ import { AuthService } from './auth.service.js';
 import { Database } from './database.service.js';
 import { IntakePolicyService } from './intake-policy.service.js';
 import { ROLE_AUTHORIZATION_LOCK, ROLE_EFFECTIVE_SQL } from './role-policy.js';
+import { requestIntakePolicy } from './request-intake-policy.js';
 type H = Record<string,string | undefined>;
 const auth = (h: H) => ({ devUser: h['x-dev-user'], cookie: h.cookie, csrf: h['x-csrf-token'] });
 
@@ -15,9 +16,12 @@ export class WorkspaceController {
   }
   @Get('catalog') async catalog(@Headers() h: H) {
     const actor = await this.identity.identity(auth(h));
-    const result = await this.db.pool.query(`SELECT * FROM service_catalog WHERE published=true AND (visible_groups='[]'::jsonb OR EXISTS
-      (SELECT 1 FROM group_memberships WHERE employee_id=$1 AND visible_groups ? group_id)) ORDER BY sort_order,code`,[actor.id]);
-    return { items: result.rows.map(r => ({ code:r.code,name:r.name || r.code,description:r.description,type:r.type,formVersion:r.form_version,fields:r.field_schema,available:['INC','GEN'].includes(r.type) })) };
+    const result = await this.db.pool.query(`SELECT c.*,v.snapshot FROM service_catalog c LEFT JOIN request_catalog_versions v
+      ON v.service_code=c.code AND v.form_version=c.form_version WHERE c.published=true AND (c.visible_groups='[]'::jsonb OR EXISTS
+      (SELECT 1 FROM group_memberships WHERE employee_id=$1 AND c.visible_groups ? group_id)) ORDER BY c.sort_order,c.code`,[actor.id]);
+    return { items: result.rows.map(r => ({ code:r.code,name:r.name || r.code,description:r.description,type:r.type,formVersion:r.form_version,fields:r.field_schema,
+      available:['INC','GEN'].includes(r.type)||(r.type==='REQ'&&!!r.snapshot?.approval?.steps?.length
+        &&!!requestIntakePolicy(process.env,r.code,r.form_version)),maxValidityDays:r.type==='REQ'?r.snapshot?.maxValidityDays??null:null })) };
   }
   @Get('support-groups') async groups(@Headers() h: H) {
     const actor = await this.identity.identity(auth(h)); if (!actor.groups.length) throw new NotFoundException();
