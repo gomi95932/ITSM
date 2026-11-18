@@ -3,6 +3,7 @@ import { serviceMinutes, type ServiceCalendar } from '@itsm/contracts';
 import { AuthService } from './auth.service.js';
 import { Database } from './database.service.js';
 import { ownerMatches, reportMetrics, reportOwnerFilter, responsibilitySummary } from './report-metrics.js';
+import { historicalResponsibilitySummary, intervalMetrics, type ResponsibilityInterval } from './responsibility-history.js';
 
 function reportDate(value: string | undefined): Date {
   if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) throw new BadRequestException({ code: 'INVALID_REPORT_WINDOW' });
@@ -21,6 +22,60 @@ type Cycle = {
 @Controller('reports')
 export class ReportsController {
   constructor(private readonly db: Database, private readonly auth: AuthService) {}
+
+  @Get('responsibility-history') async history(@Headers('x-dev-user') devUser?: string, @Headers('cookie') cookie?: string,
+    @Query('groupId') groupId?: string, @Query('from') from?: string, @Query('to') to?: string,
+    @Query('serviceType') serviceType: string = 'INC',
+    @Query('ownerScope') ownerScope?: string, @Query('employeeId') employeeId?: string) {
+    const actor = await this.auth.identity({ devUser, cookie });
+    if (!groupId || !actor.groups.includes(groupId)) throw new NotFoundException();
+    if (serviceType !== 'INC' && serviceType !== 'REQ') throw new BadRequestException({ code: 'INVALID_REPORT_SERVICE_TYPE' });
+    const ownerFilter = reportOwnerFilter(ownerScope, employeeId);
+    if (!ownerFilter) throw new BadRequestException({ code: 'INVALID_REPORT_OWNER_FILTER' });
+    const start = reportDate(from), end = reportDate(to);
+    const days = (end.getTime() - start.getTime()) / 86400000;
+    if (days < 0 || days > 30) throw new BadRequestException({ code: 'INVALID_REPORT_WINDOW' });
+    return this.db.transaction(async client => {
+      await client.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY');
+      const membership = await client.query<{ as_of: Date; recording_started_at: Date; window_start: Date; window_end: Date }>(`
+        SELECT clock_timestamp() AS as_of,r.started_at AS recording_started_at,
+          ($3::date::timestamp AT TIME ZONE 'Asia/Shanghai') AS window_start,
+          (($4::date+1)::timestamp AT TIME ZONE 'Asia/Shanghai') AS window_end
+        FROM group_memberships m JOIN employees e ON e.id=m.employee_id CROSS JOIN responsibility_recording r
+        WHERE e.id=$1 AND e.active AND m.group_id=$2`, [actor.id, groupId, from, to]);
+      if (!membership.rowCount) throw new NotFoundException();
+      const clock = membership.rows[0];
+      const rows = await client.query(`SELECT h.*,n.observed_at AS next_at,f.source AS history_origin,
+          f.observed_at AS first_recorded_at,greatest(h.observed_at,$3::timestamptz) AS interval_from,
+          least(coalesce(n.observed_at,$5::timestamptz),$4::timestamptz,$5::timestamptz) AS interval_until,
+          extract(epoch FROM least(coalesce(n.observed_at,$5::timestamptz),$4::timestamptz,$5::timestamptz)
+            - greatest(h.observed_at,$3::timestamptz)) AS elapsed_seconds
+        FROM ticket_responsibility_history h
+        JOIN ticket_responsibility_history f ON f.ticket_id=h.ticket_id AND f.revision=1
+        LEFT JOIN LATERAL (SELECT observed_at FROM ticket_responsibility_history
+          WHERE ticket_id=h.ticket_id AND revision>h.revision ORDER BY revision LIMIT 1) n ON true
+        WHERE h.owner_group_id=$1 AND h.service_type=$2 AND h.observed_at<least($4::timestamptz,$5::timestamptz)
+          AND least(coalesce(n.observed_at,$5::timestamptz),$4::timestamptz,$5::timestamptz)
+            > greatest(h.observed_at,$3::timestamptz)
+        ORDER BY h.observed_at DESC,h.ticket_id,h.revision DESC LIMIT 5001`,
+      [groupId, serviceType, clock.window_start, clock.window_end, clock.as_of]);
+      if (rows.rows.length > 5000) throw new ServiceUnavailableException({ code: 'REPORT_HISTORY_WINDOW_TOO_LARGE' });
+      // Do not join current ticket details or expose the next group's identity after a historical transfer.
+      const items: ResponsibilityInterval[] = rows.rows.map(row => ({ ticketId: row.ticket_id, number: row.ticket_number,
+        revision: row.revision, source: row.source, recordedAt: row.observed_at, from: row.interval_from,
+        until: row.interval_until, elapsedSeconds: Number(row.elapsed_seconds), clockAdjusted: row.clock_adjusted,
+        groupName: row.owner_group_name, assigneeId: row.assignee_id, assigneeName: row.assignee_name,
+        status: row.status, pendingAcceptance: row.pending_assignee_id !== null,
+        serviceCode: row.service_code, serviceType: row.service_type,
+        historyOrigin: row.history_origin, firstRecordedAt: row.first_recorded_at }));
+      const filtered = items.filter(item => ownerMatches(item, ownerFilter));
+      return { groupId, from, to, serviceType, ownerFilter, timeZone: 'Asia/Shanghai', asOf: clock.as_of,
+        attribution: 'HISTORICAL_OWNER_GROUP', windowBasis: 'INTERVAL_OVERLAP', durationBasis: 'WALL_CLOCK_SECONDS',
+        recordingStartedAt: clock.recording_started_at,
+        windowStartsBeforeRecording: clock.window_start < clock.recording_started_at,
+        responsibility: historicalResponsibilitySummary(items), metrics: intervalMetrics(filtered), items: filtered };
+    });
+  }
 
   @Get('summary') async summary(@Headers('x-dev-user') devUser?: string, @Headers('cookie') cookie?: string,
     @Query('groupId') groupId?: string, @Query('from') from?: string, @Query('to') to?: string,

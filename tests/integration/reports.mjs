@@ -179,6 +179,17 @@ assert.equal(transferredItem.overdueEver, true, 'handover does not reset whole-t
 const previousOwner = await request('/reports/summary?groupId=applications&from=2025-06-10&to=2025-06-10&ownerScope=PERSON&employeeId=agent-1', 'agent-2');
 assert.equal(previousOwner.data.metrics.tickets, 0, 'current attribution never pretends to be historical contribution');
 
+const recordedDay = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10);
+const history = await request(`/reports/responsibility-history?groupId=service-desk&from=${recordedDay}&to=${recordedDay}`, 'agent-1');
+assert.equal(history.status, 200, JSON.stringify(history));
+const priorIntervals = history.data.items.filter(row => row.ticketId === start.id);
+assert.ok(priorIntervals.some(row => row.assigneeId === 'agent-1' && row.pendingAcceptance));
+assert.ok(priorIntervals.every(row => row.assigneeId !== 'agent-2'), 'accepted API handover retains only the old group intervals');
+assert.ok(priorIntervals.some(row => row.status === 'PENDING_CONFIRMATION'));
+const acceptedHistory = await request(`/reports/responsibility-history?groupId=applications&from=${recordedDay}&to=${recordedDay}`, 'agent-2');
+assert.equal(acceptedHistory.status, 200, JSON.stringify(acceptedHistory));
+assert.ok(acceptedHistory.data.items.some(row => row.ticketId === start.id && row.assigneeId === 'agent-2'));
+
 const temporary = `report-${randomUUID()}`;
 await sql(`INSERT INTO employees(id,display_name) VALUES (${quote(temporary)},'Report reviewer');
   INSERT INTO group_memberships(employee_id,group_id) VALUES (${quote(temporary)},'applications'),(${quote(temporary)},'service-desk')`);
