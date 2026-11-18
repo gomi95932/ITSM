@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { lstat, mkdir, open, readFile, realpath, rename, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, open, readFile, realpath, rename, unlink, writeFile } from 'node:fs/promises';
 import { resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -297,7 +297,10 @@ SELECT '{"inventoryCompleted":true}';`;
     if (command === 'backup') { backupPath=await backup(); console.log(`Backup verified: ${backupPath}`); return; }
     if (command === 'restore-check') {
       if (!options.backup) throw new Error('BACKUP_PATH_REQUIRED');
-      const path=resolve(options.backup), metadata=JSON.parse(await readFile(`${path}.json`,'utf8'));
+      const path=resolve(options.backup);
+      // A failed recheck must not leave the previous successful result available to consumers.
+      await unlink(`${path}.restore.json`).catch(error => { if (error.code !== 'ENOENT') throw error; });
+      const metadata=JSON.parse(await readFile(`${path}.json`,'utf8'));
       if (!(await lstat(path)).isFile() || metadata.file !== path || await fileHash(path) !== metadata.sha256) throw new Error('BACKUP_CHECKSUM_MISMATCH');
       const expectedInventory=inventoryFingerprint(metadata.inventory);
       if (metadata.inventoryMethod !== inventoryMethod || metadata.inventorySha256 !== expectedInventory)

@@ -98,6 +98,10 @@ try {
   validateRecoveryProof(metadata,proof);
   assert.equal(await sql('SELECT count(*) FROM recovery_evidence_probe'),String(4101+writes));
   for (const kind of ['missing-row','changed-content','missing-table']) {
+    // Seed a real passed result before each failed recheck; no stale proof may survive.
+    await writeFile(`${backup}.json`,JSON.stringify(metadata));
+    await run('node',restoreArgs);
+    validateRecoveryProof(metadata,JSON.parse(await readFile(`${backup}.restore.json`,'utf8')));
     const changed=structuredClone(metadata);
     const row=changed.inventory.find(row=>row.table==='recovery_evidence_probe');
     if (kind === 'missing-row') row.rows=String(BigInt(row.rows)-1n);
@@ -107,14 +111,20 @@ try {
     await writeFile(`${backup}.json`,JSON.stringify(changed));
     const mismatch=await run('node',restoreArgs,{success:false});
     assert.notEqual(mismatch.code,0,`${kind} must fail even with a valid archive checksum`);
+    await assert.rejects(readFile(`${backup}.restore.json`),{code:'ENOENT'},
+      `${kind} must invalidate the previous passed recovery proof`);
     assert.equal(await sql("SELECT count(*) FROM pg_database WHERE datname LIKE 'itsm_restore_%'"),'0');
   }
   await writeFile(`${backup}.json`,JSON.stringify(metadata));
+  await run('node',restoreArgs);
+  validateRecoveryProof(metadata,JSON.parse(await readFile(`${backup}.restore.json`,'utf8')));
   assert.equal(await sql('SELECT count(*) FROM tickets'),tickets,'restore check must not change the live fixture database');
   assert.equal(await sql("SELECT count(*) FROM pg_database WHERE datname LIKE 'itsm_restore_%'"),'0','temporary restore database must be removed');
   metadata.sha256='0'.repeat(64); await writeFile(`${backup}.json`,JSON.stringify(metadata));
   const corrupt=await run('node',['scripts/release.mjs','restore-check','--env',envFile,'--state',state,'--backup',backup],{success:false});
   assert.notEqual(corrupt.code,0,'corrupt backup must be rejected');
+  await assert.rejects(readFile(`${backup}.restore.json`),{code:'ENOENT'},
+    'archive checksum failure must also invalidate the previous passed recovery proof');
   console.log('Image-bound schema readiness, migration immutability, transaction rollback, backup recovery and live data isolation verified');
 } finally {
   await sql('DROP TABLE IF EXISTS recovery_evidence_probe');
