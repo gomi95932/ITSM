@@ -21,9 +21,17 @@ async function startSla(f){
     FROM sla_calendars ORDER BY version DESC LIMIT 1`);
 }
 async function effects(f){
-  return sql(`SELECT jsonb_build_object('status',t.status,'version',t.version,'owner',t.assignee_id,
-    'events',(SELECT count(*) FROM ticket_events e WHERE e.ticket_id=t.id AND e.action<>'SLA_BREACH'),
-    'audit',(SELECT count(*) FROM audit_logs a WHERE a.ticket_id=t.id AND a.action<>'SLA_BREACH'),
+  // The scheduler can record a reminder while a completion request is being rejected.
+  return sql(`WITH reminders AS (
+    SELECT e.id FROM ticket_events e JOIN request_fulfillment_signals s ON s.event_id=e.id
+    WHERE e.ticket_id=${q(f.ticketId)} AND e.actor_id='system:scheduler'
+      AND e.action='FULFILLMENT_'||s.kind AND e.from_status=e.to_status
+  )
+  SELECT jsonb_build_object('status',t.status,'version',t.version,'owner',t.assignee_id,
+    'events',(SELECT count(*) FROM ticket_events e WHERE e.ticket_id=t.id AND e.action<>'SLA_BREACH'
+      AND NOT EXISTS(SELECT 1 FROM reminders r WHERE r.id=e.id)),
+    'audit',(SELECT count(*) FROM audit_logs a WHERE a.ticket_id=t.id AND a.action<>'SLA_BREACH'
+      AND NOT (a.actor_id='system:scheduler' AND EXISTS(SELECT 1 FROM reminders r WHERE r.id=a.event_id))),
     'cycles',(SELECT jsonb_agg(to_jsonb(s) ORDER BY cycle) FROM sla_cycles s WHERE s.ticket_id=t.id))::text
     FROM tickets t WHERE t.id=${q(f.ticketId)}`);
 }
