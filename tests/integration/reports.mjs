@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
+import { createFulfillmentFixture } from '../support/fulfillment.mjs';
 
 if (process.env.GITHUB_ACTIONS !== 'true' || !process.env.ITSM_CI_ENV) throw new Error('DISPOSABLE_GITHUB_CI_ONLY');
 const base = 'http://127.0.0.1:8088/api/v1';
@@ -42,9 +43,21 @@ const start = await create('2025-06-10 00:00:00+08');
 let end = await create('2025-06-10 23:59:59.999+08');
 const before = await create('2025-06-09 23:59:59.999+08');
 const after = await create('2025-06-11 00:00:00+08');
+const req = await createFulfillmentFixture({ reviewed: true });
+await sql(`UPDATE tickets SET status='CLOSED',owner_group_id='service-desk',created_at='2025-06-10 10:00:00+08' WHERE id=${quote(req.ticketId)};
+  INSERT INTO ticket_feedback(ticket_id,requester_id,rating,comment)
+    VALUES(${quote(req.ticketId)},'employee-1',3,'Private report fixture comment');
+  INSERT INTO sla_cycles(ticket_id,cycle,priority,calendar_snapshot,started_at,completed_at,paused_minutes,response_target,resolution_target)
+    SELECT ${quote(req.ticketId)},1,'P1',config||jsonb_build_object('version',version,'approved',approved),
+      '2025-06-10 10:00:00+08','2025-06-10 11:30:00+08',60,120,35
+    FROM sla_calendars ORDER BY version DESC LIMIT 1`);
 
 assert.equal((await request(`/reports/summary${window}`, 'employee-1')).status, 404);
 assert.equal((await request(`/reports/summary${window}`, 'agent-2')).status, 404);
+assert.equal((await request(`/reports/summary${window}&serviceType=REQ`, 'employee-1')).status, 404);
+assert.equal((await request(`/reports/summary${window}&serviceType=REQ`, 'agent-2')).status, 404);
+for (const filter of ['ALL', '', 'INC&serviceType=REQ'])
+  assert.equal((await request(`/reports/summary${window}&serviceType=${filter}`, 'agent-1')).status, 400);
 assert.equal((await request('/reports/summary?groupId=service-desk&from=2025-02-30&to=2025-03-01', 'agent-1')).status, 400);
 assert.equal((await request('/reports/summary?groupId=service-desk&from=2025-06-10&to=2025-07-11', 'agent-1')).status, 400);
 assert.equal((await request('/reports/summary?groupId=service-desk&from=2025-06-11&to=2025-06-10', 'agent-1')).status, 400);
@@ -53,10 +66,15 @@ let report = await request(`/reports/summary${window}`, 'agent-1');
 assert.equal(report.status, 200, JSON.stringify(report));
 assert.equal(report.data.timeZone, 'Asia/Shanghai');
 assert.equal(report.data.attribution, 'CURRENT_OWNER_GROUP');
+assert.equal(report.data.serviceType, 'INC');
 assert.deepEqual(new Set(report.data.items.map(item => item.id)), new Set([start.id, end.id]));
 assert.ok(!report.data.items.some(item => [before.id, after.id].includes(item.id)));
 assert.equal(report.data.metrics.tickets, 2);
 assert.equal(report.data.metrics.responded, 0, 'fake notification delivery is not a first response');
+const explicitInc = await request(`/reports/summary${window}&serviceType=INC`, 'agent-1');
+assert.equal(explicitInc.status, 200, JSON.stringify(explicitInc));
+assert.deepEqual(explicitInc.data.items.map(row => row.id), report.data.items.map(row => row.id));
+assert.deepEqual(explicitInc.data.metrics, report.data.metrics);
 
 let reopened = await action(start, 'agent-1', 'ACCEPT', { comment: 'Investigating' });
 reopened = await action(reopened, 'agent-1', 'RESOLVE', { comment: 'Restored', resolutionCategory: 'FIX', evidence: 'Verified' });
@@ -83,6 +101,21 @@ assert.equal(item.cycles[0].resolutionOverdue, true);
 assert.equal(item.firstResponse.responded, false);
 assert.equal(item.resolution.completed, false);
 
+const requests = await request(`/reports/summary${window}&serviceType=REQ`, 'agent-1');
+assert.equal(requests.status, 200, JSON.stringify(requests));
+assert.equal(requests.data.serviceType, 'REQ');
+assert.deepEqual(requests.data.items.map(row => row.id), [req.ticketId]);
+assert.equal(requests.data.metrics.rated, 1);
+assert.equal(requests.data.metrics.satisfactionAverage, 3);
+assert.equal(requests.data.metrics.resolved, 1);
+assert.equal(requests.data.metrics.responded, 0);
+assert.deepEqual(requests.data.items[0].resolution, { completed:true, minutes:30, target:35, overdue:false });
+assert.equal(JSON.stringify(requests.data).includes('Private report fixture comment'), false);
+assert.equal(JSON.stringify(requests.data).includes(req.internalMarker), false);
+const outsideRequestDate = await request('/reports/summary?groupId=service-desk&from=2025-06-11&to=2025-06-11&serviceType=REQ', 'agent-1');
+assert.equal(outsideRequestDate.status, 200, JSON.stringify(outsideRequestDate));
+assert.equal(outsideRequestDate.data.items.some(row => row.id === req.ticketId), false);
+
 reopened = await action(reopened, 'agent-1', 'REASSIGN', { targetGroupId: 'applications', targetAssigneeId: 'agent-2', reason: 'Application diagnosis' });
 reopened = await action(reopened, 'agent-2', 'ACCEPT_HANDOVER', { comment: 'Taking over' });
 assert.equal(reopened.ownerGroupId, 'applications');
@@ -95,8 +128,10 @@ assert.equal(transferred.data.items.filter(row => row.id === start.id).length, 1
 
 const temporary = `report-${randomUUID()}`;
 await sql(`INSERT INTO employees(id,display_name) VALUES (${quote(temporary)},'Report reviewer');
-  INSERT INTO group_memberships(employee_id,group_id) VALUES (${quote(temporary)},'applications')`);
+  INSERT INTO group_memberships(employee_id,group_id) VALUES (${quote(temporary)},'applications'),(${quote(temporary)},'service-desk')`);
 assert.equal((await request('/reports/summary?groupId=applications&from=2025-06-10&to=2025-06-10', temporary)).status, 200);
+assert.equal((await request(`/reports/summary${window}&serviceType=REQ`, temporary)).status, 200);
 await sql(`DELETE FROM group_memberships WHERE employee_id=${quote(temporary)}`);
 assert.equal((await request('/reports/summary?groupId=applications&from=2025-06-10&to=2025-06-10', temporary)).status, 404);
-console.log('Reports verified: scoped groups, Shanghai dates, delivery-only response, reopen SLA, feedback and transfer attribution');
+assert.equal((await request(`/reports/summary${window}&serviceType=REQ`, temporary)).status, 404);
+console.log('Reports verified: separate INC/REQ metrics, scoped groups, Shanghai dates, delivery-only response, reopen SLA, feedback and transfer attribution');

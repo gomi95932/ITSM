@@ -22,9 +22,11 @@ export class ReportsController {
   constructor(private readonly db: Database, private readonly auth: AuthService) {}
 
   @Get('summary') async summary(@Headers('x-dev-user') devUser?: string, @Headers('cookie') cookie?: string,
-    @Query('groupId') groupId?: string, @Query('from') from?: string, @Query('to') to?: string) {
+    @Query('groupId') groupId?: string, @Query('from') from?: string, @Query('to') to?: string,
+    @Query('serviceType') serviceType: string = 'INC') {
     const actor = await this.auth.identity({ devUser, cookie });
     if (!groupId || !actor.groups.includes(groupId)) throw new NotFoundException();
+    if (serviceType !== 'INC' && serviceType !== 'REQ') throw new BadRequestException({ code: 'INVALID_REPORT_SERVICE_TYPE' });
     const start = reportDate(from), end = reportDate(to);
     const days = (end.getTime() - start.getTime()) / 86400000;
     if (days < 0 || days > 30) throw new BadRequestException({ code: 'INVALID_REPORT_WINDOW' });
@@ -36,10 +38,10 @@ export class ReportsController {
       const tickets = await client.query(`SELECT t.id,t.number,t.status,t.priority,t.created_at,f.rating,
         (SELECT count(*)::int FROM ticket_events ev WHERE ev.ticket_id=t.id AND ev.action='REOPEN') AS reopen_count
         FROM tickets t LEFT JOIN ticket_feedback f ON f.ticket_id=t.id
-        WHERE t.service_type='INC' AND t.owner_group_id=$1
+        WHERE t.service_type=$4 AND t.owner_group_id=$1
           AND t.created_at>=($2::date::timestamp AT TIME ZONE 'Asia/Shanghai')
           AND t.created_at<(($3::date + 1)::timestamp AT TIME ZONE 'Asia/Shanghai')
-        ORDER BY t.created_at DESC,t.id DESC LIMIT 5001`, [groupId, from, to]);
+        ORDER BY t.created_at DESC,t.id DESC LIMIT 5001`, [groupId, from, to, serviceType]);
       if (tickets.rows.length > 5000) throw new ServiceUnavailableException({ code: 'REPORT_WINDOW_TOO_LARGE' });
       const cycles = tickets.rows.length ? await client.query<Cycle>(`SELECT s.*,now() AS clock FROM sla_cycles s
         WHERE s.ticket_id=ANY($1::uuid[]) ORDER BY s.ticket_id,s.cycle`, [tickets.rows.map(t => t.id)]) : { rows: [] as Cycle[] };
@@ -70,7 +72,7 @@ export class ReportsController {
           unapprovedCalendar: measured.some(c => !c.calendarApproved), cycles: measured };
       });
       const ratings = items.filter(item => item.rating !== null).map(item => item.rating!);
-      return { groupId, from, to, timeZone: 'Asia/Shanghai', attribution: 'CURRENT_OWNER_GROUP',
+      return { groupId, from, to, serviceType, timeZone: 'Asia/Shanghai', attribution: 'CURRENT_OWNER_GROUP',
         metrics: { tickets: items.length, responded: items.filter(i => i.firstResponse?.responded).length,
           firstResponseOverdue: items.filter(i => i.firstResponse?.overdue).length,
           resolved: items.filter(i => i.resolution?.completed).length,
