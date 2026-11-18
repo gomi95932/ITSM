@@ -163,7 +163,12 @@ assert.ok(visibleAlert.ownerGroupName);
 assert.equal(visibleAlert.reason,'NO_ACTIVE_FALLBACK');
 assert.equal(visibleAlert.subject,undefined);
 assert.equal(visibleAlert.description,undefined);
-await new Promise(resolve=>setTimeout(resolve,32000));
+const firstAlertCheck=await sql(`SELECT last_checked_at::text FROM ticket_routing_alerts
+  WHERE ticket_id=${quote(stranded.id)} AND resolved_at IS NULL`);
+assert.ok(firstAlertCheck);
+await until(async()=>await sql(`SELECT count(*) FROM ticket_routing_alerts
+  WHERE ticket_id=${quote(stranded.id)} AND resolved_at IS NULL
+    AND last_checked_at>${quote(firstAlertCheck)}::timestamptz`)==='1');
 assert.equal(await sql(`SELECT count(*) FROM ticket_events WHERE ticket_id=${quote(stranded.id)} AND action='OWNERSHIP_ESCALATION_REQUIRED'`),'1',
   'an unresolved alert does not create duplicate escalation events on each scan');
 await sql(`UPDATE support_groups SET fallback_group_id='service-desk' WHERE id=${quote(unroutable)}`);
