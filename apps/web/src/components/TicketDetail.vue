@@ -25,6 +25,7 @@ const reviewLabels:Record<string,string>={NOT_REQUIRED:'无需主管确认',PEND
 watch([reviewPriority,reviewReason],()=>{reviewKey.value=createRequestKey();reviewSafe.value=false;});
 const fieldLabels:Record<string,string>={system:'业务系统',module:'模块 / 页面',location:'所在地点',device:'设备编号'};
 const approvalLabels:Record<string,string>={QUEUED:'等待发起',CREATING:'正在发起',CREATE_UNCERTAIN:'发起结果待核实',PENDING:'审批中',APPROVED:'审批已通过',REJECTED:'审批未通过',WITHDRAWN:'已撤回',EXPIRED:'已过期',BLOCKED:'受阻待处理'};
+const cancellationLabels={NOT_SENT:'申请已撤销，未发起钉钉审批。',OA_CONFIRMATION_REQUIRED:'申请已撤销，ITSM 不会交付。钉钉审批是否撤回，仍需在钉钉核对。',OA_CREATION_UNCERTAIN:'申请已撤销，ITSM 不会交付。钉钉审批是否发起，仍待核实。',OA_CLOSED:'申请已撤销，钉钉审批已结束。'};
 const fulfillmentLabels:Record<string,string>={READY:'待人工交付',DELIVERED:'已交付',REVOKE_DUE:'待回收',REVOKED:'已回收',BLOCKED:'交付受阻'};
 watch([comment,reason,dueAt,vendorReference,vendorOwner,category,evidence,target,targetPerson,continuationId],()=>{key.value=createRequestKey();contentSafe.value=false;});
 watch(target,async value=>{
@@ -39,7 +40,7 @@ const mine=computed(()=>ticket.value?.requesterId===props.user.id);
 const completionReady=computed(()=>ticket.value?.serviceType!=='REQ'||ticket.value.requestCompletionReady===true);
 const available=computed<TicketAction[]>(()=>{
   if(!ticket.value)return[];const state=ticket.value.status,result:TicketAction[]=[];
-  if(mine.value){if(['NEW','QUEUED'].includes(state))result.push('CANCEL');if(state==='WAITING_USER')result.push('ADD_INFO');if(state==='PENDING_CONFIRMATION'){if(completionReady.value)result.push('CONFIRM');result.push('REOPEN');}}
+  if(mine.value){if(['NEW','QUEUED'].includes(state)||state==='WAITING_APPROVAL'&&ticket.value.serviceType==='REQ')result.push('CANCEL');if(state==='WAITING_USER')result.push('ADD_INFO');if(state==='PENDING_CONFIRMATION'){if(completionReady.value)result.push('CONFIRM');result.push('REOPEN');}}
   if(!mine.value&&ticket.value.canAddInfo&&state==='WAITING_USER')result.push('ADD_INFO');
   const active=['QUEUED','IN_PROGRESS','WAITING_USER','WAITING_VENDOR','PENDING_CONFIRMATION'].includes(state);
   if(active&&ticket.value.pendingAssigneeId===props.user.id)result.push(ticket.value.assignmentKind==='OFFER'?'ACCEPT_OFFER':'ACCEPT_HANDOVER',ticket.value.assignmentKind==='OFFER'?'DECLINE_OFFER':'DECLINE_HANDOVER');
@@ -84,7 +85,7 @@ async function submit(){
   if(category.value)body.resolutionCategory=category.value;if(evidence.value)body.evidence=evidence.value;if(target.value&&['REASSIGN','INITIATE_HANDOVER'].includes(action.value))body.targetGroupId=target.value;if(targetPerson.value)body.targetAssigneeId=targetPerson.value;
   if(continuationId.value&&action.value.startsWith('CONTINUATION_')&&action.value!=='CONTINUATION_PROPOSE')body.continuationId=continuationId.value;
   try{await api(`/tickets/${props.id}/actions`,{method:'POST',body,key:key.value});action.value=undefined;await load();emit('changed');}
-  catch(e){if(e instanceof ApiError&&e.status===409){await load();key.value=createRequestKey();}error.value=errorText(e);}finally{busy.value=false;}
+  catch(e){if(e instanceof ApiError&&e.status===409){await load();if(action.value&&!available.value.includes(action.value))action.value=undefined;key.value=createRequestKey();}error.value=errorText(e);}finally{busy.value=false;}
 }
 async function submitPriorityReview(){
   if(!ticket.value||!ticket.value.canReviewPriority||!reviewSafe.value||!reviewReason.value.trim()||busy.value)return;
@@ -139,14 +140,15 @@ onMounted(load);
         </form>
       </section>
       <section v-if="mine&&ticket.serviceType==='REQ'" class="detail-section" aria-label="申请进度"><h2>申请进度</h2>
-        <template v-if="ticket.requestProgress?.approval"><p>审批：<strong>{{approvalLabels[ticket.requestProgress.approval.state]??ticket.requestProgress.approval.state}}</strong><span class="muted"> · {{formatDate(ticket.requestProgress.approval.updatedAt)}}</span></p></template>
+        <p v-if="ticket.requestProgress?.cancellation" role="status">{{cancellationLabels[ticket.requestProgress.cancellation]}}</p>
+        <template v-else><template v-if="ticket.requestProgress?.approval"><p>审批：<strong>{{approvalLabels[ticket.requestProgress.approval.state]??ticket.requestProgress.approval.state}}</strong><span class="muted"> · {{formatDate(ticket.requestProgress.approval.updatedAt)}}</span></p></template>
         <p v-else class="muted">审批记录尚未生成。</p>
         <template v-if="ticket.requestProgress?.fulfillment"><p>交付：<strong>{{fulfillmentLabels[ticket.requestProgress.fulfillment.state]??ticket.requestProgress.fulfillment.state}}</strong><span class="muted"> · {{formatDate(ticket.requestProgress.fulfillment.updatedAt)}}</span></p>
           <p v-if="ticket.requestProgress.fulfillment.deliveredAt" class="muted">交付时间：{{formatDate(ticket.requestProgress.fulfillment.deliveredAt)}}</p>
           <p v-if="ticket.requestProgress.fulfillment.accessExpiresAt" class="muted">权限到期：{{formatDate(ticket.requestProgress.fulfillment.accessExpiresAt)}}</p>
           <p v-if="ticket.requestProgress.fulfillment.revokedAt" class="muted">回收时间：{{formatDate(ticket.requestProgress.fulfillment.revokedAt)}}</p>
           <p v-if="ticket.requestProgress.fulfillment.reviewedAt" class="muted">交付复核：{{formatDate(ticket.requestProgress.fulfillment.reviewedAt)}}</p>
-        </template><p v-else class="muted">交付记录尚未生成；审批通过不代表权限已开通。</p>
+        </template><p v-else class="muted">交付记录尚未生成；审批通过不代表权限已开通。</p></template>
       </section>
       <p v-if="ticket.serviceType==='REQ'&&['IN_PROGRESS','WAITING_VENDOR','PENDING_CONFIRMATION'].includes(ticket.status)" class="muted" role="status">{{completionReady?'交付与独立复核记录齐备':'交付完成条件未齐备，待核验审批、实际交付及独立复核记录。'}}</p>
       <div class="detail-grid"><div><section class="detail-section"><h2>{{ticket.serviceType==='REQ'?'申请详情':'报障详情'}}</h2><p class="multiline">{{ticket.description}}</p><dl v-if="Object.keys(ticket.fields).length" class="fact-list"><template v-for="(value,name) in ticket.fields" :key="name"><dt>{{fieldLabels[String(name)]??name}}</dt><dd>{{value}}</dd></template></dl></section>
@@ -161,6 +163,7 @@ onMounted(load);
         <section class="detail-section sla-section"><h2><Clock3 :size="17"/> 服务时效</h2><div v-for="sla in ticket.sla??[]" :key="sla.cycle" class="sla-cycle"><div class="section-heading"><strong>第 {{sla.cycle}} 轮</strong><span :class="sla.breached?'danger-text':'muted'">{{sla.completed?'已停止':sla.paused?(sla.pauseReason==='APPROVAL'?'等待审批，交付计时暂停':'等待补充，解决计时暂停'):sla.breached?'已超时':'计时中'}}</span></div><p>首次响应 <strong>{{duration(sla.responseMinutes)}}</strong> / {{duration(sla.responseTarget)}}</p><p>{{ticket.serviceType==='REQ'?'交付耗时':'解决耗时'}} <strong>{{duration(sla.resolutionMinutes)}}</strong> / {{duration(sla.resolutionTarget)}}</p><p v-if="!sla.responded&&!sla.completed" class="muted">等待人工回复送达</p></div><p v-if="!ticket.sla?.length" class="muted">此工单暂无 SLA 周期。</p><p class="caption">当前使用试点服务日历</p></section>
         <section v-if="available.length" class="detail-section"><h2>处理操作</h2><div class="action-list"><button v-for="value in available" :key="value" class="secondary" :class="{selected:action===value}" @click="choose(value)">{{commands[value]}}</button></div>
           <form v-if="action" class="action-form" @submit.prevent="submit">
+            <p v-if="action==='CANCEL'&&ticket.serviceType==='REQ'">撤销后将停止交付。已发起的钉钉审批不会自动撤回。</p>
             <label v-if="['ACCEPT','ACCEPT_HANDOVER','ACCEPT_OFFER','REQUEST_INFO','ADD_INFO','WAIT_VENDOR','RESOLVE'].includes(action)">{{action==='RESOLVE'?(ticket.serviceType==='REQ'?'交付说明':'解决说明'):action==='REQUEST_INFO'?'需要补充的内容':'回复内容'}}<textarea v-model="comment" required maxlength="2000" rows="3"/></label>
             <label v-if="action.startsWith('CONTINUATION_')||['REOPEN','REASSIGN','INITIATE_HANDOVER','ASSIGN_OFFER','DECLINE_HANDOVER','CANCEL_HANDOVER','DECLINE_OFFER','CANCEL_OFFER'].includes(action)">原因<textarea v-model="reason" required maxlength="2000" rows="3"/></label>
             <label v-if="action.startsWith('CONTINUATION_')&&action!=='CONTINUATION_PROPOSE'">授权记录<select v-model="continuationId" required><option value="">请选择</option><option v-for="item in selectableContinuations" :key="item.id" :value="item.id">{{formatDate(item.expiresAt)}} · {{item.employeeId}}</option></select></label>

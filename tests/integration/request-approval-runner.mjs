@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { Pool } from 'pg';
+import { blockRequestApprovalOnCancellation } from '@itsm/workflow';
 import { enqueueRequestApproval, maintainRequestApprovals, processNextRequestApproval, queueVerifiedApprovalHint } from './apps/worker/dist/request-approval.js';
 import { prepareRequestFulfillment, recordRequestDelivery, reviewRequestDelivery, recordRequestRevocation, maintainRequestFulfillments, processNextRequestDelivery } from './apps/worker/dist/request-fulfillment.js';
 
@@ -168,6 +169,42 @@ try {
   assert.ok((await sla(rejectedTicket)).completed_at);
   const rejectedProjection=await projectionEffects(rejectedTicket,'REQUEST_REJECTED');
   assert.deepEqual([rejectedProjection.events,rejectedProjection.audits,rejectedProjection.notices],['1','1','1']);
+
+  const cancelDuringProviderCall = fixture => transaction(async client => {
+    await client.query('SELECT id FROM request_approvals WHERE id=$1 FOR UPDATE',[fixture.id]);
+    await client.query('SELECT id FROM tickets WHERE id=$1 FOR UPDATE',[fixture.input.ticketId]);
+    await blockRequestApprovalOnCancellation(client,fixture.input.ticketId);
+    await client.query("UPDATE tickets SET status='CANCELLED',version=version+1 WHERE id=$1",[fixture.input.ticketId]);
+  });
+  const inFlightCreate=await fresh();
+  const lateCreate=await processApproval(inFlightCreate.id,{...provider,async create(input){
+    const result=await provider.create(input);
+    await cancelDuringProviderCall(inFlightCreate);
+    return result;
+  }});
+  assert.equal(lateCreate.state,'BLOCKED');
+  assert.equal(lateCreate.last_error,'REQUEST_CANCELLED');
+  assert.equal(lateCreate.provider_instance_id,references.get(inFlightCreate.id));
+  assert.equal(lateCreate.lease_token,null);
+  assert.equal((await db.query(`SELECT count(*) FROM request_approval_events WHERE approval_id=$1
+    AND action='CREATE_RECEIPT_AFTER_CANCELLATION'`,[inFlightCreate.id])).rows[0].count,'1');
+  assert.equal(await hint(inFlightCreate.id),true);
+  assert.equal(await processNextRequestApproval(db,provider),false,'callbacks never resume cancelled approvals');
+
+  const inFlightApproval=await fresh();
+  const remote=await processApproval(inFlightApproval.id);
+  records.get(remote.provider_instance_id).state='APPROVED';
+  const lateApproval=await processApproval(inFlightApproval.id,{...provider,async inspect(instanceId){
+    const result=await provider.inspect(instanceId);
+    await cancelDuringProviderCall(inFlightApproval);
+    return result;
+  }});
+  assert.equal(lateApproval.state,'BLOCKED');
+  assert.equal(lateApproval.last_verified_at,null);
+  const cancelledProjection=await projectionEffects(inFlightApproval.input.ticketId,'REQUEST_APPROVED');
+  assert.deepEqual([cancelledProjection.status,cancelledProjection.events,cancelledProjection.audits,cancelledProjection.notices],
+    ['CANCELLED','0','0','0']);
+  assert.equal((await db.query('SELECT count(*) FROM request_fulfillments WHERE approval_id=$1',[inFlightApproval.id])).rows[0].count,'0');
 
   const premature=await fresh();await processApproval(premature.id);
   await db.query("UPDATE tickets SET status='IN_PROGRESS' WHERE id=$1",[premature.input.ticketId]);

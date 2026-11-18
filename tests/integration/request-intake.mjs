@@ -107,6 +107,35 @@ assert.equal(await sql(`SELECT count(*) FROM tickets WHERE service_code=${quote(
 assert.equal((await request(`/tickets/${first.data.id}`)).data.requestProgress.approval.state,'QUEUED');
 assert.equal((await request(`/tickets/${first.data.id}`,undefined,verifier)).status,404);
 
+const cancel=(ticket,version=ticket.version,user=requester,key)=>request(`/tickets/${ticket.id}/actions`,
+  {contentClass:'GENERAL',action:'CANCEL',expectedVersion:version},user,key);
+assert.equal((await cancel(first.data,first.data.version,manager)).status,403);
+assert.equal((await cancel(first.data,first.data.version,verifier)).status,404);
+assert.equal((await cancel(first.data,first.data.version+1)).data.code,'VERSION_CONFLICT');
+const cancelKey=randomUUID();
+const [cancelled,cancelReplay]=await Promise.all([cancel(first.data,undefined,requester,cancelKey),cancel(first.data,undefined,requester,cancelKey)]);
+assert.ok([200,201].includes(cancelled.status),JSON.stringify(cancelled));
+assert.equal(cancelled.data.status,'CANCELLED');
+assert.equal(cancelled.data.version,first.data.version+1);
+assert.deepEqual(cancelReplay,cancelled);
+assert.equal((await cancel(cancelled.data)).data.code,'INVALID_TRANSITION');
+assert.equal((await request(`/tickets/${first.data.id}`)).data.requestProgress.cancellation,'NOT_SENT');
+assert.equal(await sql(`SELECT a.state||':'||a.last_error||':'||(s.completed_at IS NOT NULL)::text||':'||(s.responded_at IS NULL)::text
+  FROM request_approvals a JOIN sla_cycles s ON s.ticket_id=a.ticket_id WHERE a.ticket_id=${id}`),'BLOCKED:REQUEST_CANCELLED:true:true');
+assert.equal(await sql(`SELECT count(*) FROM ticket_events e JOIN audit_logs l ON l.event_id=e.id
+  JOIN outbox_events o ON o.event_id=e.id WHERE e.ticket_id=${id} AND e.action='CANCEL'`),'1');
+assert.equal(await sql(`SELECT count(*) FROM request_approval_events e JOIN request_approvals a ON a.id=e.approval_id
+  WHERE a.ticket_id=${id} AND e.reason_code='REQUEST_CANCELLED'`),'1');
+
+const pending=await create({subject:'CI request with an in-flight OA submission'});
+assert.equal(pending.status,201);
+const pendingId=quote(pending.data.id),lease=quote(randomUUID());
+await sql(`UPDATE request_approvals SET state='CREATING',creation_attempts=1,lease_token=${lease},lease_until=now()+interval '1 minute'
+  WHERE ticket_id=${pendingId}`);
+assert.equal((await cancel(pending.data)).data.status,'CANCELLED');
+assert.equal(await sql(`SELECT lease_token=${lease} FROM request_approvals WHERE ticket_id=${pendingId}`),'t');
+assert.equal((await request(`/tickets/${pending.data.id}`)).data.requestProgress.cancellation,'OA_CREATION_UNCERTAIN');
+
 await sql(`INSERT INTO request_catalog_publishers(employee_id,service_code) VALUES (${quote(verifier)},${quote(snapshot.code)})`);
 const published=await request(`/request-catalog/${snapshot.code}/versions`,{
   contentClass:'GENERAL',expectedVersion:1,name:'CI request intake revised',description:snapshot.description,
@@ -118,4 +147,4 @@ assert.equal((await catalog()).available,false);
 await reject({formVersion:1},409,'FORM_VERSION_CONFLICT');
 await reject({formVersion:2},503,'REQUEST_APPROVAL_POLICY_NOT_CONFIGURED');
 assert.deepEqual((await create({},requester,key)).data,first.data);
-console.log('REQ intake verified: atomic approval and SLA, restricted catalog versions, same-key replay, actor separation and rollback');
+console.log('REQ intake and cancellation verified: atomic approval and SLA, restricted catalog versions, same-key replay, actor separation and rollback');

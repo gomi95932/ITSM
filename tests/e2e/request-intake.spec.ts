@@ -35,5 +35,14 @@ for(const viewport of [{name:'desktop',width:1440,height:1000},{name:'mobile',wi
     await expect(page.getByRole('region',{name:'申请进度'})).toContainText('等待发起');
     expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
     await page.screenshot({path:`test-results/request-intake-progress-${viewport.name}.png`,fullPage:true});
+
+    await page.getByRole('button',{name:'撤销申请',exact:true}).click();
+    const confirmation=page.locator('form.action-form');
+    await confirmation.getByRole('checkbox',{name:'本次内容不含密码、密钥及安全事件证据'}).check();
+    await confirmation.getByRole('button',{name:'撤销申请',exact:true}).click();
+    await expect(page.getByRole('region',{name:'申请进度'})).toContainText('申请已撤销，未发起钉钉审批。');
+    await expect(page.getByRole('button',{name:'撤销申请',exact:true})).toHaveCount(0);
+    expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+    await page.screenshot({path:`test-results/request-intake-cancelled-${viewport.name}.png`,fullPage:true});
   });
 }

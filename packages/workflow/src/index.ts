@@ -75,3 +75,15 @@ export async function enqueueRequestApproval(client: PoolClient, input: {
       AND completed_at IS NULL AND paused_at IS NULL`,[ticket.id]);
   return result.rows[0].id;
 }
+
+// The caller holds the approval and ticket locks and commits the ticket cancellation with this change.
+export async function blockRequestApprovalOnCancellation(client: PoolClient, ticketId: string): Promise<void> {
+  const prior = (await client.query<{id:string;state:string}>(`SELECT id,state FROM request_approvals
+    WHERE ticket_id=$1 AND state IN ('QUEUED','CREATING','CREATE_UNCERTAIN','PENDING','APPROVED') FOR UPDATE`,[ticketId])).rows[0];
+  if (!prior) return;
+  // Preserve an in-flight lease so its late create receipt can still attach the remote ID.
+  await client.query(`UPDATE request_approvals SET state='BLOCKED',last_error='REQUEST_CANCELLED',last_verified_at=NULL,
+    updated_at=clock_timestamp() WHERE id=$1`,[prior.id]);
+  await client.query(`INSERT INTO request_approval_events(approval_id,action,from_state,to_state,reason_code)
+    VALUES ($1,'APPROVAL_BLOCKED',$2,'BLOCKED','REQUEST_CANCELLED')`,[prior.id,prior.state]);
+}

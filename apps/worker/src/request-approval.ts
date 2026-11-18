@@ -7,7 +7,7 @@ export { enqueueRequestApproval, type ApprovalSnapshot } from '@itsm/workflow';
 type Person = { employeeId: string; dingUserId: string };
 type State = 'QUEUED' | 'CREATING' | 'CREATE_UNCERTAIN' | 'PENDING' | 'APPROVED' | 'REJECTED' | 'WITHDRAWN' | 'EXPIRED' | 'BLOCKED';
 type Approval = { id: string; ticket_id: string; corp_id: string; snapshot: ApprovalSnapshot; expires_at: Date;
-  state: State; provider_instance_id: string | null; attempts: number; lease_token: string | null; clock: Date };
+  state: State; provider_instance_id: string | null; attempts: number; lease_token: string | null; clock: Date; last_error: string | null };
 export type ApprovalObservation = {
   instanceId: string; corpId: string; templateId: string; applicantDingUserId: string;
   approverDingUserIds: string[]; state: 'PENDING' | 'APPROVED' | 'REJECTED' | 'WITHDRAWN';
@@ -140,6 +140,10 @@ export async function queueVerifiedApprovalHint(client: PoolClient, input: { cor
   const inserted = await client.query(`INSERT INTO request_approval_hints(corp_id,event_id,approval_id) VALUES ($1,$2,$3)
     ON CONFLICT DO NOTHING RETURNING event_id`,[input.corpId,input.eventId,row.id]);
   if (!inserted.rowCount) return false;
+  if (!activeStates.includes(row.state)) {
+    await event(client,row,'VERIFIED_CALLBACK_HINT',row.state);
+    return true;
+  }
   // A newer hint fences in-flight observations and revokes approval evidence until reinspection.
   const state = row.state === 'APPROVED' ? 'PENDING' : row.state;
   await client.query(`UPDATE request_approvals SET next_at=now(),state=$2,last_verified_at=NULL,
@@ -201,8 +205,9 @@ export async function processNextRequestApproval(db: Pool, provider: RequestAppr
     const row = (await client.query<Approval>('SELECT *,now() AS clock FROM request_approvals WHERE id=$1 FOR UPDATE',[claimed.id])).rows[0];
     if (!row || row.lease_token !== claimed.lease_token) return;
     if (instanceId && !failed && !row.provider_instance_id) {
-      await client.query('UPDATE request_approvals SET provider_instance_id=$2 WHERE id=$1',[row.id,instanceId]);
+      await client.query('UPDATE request_approvals SET provider_instance_id=$2,updated_at=clock_timestamp() WHERE id=$1',[row.id,instanceId]);
       row.provider_instance_id = instanceId;
+      if (row.last_error==='REQUEST_CANCELLED') await event(client,row,'CREATE_RECEIPT_AFTER_CANCELLATION',row.state,'REQUEST_CANCELLED');
     }
     const reason = activeStates.includes(row.state) ? await localBlock(client,row) : null;
     if (reason) await block(client,row,reason);

@@ -9,7 +9,7 @@ import { SlaService } from './sla.service.js';
 import { IntakePolicyService } from './intake-policy.service.js';
 import { ownershipDenial } from './ticket-ownership.js';
 import { canDispatch, canManageContinuity, ROLE_AUTHORIZATION_LOCK } from './role-policy.js';
-import { enqueueRequestApproval } from '@itsm/workflow';
+import { blockRequestApprovalOnCancellation, enqueueRequestApproval } from '@itsm/workflow';
 import { requestIntakePolicy } from './request-intake-policy.js';
 
 export function canViewRequestProgress(actorId: string, requesterId: string, serviceType: string): boolean {
@@ -353,6 +353,9 @@ export class TicketsService {
         'SELECT rating,comment,created_at AS "createdAt" FROM ticket_feedback WHERE ticket_id=$1',[id]) : null;
       const requestProgress = canViewRequestProgress(actor.id, ticket.requester_id, ticket.service_type)
         ? await client.query(`SELECT a.state AS approval_state,a.updated_at AS approval_updated_at,
+            CASE WHEN a.state IN ('WITHDRAWN','REJECTED') THEN 'OA_CLOSED'
+              WHEN a.provider_instance_id IS NOT NULL THEN 'OA_CONFIRMATION_REQUIRED'
+              WHEN a.creation_attempts>0 THEN 'OA_CREATION_UNCERTAIN' ELSE 'NOT_SENT' END AS cancellation_oa,
             f.state AS fulfillment_state,f.delivered_at,f.access_expires_at,f.revoked_at,f.reviewed_at,f.updated_at AS fulfillment_updated_at
           FROM request_approvals a LEFT JOIN request_fulfillments f ON f.approval_id=a.id
           WHERE a.ticket_id=$1`, [id])
@@ -390,6 +393,7 @@ export class TicketsService {
         ...(ticket.service_type==='REQ'?{requestCompletionReady}:{}),
         ...(continuations?{continuations:continuations.rows}:{}),
         ...(canViewRequestProgress(actor.id, ticket.requester_id, ticket.service_type) ? { requestProgress: {
+          ...(ticket.status==='CANCELLED' ? { cancellation:progressRow?.cancellation_oa ?? 'NOT_SENT' } : {}),
           approval: progressRow ? { state: progressRow.approval_state, updatedAt: progressRow.approval_updated_at }
             : null,
           fulfillment: progressRow?.fulfillment_state ? {
@@ -615,7 +619,14 @@ export class TicketsService {
         throw new ForbiddenException({code:'TICKET_ACTION_NOT_AUTHORIZED'});
       const role = (ticket.requester_id === actor.id && ['ADD_INFO','CONFIRM','REOPEN','CANCEL'].includes(body.action)) || delegatedInfo
         ? 'requester' : 'agent';
-      const next = transition(ticket.status, role, body);
+      const next = transition(ticket.status, role, body, ticket.service_type);
+      if(ticket.service_type==='REQ' && body.action==='CANCEL') {
+        if((await client.query(`SELECT 1 FROM request_approvals a WHERE a.ticket_id=$1 AND (
+          EXISTS (SELECT 1 FROM request_fulfillments f WHERE f.approval_id=a.id)
+          OR EXISTS (SELECT 1 FROM request_delivery_commands c WHERE c.approval_id=a.id))`,[id])).rowCount)
+          throw new ConflictException({code:'REQUEST_DELIVERY_ALREADY_STARTED'});
+        await blockRequestApprovalOnCancellation(client,id);
+      }
       if(['REQUEST_INFO','WAIT_VENDOR','RESOLVE'].includes(body.action))await this.requireProcessing(client,ticket,actor.id);
       if(ticket.service_type==='REQ'&&['RESOLVE','CONFIRM'].includes(body.action)
         && !(await client.query<{ready:boolean}>('SELECT request_ticket_completion_ready($1) AS ready',[id])).rows[0].ready)

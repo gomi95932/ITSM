@@ -2,6 +2,14 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { transition } from './ticket-state.js';
 
+test('only the requester may cancel a request awaiting approval', () => {
+  const cancel = {action:'CANCEL',expectedVersion:1} as const;
+  assert.equal(transition('WAITING_APPROVAL','requester',cancel,'REQ'),'CANCELLED');
+  assert.throws(()=>transition('WAITING_APPROVAL','requester',cancel,'INC'));
+  assert.throws(()=>transition('WAITING_APPROVAL','agent',cancel,'REQ'));
+  assert.throws(()=>transition('IN_PROGRESS','requester',cancel,'REQ'));
+});
+
 test('agent and requester can complete and reopen only before closure', () => {
   assert.equal(transition('QUEUED', 'agent', { action: 'ACCEPT', expectedVersion: 1,comment:'正在排查，请稍候' }), 'IN_PROGRESS');
   assert.equal(transition('IN_PROGRESS', 'agent', { action: 'RESOLVE', expectedVersion: 2, comment: 'Restored', resolutionCategory: 'FIX', evidence: 'Verified' }), 'PENDING_CONFIRMATION');

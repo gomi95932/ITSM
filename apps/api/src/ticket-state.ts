@@ -3,7 +3,7 @@ import type { TicketActionInput, TicketStatus } from '@itsm/contracts';
 
 export type ActorRole = 'requester' | 'agent';
 
-export function transition(status: TicketStatus, role: ActorRole, input: Omit<TicketActionInput, 'contentClass'>): TicketStatus {
+export function transition(status: TicketStatus, role: ActorRole, input: Omit<TicketActionInput, 'contentClass'>, serviceType?: string): TicketStatus {
   const { action } = input;
   const agent = role === 'agent';
   const allowed: Partial<Record<TicketStatus, Partial<Record<string, TicketStatus>>>> = agent
@@ -17,6 +17,7 @@ export function transition(status: TicketStatus, role: ActorRole, input: Omit<Ti
     : {
         NEW: { CANCEL: 'CANCELLED' },
         QUEUED: { CANCEL: 'CANCELLED' },
+        ...(serviceType === 'REQ' ? { WAITING_APPROVAL: { CANCEL: 'CANCELLED' } } : {}),
         WAITING_USER: { ADD_INFO: 'IN_PROGRESS' },
         PENDING_CONFIRMATION: { CONFIRM: 'CLOSED', REOPEN: 'IN_PROGRESS' },
       };
