@@ -1,15 +1,35 @@
 # CI Throughput and Delivery Boundaries
 
+## Validation triggers
+
+From the 2026-11-18 candidate, open a draft integration PR early. Opening
+or updating that PR runs the complete application and bootstrap checks.
+A feature-branch push no longer starts a second, identical validation run.
+Branches without a PR do not receive automatic validation; open the PR
+before treating any candidate as checked. A manual workflow-dispatch entry
+is available once this workflow definition is on the default branch.
+
+Main pushes still run the complete checks and, only after success, publish
+images and rehearse the fixed release bundle. Manual runs never publish:
+publication retains its explicit main-push-only condition. No path filter,
+draft exemption, security exemption or test subset is introduced.
+
+This removes one duplicate automatic run per PR update; it does not halve
+the duration of a single check, change GitHub pricing, or resolve a blocked
+billing account. Trigger behavior still needs a real successful Actions
+run after the candidate is pushed and the account can start jobs.
+
 ## Superseded validation runs
 
 `Application CI` uses a concurrency group scoped to workflow, event type and
-Git ref. A new feature-branch push cancels an older run for the same branch;
-a PR update cancels the older validation run for that PR. Unrelated branches
-and workflows do not cancel each other.
+Git ref. A PR update cancels the older validation run for that PR; a newer
+manual run on the same non-main ref can replace an older manual run.
+Unrelated branches and workflows do not cancel each other.
 
-Push and PR runs intentionally have different groups: a branch-head run
-cannot cancel a PR merge-ref check that may be required for review. This
-policy does not deduplicate push and PR validation of the same change.
+Event types keep different concurrency groups, so a manual run cannot
+cancel a PR merge-ref check that may be required for review. The earlier
+policy of automatic feature-push plus PR validation is superseded by the
+trigger policy above.
 
 An in-progress `main` run is not canceled by a newer commit. This protects
 image publication and release rehearsal from automatic interruption. GitHub
@@ -47,8 +67,24 @@ security-gate branch was `a84747608b006cddfda9c7c604921f9f670e54d4`.
 These observations do not establish automatic server deployment.
 
 The concurrency changes require real Actions validation. To exercise
-cancellation, push a newer feature commit while the preceding run is
+cancellation, update an open PR while the preceding PR run is
 actually in progress, then record both run IDs, commit SHAs and terminal
 results. A passing ordinary run alone does not prove cancellation behavior.
 
 Reference: https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency
+
+## Actions account start failures
+
+On 2026-11-18, candidate `ef2d3ee130bad332007153e7fba39d850a486aa6`
+had no job steps in Application CI run `44256523732`. The build check
+annotation explicitly said recent account payments had failed or the
+spending limit needed to be increased. This is not a test assertion failure
+and does not prove the candidate passes. Previous `bb3943a` passed complete
+Application CI run `44254124986`; that result does not validate later code.
+
+The account owner must inspect Billing & plans, payment status and Actions
+budgets/limits. Do not raise a paid limit, change repository visibility,
+disable checks, or install a privileged self-hosted runner as a workaround.
+After the account can start jobs, rerun the exact latest PR checks and
+record their final results. Avoid repeatedly retrying while this condition
+persists. Server readiness is not an alternative to the missing checks.

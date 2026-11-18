@@ -3,7 +3,8 @@ name: Application CI
 on:
   pull_request:
   push:
-    branches: [main, 'feat/**']
+    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
