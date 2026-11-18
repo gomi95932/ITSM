@@ -137,6 +137,14 @@ jobs:
         run: node tests/integration/reports.mjs
       - name: Verify historical responsibility capture, legacy baseline and scoped interval reports
         run: node tests/integration/responsibility-history.mjs
+      - name: Verify scoped notification reports, private-field filtering and full-cohort limits
+        env:
+          ITSM_NOTIFICATION_REPORT_WORKER_STOPPED: 'true'
+        run: |
+          compose=(docker compose --env-file "$ITSM_CI_ENV" -f infra/compose/compose.yaml)
+          "${compose[@]}" stop worker
+          trap 'result=$?; "${compose[@]}" up -d --no-deps --wait --wait-timeout 90 worker || result=1; exit "$result"' EXIT
+          node tests/integration/notification-report.mjs
       - name: Verify repeatable development acceptance on a populated database
         run: |
           node scripts/verify-development.mjs --base-url http://127.0.0.1:8088 --allow-synthetic-writes
@@ -191,7 +199,7 @@ jobs:
       - name: Verify browser evidence survived all isolated test phases
         run: |
           for viewport in desktop mobile; do
-            for scene in request-lifecycle-feedback reports-requests reports-personal reports-history request-delivery-completed request-intake-progress; do
+            for scene in request-lifecycle-feedback reports-requests reports-personal reports-history reports-notifications request-delivery-completed request-intake-progress; do
               test -s "test-results/${scene}-${viewport}.png"
             done
           done

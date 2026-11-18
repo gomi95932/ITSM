@@ -103,6 +103,8 @@ export const messages: Record<string,string> = {
   INVALID_REPORT_WINDOW:'请选择有效日期范围，开始与结束日期最多相隔 30 天。',
   REPORT_WINDOW_TOO_LARGE:'查询结果超过 5000 条，请缩小日期范围后重试。',
   REPORT_HISTORY_WINDOW_TOO_LARGE:'历史责任区间超过 5000 条，请缩小日期范围后重试。',
+  INVALID_NOTIFICATION_REPORT_FILTER:'请选择有效的投递状态。',
+  REPORT_NOTIFICATION_WINDOW_TOO_LARGE:'通知投递记录超过 5000 条，请缩小日期范围后重试。',
   INVALID_FEEDBACK:'请选择 1 至 5 分，意见最多 1000 字。',FEEDBACK_NOT_AVAILABLE:'工单须为已关闭的故障或服务请求，当前暂不能评价。',
   FEEDBACK_ALREADY_SUBMITTED:'此工单已评价，请刷新查看。',FEEDBACK_REQUESTER_REQUIRED:'仅申请人本人可评价服务。',
   PRIORITY_REVIEWER_REQUIRED:'仅当前责任组的授权主管可确认，且不能确认本人提交的工单。',

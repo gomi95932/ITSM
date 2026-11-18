@@ -4,6 +4,8 @@ import { AuthService } from './auth.service.js';
 import { Database } from './database.service.js';
 import { ownerMatches, reportMetrics, reportOwnerFilter, responsibilitySummary } from './report-metrics.js';
 import { historicalResponsibilitySummary, intervalMetrics, type ResponsibilityInterval } from './responsibility-history.js';
+import { notificationFilter, notificationMatches, notificationMetrics, notificationReason, notificationState,
+  type NotificationReportItem } from './notification-report.js';
 
 function reportDate(value: string | undefined): Date {
   if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) throw new BadRequestException({ code: 'INVALID_REPORT_WINDOW' });
@@ -22,6 +24,52 @@ type Cycle = {
 @Controller('reports')
 export class ReportsController {
   constructor(private readonly db: Database, private readonly auth: AuthService) {}
+
+  @Get('notifications') async notifications(@Headers('x-dev-user') devUser?: string, @Headers('cookie') cookie?: string,
+    @Query('groupId') groupId?: string, @Query('from') from?: string, @Query('to') to?: string,
+    @Query('serviceType') serviceType: string = 'INC', @Query('state') state?: string) {
+    const actor = await this.auth.identity({ devUser, cookie });
+    if (!groupId || !actor.groups.includes(groupId)) throw new NotFoundException();
+    if (serviceType !== 'INC' && serviceType !== 'REQ') throw new BadRequestException({ code: 'INVALID_REPORT_SERVICE_TYPE' });
+    const filter = notificationFilter(state);
+    if (!filter) throw new BadRequestException({ code: 'INVALID_NOTIFICATION_REPORT_FILTER' });
+    const start = reportDate(from), end = reportDate(to);
+    const days = (end.getTime() - start.getTime()) / 86400000;
+    if (days < 0 || days > 30) throw new BadRequestException({ code: 'INVALID_REPORT_WINDOW' });
+    return this.db.transaction(async client => {
+      await client.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY');
+      const membership = await client.query(`SELECT now() AS clock FROM group_memberships m
+        JOIN employees e ON e.id=m.employee_id JOIN support_groups g ON g.id=m.group_id
+        WHERE e.id=$1 AND e.active AND g.enabled AND m.group_id=$2`, [actor.id, groupId]);
+      if (!membership.rowCount) throw new NotFoundException();
+      const window = [groupId, serviceType, from, to];
+      const coverage = (await client.query(`SELECT count(*)::int AS events,
+          count(*) FILTER(WHERE o.expanded_at IS NULL)::int AS unexpanded,
+          count(*) FILTER(WHERE o.expanded_at IS NOT NULL AND NOT EXISTS
+            (SELECT 1 FROM notification_deliveries d WHERE d.outbox_id=o.id))::int AS without_deliveries
+        FROM outbox_events o JOIN tickets t ON t.id=o.ticket_id
+        WHERE t.owner_group_id=$1 AND t.service_type=$2
+          AND o.created_at>=($3::date::timestamp AT TIME ZONE 'Asia/Shanghai')
+          AND o.created_at<(($4::date+1)::timestamp AT TIME ZONE 'Asia/Shanghai')`, window)).rows[0];
+      const rows = await client.query(`SELECT d.id,o.ticket_id,t.number,o.created_at AS event_at,d.updated_at,
+          d.state,d.attempts,d.last_error FROM notification_deliveries d JOIN outbox_events o ON o.id=d.outbox_id
+        JOIN tickets t ON t.id=o.ticket_id WHERE t.owner_group_id=$1 AND t.service_type=$2
+          AND o.created_at>=($3::date::timestamp AT TIME ZONE 'Asia/Shanghai')
+          AND o.created_at<(($4::date+1)::timestamp AT TIME ZONE 'Asia/Shanghai')
+        ORDER BY d.updated_at DESC,d.id LIMIT 5001`, window);
+      if (rows.rows.length > 5000) throw new ServiceUnavailableException({ code: 'REPORT_NOTIFICATION_WINDOW_TOO_LARGE' });
+      // Provider errors and recipient identities are not part of group delivery statistics.
+      const all: NotificationReportItem[] = rows.rows.map(row => ({ id: row.id, ticketId: row.ticket_id,
+        number: row.number, eventAt: row.event_at, updatedAt: row.updated_at, state: notificationState(row.state),
+        attempts: row.attempts, reason: notificationReason(row.last_error) }));
+      const items = all.filter(item => notificationMatches(item, filter));
+      return { groupId, from, to, serviceType, state: filter, asOf: membership.rows[0].clock,
+        timeZone: 'Asia/Shanghai', attribution: 'CURRENT_OWNER_GROUP', windowBasis: 'OUTBOX_CREATED_AT',
+        coverage: { events: coverage.events, unexpandedEvents: coverage.unexpanded,
+          expandedWithoutDeliveryEvents: coverage.without_deliveries },
+        cohortMetrics: notificationMetrics(all), metrics: notificationMetrics(items), items };
+    });
+  }
 
   @Get('responsibility-history') async history(@Headers('x-dev-user') devUser?: string, @Headers('cookie') cookie?: string,
     @Query('groupId') groupId?: string, @Query('from') from?: string, @Query('to') to?: string,

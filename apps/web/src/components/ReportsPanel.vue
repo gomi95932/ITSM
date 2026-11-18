@@ -1,20 +1,22 @@
 <script setup lang="ts">
 import { nextTick, onMounted, ref } from 'vue';
-import { BarChart3, History, Search } from 'lucide-vue-next';
+import { BarChart3, Bell, History, Search } from 'lucide-vue-next';
 import type { SessionUser } from '@itsm/contracts';
 import { api, errorText } from '../api';
 import { formatDate, statuses } from '../labels';
 import ResponsibilityHistoryPanel from './ResponsibilityHistoryPanel.vue';
+import NotificationReportPanel from './NotificationReportPanel.vue';
 
 const props = defineProps<{ user: SessionUser }>();
 const emit = defineEmits<{ open: [id: string] }>();
-const view = ref<'current'|'history'>('current');
+const views = ['current','history','notifications'] as const;
+const view = ref<typeof views[number]>('current');
 const viewTabs = ref<HTMLDivElement>();
 async function navigateViews(event: KeyboardEvent) {
   if (!['ArrowLeft','ArrowRight','Home','End'].includes(event.key)) return;
   event.preventDefault();
-  view.value = event.key === 'Home' ? 'current' : event.key === 'End' ? 'history'
-    : view.value === 'current' ? 'history' : 'current';
+  view.value = event.key === 'Home' ? views[0] : event.key === 'End' ? views[views.length-1]
+    : views[(views.indexOf(view.value)+(event.key==='ArrowRight'?1:views.length-1))%views.length];
   await nextTick();
   viewTabs.value?.querySelector<HTMLButtonElement>('[aria-selected="true"]')?.focus();
 }
@@ -71,6 +73,7 @@ const completion = (item:Item, type:Report['serviceType']) => item.resolution?.c
     <div ref="viewTabs" class="report-views" role="tablist" aria-label="报表视图" @keydown="navigateViews">
       <button id="report-current-tab" type="button" role="tab" :tabindex="view==='current'?0:-1" :aria-selected="view==='current'" aria-controls="report-current" @click="view='current'"><BarChart3 :size="16"/>当前责任</button>
       <button id="report-history-tab" type="button" role="tab" :tabindex="view==='history'?0:-1" :aria-selected="view==='history'" aria-controls="report-history" @click="view='history'"><History :size="16"/>历史责任</button>
+      <button id="report-notifications-tab" type="button" role="tab" :tabindex="view==='notifications'?0:-1" :aria-selected="view==='notifications'" aria-controls="report-notifications" @click="view='notifications'"><Bell :size="16"/>通知健康</button>
     </div>
     <div v-if="view==='current'" id="report-current" role="tabpanel" tabindex="0" aria-labelledby="report-current-tab">
     <form class="report-filters" @submit.prevent="load">
@@ -122,12 +125,13 @@ const completion = (item:Item, type:Report['serviceType']) => item.resolution?.c
       <p class="report-note">首响超时 {{report.metrics.firstResponseOverdue}} 条 · {{report.serviceType === 'REQ' ? '交付超时' : '解决超时'}} {{report.metrics.resolutionOverdue}} 条 · 已评价 {{report.metrics.rated}} 条</p>
     </div>
     </div>
-    <div v-else id="report-history" role="tabpanel" tabindex="0" aria-labelledby="report-history-tab"><ResponsibilityHistoryPanel :user="user" :groups="groups"/></div>
+    <div v-else-if="view==='history'" id="report-history" role="tabpanel" tabindex="0" aria-labelledby="report-history-tab"><ResponsibilityHistoryPanel :user="user" :groups="groups"/></div>
+    <div v-else id="report-notifications" role="tabpanel" tabindex="0" aria-labelledby="report-notifications-tab"><NotificationReportPanel :user="user" :groups="groups" @open="emit('open',$event)"/></div>
   </div>
 </template>
 
 <style scoped>
-.report-views{display:flex;gap:16px;border-bottom:1px solid #dfe5e8;margin-bottom:20px}.report-views button{display:flex;align-items:center;gap:6px;border:0;border-bottom:2px solid transparent;border-radius:0;background:transparent;color:#687981;padding:10px 2px;min-height:44px}.report-views button[aria-selected=true]{color:#087e79;border-bottom-color:#087e79}
+.report-views{display:flex;flex-wrap:wrap;gap:16px;border-bottom:1px solid #dfe5e8;margin-bottom:20px}.report-views button{display:flex;align-items:center;gap:6px;border:0;border-bottom:2px solid transparent;border-radius:0;background:transparent;color:#687981;padding:10px 2px;min-height:44px}.report-views button[aria-selected=true]{color:#087e79;border-bottom-color:#087e79}
 .report-filters{display:flex;align-items:end;flex-wrap:wrap;gap:12px;margin-bottom:20px}.report-filters label{min-width:160px;flex:0 1 210px}.report-filters button{height:42px}
 .report-metrics{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));border-top:1px solid #dfe5e8;border-bottom:1px solid #dfe5e8;background:#fff;padding:18px 0;gap:0}
 .report-metrics>div{padding:0 16px;border-right:1px solid #e8edef;min-width:0}.report-metrics>div:last-child{border:0}.report-metrics span{display:block;color:#6b7d84;font-size:12px}.report-metrics strong{font-size:24px;line-height:1.4}.report-metrics small{font-size:12px}

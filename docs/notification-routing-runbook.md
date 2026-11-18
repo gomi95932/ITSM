@@ -37,6 +37,8 @@ The notification list prioritizes records that require review. The current suppo
 
 ## Verification
 
+The candidate notification health report at `GET /api/v1/reports/notifications` summarizes the full authorized current-group cohort by the Shanghai outbox event date, with optional current-state filtering. It separates provider-confirmed delivery, simulation, skipped delivery, retries and uncertain outcomes, and reports unexpanded and expanded-without-recipient events separately. Provider details and recipient identities are excluded. This is a current-state snapshot, not lifetime failed-attempt history: manual retry resets the current attempt cycle. See `docs/p1-notification-report.md` for boundaries and pending CI/live acceptance. Investigation and retry continue in the existing restricted workspace.
+
 CI runs the action policy unit tests and `tests/integration/notification-audience.mjs` in the disposable Compose environment. It verifies exact recipients, no group broadcast, stale handover exclusion, idempotent expansion, revocation/expiry/employee checks and API-level retry scope/audits. Do not run fixture tests against the development server's persistent database.
 
 `tests/e2e/notifications.spec.ts` covers desktop and mobile command presentation with a mocked notification-list response: DEAD plus permission shows the command, missing/false permission or a non-DEAD state hides it, and a refreshed revocation removes it. Employee identities have no notification navigation. Screenshots are collected by CI; these mocked cases do not prove backend authorization or real DingTalk delivery.
