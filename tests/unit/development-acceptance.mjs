@@ -114,7 +114,12 @@ test('development acceptance verifies owner, waiting, SLA boundaries and feedbac
       return reply({ rating: body.rating, comment: body.comment });
     }
     const actionKey = options.headers['idempotency-key'];
-    if (run.actions.has(actionKey) && !(fault === 'wait-replay' && body.action === 'REQUEST_INFO')) return reply(run.actions.get(actionKey));
+    if (run.actions.has(actionKey) && !(fault === 'wait-replay' && body.action === 'REQUEST_INFO')) {
+      const stored = run.actions.get(actionKey);
+      const replay = Object.fromEntries(Object.entries(stored).reverse());
+      if (body.action === 'RESUME_VENDOR' && fault === 'vendor-resume-replay-content') replay.version++;
+      return reply(replay);
+    }
     if (run.actions.has(actionKey)) return reply({}, 409);
     const requesterAction = ['CONFIRM', 'ADD_INFO'].includes(body.action);
     if (body.action === 'RESUME_VENDOR' && user === 'employee-1' && fault === 'vendor-resume-owner') return reply({});
@@ -186,6 +191,7 @@ test('development acceptance verifies owner, waiting, SLA boundaries and feedbac
     ['vendor-resume-owner', 'ACCEPTANCE_VENDOR_RESUME_OWNER_REQUIRED', 'vendor-resume'],
     ['vendor-resume-comment', 'ACCEPTANCE_VENDOR_RESUME_COMMENT_REQUIRED', 'vendor-resume'],
     ['vendor-resume-replay', 'ACCEPTANCE_VENDOR_RESUME_REPLAY_FAILED', 'vendor-resume'],
+    ['vendor-resume-replay-content', 'ACCEPTANCE_VENDOR_RESUME_REPLAY_FAILED', 'vendor-resume'],
     ['vendor-resume-clear', 'ACCEPTANCE_VENDOR_RESUME_NOT_CLEARED', 'vendor-resume'],
     ['vendor-resume-sla', 'ACCEPTANCE_VENDOR_RESUME_SLA_CHANGED', 'vendor-resume'],
     ['close-clear', 'ACCEPTANCE_CLOSED_WAIT_NOT_CLEARED', 'lifecycle'],

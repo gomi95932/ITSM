@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isDeepStrictEqual } from 'node:util';
 
 export function validateAcceptanceTarget(value) {
   let url;
@@ -158,7 +159,7 @@ export async function verifyDevelopment({ baseUrl, allowSyntheticWrites = false,
       'ACCEPTANCE_VENDOR_RESUME_FAILED');
     const resumeReplay = await request(`${path}/actions`, 'agent-1', 'POST', resumeBody, key('vendor-resume'));
     check(resumeReplay, 200, 'ACCEPTANCE_VENDOR_RESUME_REPLAY_FAILED');
-    require(JSON.stringify(resumeReplay.data) === JSON.stringify(vendorResume.data), 'ACCEPTANCE_VENDOR_RESUME_REPLAY_FAILED');
+    require(isDeepStrictEqual(resumeReplay.data, vendorResume.data), 'ACCEPTANCE_VENDOR_RESUME_REPLAY_FAILED');
     const processing = await detailAt('IN_PROGRESS', 6);
     require(processing.waiting === null, 'ACCEPTANCE_VENDOR_RESUME_NOT_CLEARED');
     const stableSla = detail => JSON.stringify(detail.sla.map(row => Object.fromEntries([
