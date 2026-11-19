@@ -52,6 +52,7 @@ for (const viewport of [{ name:'desktop', width:1440, height:900 }, { name:'mobi
     await form.getByRole('checkbox', { name:'本次内容不含密码、密钥及安全事件证据' }).check();
     await form.getByRole('button', { name:'等待厂商', exact:true }).click();
     await expect(waiting).toContainText('等待备件或物料');
+    await expect(waiting).toContainText('2099');
     await page.getByRole('combobox', { name:'开发身份' }).selectOption('employee-1');
     await expect(page.getByRole('heading', { name:'我的工单', exact:true })).toBeVisible();
     await page.goto(`/#/tickets/${f.ticketId}`);
