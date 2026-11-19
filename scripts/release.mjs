@@ -1,11 +1,85 @@
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { lstat, mkdir, open, readFile, realpath, rename, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, open, readFile, realpath, rename, unlink, writeFile } from 'node:fs/promises';
 import { resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const sha256 = value => createHash('sha256').update(value).digest('hex');
+export const recoveryMethod='isolated-public-table-data-v1';
+const inventoryMethod='public-table-chunked-sha256-v1';
+// Bound each aggregate to 1024 row hashes; PostgreSQL can spill the preceding sort to disk.
+const inventorySql=String.raw`
+SELECT format($query$
+  SELECT json_build_object('schema',%L,'table',%L,
+    'rows',COALESCE(sum(row_count),0)::text,
+    'sha256',encode(sha256(convert_to(COALESCE(string_agg(chunk_hash,'' ORDER BY chunk),''),'UTF8')),'hex'))
+  FROM (
+    SELECT chunk,count(*) AS row_count,
+      encode(sha256(convert_to(string_agg(row_hash,'' ORDER BY row_hash COLLATE "C"),'UTF8')),'hex') AS chunk_hash
+    FROM (
+      SELECT row_hash,(row_number() OVER (ORDER BY row_hash COLLATE "C")-1)/1024 AS chunk
+      FROM (SELECT encode(sha256(convert_to(to_jsonb(t)::text,'UTF8')),'hex') AS row_hash
+        FROM ONLY %I.%I t) hashed
+    ) ordered GROUP BY chunk
+  ) chunks
+$query$,n.nspname,c.relname,n.nspname,c.relname)
+FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+WHERE n.nspname='public' AND c.relkind IN ('r','p')
+ORDER BY c.relname COLLATE "C"
+\gexec
+`;
+const inventoryTransaction=String.raw`BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;
+SET LOCAL timezone='UTC';
+SET LOCAL datestyle='ISO, YMD';
+SET LOCAL intervalstyle='postgres';
+SET LOCAL bytea_output='hex';
+SET LOCAL extra_float_digits=3;
+`;
+
+export function inventoryFingerprint(inventory) {
+  if (!Array.isArray(inventory) || inventory.length > 10000) throw new Error('INVALID_BACKUP_INVENTORY');
+  const names=new Set();
+  const rows=inventory.map(row => {
+    if (row?.schema !== 'public' || typeof row.table !== 'string' || !row.table.length
+      || typeof row.rows !== 'string' || !/^(0|[1-9][0-9]*)$/.test(row.rows)
+      || !/^[a-f0-9]{64}$/.test(row.sha256 ?? '') || names.has(row.table))
+      throw new Error('INVALID_BACKUP_INVENTORY');
+    names.add(row.table);
+    return {schema:row.schema,table:row.table,rows:row.rows,sha256:row.sha256};
+  }).sort((a,b) => a.table < b.table ? -1 : a.table > b.table ? 1 : 0);
+  return sha256(JSON.stringify(rows));
+}
+
+export function validateRecoveryProof(metadata,proof) {
+  const fingerprint=inventoryFingerprint(metadata?.inventory);
+  if (metadata.inventoryMethod !== inventoryMethod || metadata.inventorySha256 !== fingerprint
+    || !/^[a-f0-9]{64}$/.test(metadata.sha256 ?? '')
+    || proof?.method !== recoveryMethod || proof.status !== 'passed'
+    || proof.backupSha256 !== metadata.sha256 || proof.inventorySha256 !== fingerprint
+    || proof.tableCount !== metadata.inventory.length || !Number.isFinite(Date.parse(proof.verifiedAt)))
+    throw new Error('RESTORE_DATA_EVIDENCE_REQUIRED');
+  return fingerprint;
+}
+
+function parseInventory(output) {
+  const lines=output.split('\n').filter(line => line.trim());
+  const completed=JSON.parse(lines.pop() ?? 'null');
+  if (completed?.inventoryCompleted !== true) throw new Error('INCOMPLETE_BACKUP_INVENTORY');
+  const inventory=lines.map(line => JSON.parse(line));
+  inventoryFingerprint(inventory);
+  return inventory;
+}
+
+async function fileHash(path) {
+  const file=await open(path,'r'),hash=createHash('sha256'),buffer=Buffer.alloc(256*1024);
+  try {
+    let result;
+    while ((result=await file.read(buffer,0,buffer.length,null)).bytesRead)
+      hash.update(buffer.subarray(0,result.bytesRead));
+    return hash.digest('hex');
+  } finally { await file.close(); }
+}
 export const schemaFingerprint = files => sha256(JSON.stringify(files.filter(f => f.path.startsWith('db/migrations/')).sort((a,b) => a.path.localeCompare(b.path))));
 export const requiredReleaseFiles = Object.freeze([
   'infra/compose/compose.yaml',
@@ -81,15 +155,23 @@ export async function validateRelease(directory, expected, { requireBusinessAcce
 function run(command, args, options = {}) {
   return new Promise((done, fail) => {
     const child = spawn(command, args, { cwd:root, env:options.env ?? process.env, stdio:[options.input ?? 'ignore', options.output ?? 'pipe', 'pipe'] });
-    let killTimer;
-    const timer=setTimeout(() => { child.kill('SIGTERM'); killTimer=setTimeout(() => child.kill('SIGKILL'),5000); killTimer.unref(); },900000);
+    let killTimer,timedOut=false;
+    const timer=setTimeout(() => { timedOut=true; child.kill('SIGTERM'); killTimer=setTimeout(() => child.kill('SIGKILL'),5000); killTimer.unref(); },900000);
     timer.unref();
-    let output = '';
-    child.stdout?.on('data', chunk => { output += chunk; });
+    let output = '',bytes=0,overflow=false;
+    child.stdout?.on('data', chunk => {
+      bytes+=chunk.length;
+      if (bytes > 1024*1024) { overflow=true; child.kill('SIGKILL'); }
+      else output += chunk;
+    });
     // Tool failures must not echo Compose configuration, database rows or credentials.
     child.stderr?.resume();
+    if (options.textInput !== undefined) {
+      child.stdin.on('error',() => {});
+      child.stdin.end(options.textInput);
+    }
     child.once('error', () => { clearTimeout(timer); fail(new Error('RELEASE_TOOL_UNAVAILABLE')); });
-    child.once('close', code => { clearTimeout(timer); clearTimeout(killTimer); code === 0 ? done(output.trim()) : fail(new Error('RELEASE_TOOL_FAILED')); });
+    child.once('close', code => { clearTimeout(timer); clearTimeout(killTimer); code === 0 && !overflow && !timedOut ? done(output.trim()) : fail(new Error('RELEASE_TOOL_FAILED')); });
   });
 }
 
@@ -165,12 +247,36 @@ export async function main(argv) {
       const directory=resolve(state,'backups'); await mkdir(directory,{recursive:true,mode:0o700});
       const path=resolve(directory,`itsm-${new Date().toISOString().replace(/[:.]/g,'-')}.dump`);
       const file=await open(path,'wx',0o600);
-      try { await compose(['exec','-T','db','sh','-ec','PGPASSWORD="$POSTGRES_PASSWORD" exec pg_dump -U itsm -d itsm -Fc'],{output:file.fd}); await file.sync(); }
-      finally { await file.close(); }
+      let scratch,inventory;
+      try {
+        scratch=await compose(['exec','-T','db','sh','-ec','umask 077; mktemp -d /tmp/itsm-backup.XXXXXXXXXX']);
+        if (!/^\/tmp\/itsm-backup\.[A-Za-z0-9]{10}$/.test(scratch)) throw new Error('INVALID_BACKUP_SCRATCH_PATH');
+        // psql holds the exporting transaction open until pg_dump has consumed the same snapshot.
+        const script=`${inventoryTransaction}
+SELECT pg_export_snapshot() AS snapshot \\gset
+\\setenv ITSM_BACKUP_SNAPSHOT :snapshot
+${inventorySql}
+\\! pg_dump -U itsm -d itsm -Fc --snapshot="$ITSM_BACKUP_SNAPSHOT" --file="$ITSM_BACKUP_DUMP"
+\\if :SHELL_ERROR
+SELECT 1/0;
+\\endif
+COMMIT;
+SELECT '{"inventoryCompleted":true}';`;
+        inventory=parseInventory(await compose(['exec','-T','db','sh','-ec',
+          'umask 077; export PGPASSWORD="$POSTGRES_PASSWORD" ITSM_BACKUP_DUMP="$1/archive.dump"; exec psql -X -qAt -v ON_ERROR_STOP=1 -U itsm -d itsm -f /dev/stdin',
+          'sh',scratch],{input:'pipe',textInput:script}));
+        await compose(['exec','-T','db','cat',`${scratch}/archive.dump`],{output:file.fd});
+        await file.sync();
+      } finally {
+        await file.close();
+        if (/^\/tmp\/itsm-backup\.[A-Za-z0-9]{10}$/.test(scratch ?? ''))
+          await compose(['exec','-T','db','rm','-rf','--',scratch]);
+      }
       const input=await open(path,'r');
       try { await compose(['exec','-T','db','pg_restore','--list'],{input:input.fd}); }
       finally { await input.close(); }
-      await atomicJson(`${path}.json`,{file:path,sha256:sha256(await readFile(path)),createdAt:new Date().toISOString(),release:existing?.sha ?? null});
+      await atomicJson(`${path}.json`,{file:path,sha256:await fileHash(path),createdAt:new Date().toISOString(),release:existing?.sha ?? null,
+        inventoryMethod,inventory,inventorySha256:inventoryFingerprint(inventory)});
       return path;
     };
     const smoke=async () => {
@@ -191,19 +297,32 @@ export async function main(argv) {
     if (command === 'backup') { backupPath=await backup(); console.log(`Backup verified: ${backupPath}`); return; }
     if (command === 'restore-check') {
       if (!options.backup) throw new Error('BACKUP_PATH_REQUIRED');
-      const path=resolve(options.backup), metadata=JSON.parse(await readFile(`${path}.json`,'utf8'));
-      if (!(await lstat(path)).isFile() || sha256(await readFile(path)) !== metadata.sha256) throw new Error('BACKUP_CHECKSUM_MISMATCH');
+      const path=resolve(options.backup);
+      // A failed recheck must not leave the previous successful result available to consumers.
+      await unlink(`${path}.restore.json`).catch(error => { if (error.code !== 'ENOENT') throw error; });
+      const metadata=JSON.parse(await readFile(`${path}.json`,'utf8'));
+      if (!(await lstat(path)).isFile() || metadata.file !== path || await fileHash(path) !== metadata.sha256) throw new Error('BACKUP_CHECKSUM_MISMATCH');
+      const expectedInventory=inventoryFingerprint(metadata.inventory);
+      if (metadata.inventoryMethod !== inventoryMethod || metadata.inventorySha256 !== expectedInventory)
+        throw new Error('BACKUP_SNAPSHOT_EVIDENCE_REQUIRED');
       const database=`itsm_restore_${Date.now()}_${process.pid}`;
-      const sql=(query,db='postgres') => compose(['exec','-T','db','sh','-ec','PGPASSWORD="$POSTGRES_PASSWORD" exec psql -v ON_ERROR_STOP=1 -U itsm -d "$1" -Atc "$2"','sh',db,query]);
+      const sql=(query,db='postgres') => compose(['exec','-T','db','sh','-ec','PGPASSWORD="$POSTGRES_PASSWORD" exec psql -X -v ON_ERROR_STOP=1 -U itsm -d "$1" -Atc "$2"','sh',db,query]);
       await sql(`CREATE DATABASE ${database}`);
       try {
         const input=await open(path,'r');
         try { await compose(['exec','-T','db','sh','-ec','PGPASSWORD="$POSTGRES_PASSWORD" exec pg_restore --exit-on-error --no-owner --no-acl -U itsm -d "$1"','sh',database],{input:input.fd}); }
         finally { await input.close(); }
-        await sql('SELECT count(*) FROM schema_migrations',database);
-        await sql('SELECT count(*) FROM tickets',database);
-        console.log('Backup restored and schema/ticket reads verified in an isolated temporary database');
+        const script=`${inventoryTransaction}${inventorySql}COMMIT; SELECT '{"inventoryCompleted":true}';`;
+        const restored=parseInventory(await compose(['exec','-T','db','sh','-ec',
+          'export PGPASSWORD="$POSTGRES_PASSWORD"; exec psql -X -qAt -v ON_ERROR_STOP=1 -U itsm -d "$1" -f /dev/stdin',
+          'sh',database],{input:'pipe',textInput:script}));
+        if (inventoryFingerprint(restored) !== expectedInventory) throw new Error('RESTORED_TABLE_DATA_MISMATCH');
       } finally { await sql(`DROP DATABASE ${database}`); }
+      const proof={method:recoveryMethod,status:'passed',backupSha256:metadata.sha256,
+        inventorySha256:expectedInventory,tableCount:metadata.inventory.length,verifiedAt:new Date().toISOString()};
+      validateRecoveryProof(metadata,proof);
+      await atomicJson(`${path}.restore.json`,proof);
+      console.log('Backup restored and public table data verified in an isolated temporary database');
       return;
     }
     if (command === 'rollback') {

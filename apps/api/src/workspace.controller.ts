@@ -3,6 +3,7 @@ import { AuthService } from './auth.service.js';
 import { Database } from './database.service.js';
 import { IntakePolicyService } from './intake-policy.service.js';
 import { ROLE_AUTHORIZATION_LOCK, ROLE_EFFECTIVE_SQL } from './role-policy.js';
+import { requestIntakePolicy } from './request-intake-policy.js';
 type H = Record<string,string | undefined>;
 const auth = (h: H) => ({ devUser: h['x-dev-user'], cookie: h.cookie, csrf: h['x-csrf-token'] });
 
@@ -15,17 +16,20 @@ export class WorkspaceController {
   }
   @Get('catalog') async catalog(@Headers() h: H) {
     const actor = await this.identity.identity(auth(h));
-    const result = await this.db.pool.query(`SELECT * FROM service_catalog WHERE published=true AND (visible_groups='[]'::jsonb OR EXISTS
-      (SELECT 1 FROM group_memberships WHERE employee_id=$1 AND visible_groups ? group_id)) ORDER BY code`,[actor.id]);
-    return { items: result.rows.map(r => ({ code:r.code,name:r.name || r.code,description:r.description,type:r.type,formVersion:r.form_version,fields:r.field_schema,available:['INC','GEN'].includes(r.type) })) };
+    const result = await this.db.pool.query(`SELECT c.*,v.snapshot FROM service_catalog c LEFT JOIN request_catalog_versions v
+      ON v.service_code=c.code AND v.form_version=c.form_version WHERE c.published=true AND (c.visible_groups='[]'::jsonb OR EXISTS
+      (SELECT 1 FROM group_memberships WHERE employee_id=$1 AND c.visible_groups ? group_id)) ORDER BY c.sort_order,c.code`,[actor.id]);
+    return { items: result.rows.map(r => ({ code:r.code,name:r.name || r.code,description:r.description,type:r.type,formVersion:r.form_version,fields:r.field_schema,
+      available:['INC','GEN'].includes(r.type)||(r.type==='REQ'&&!!r.snapshot?.approval?.steps?.length
+        &&!!requestIntakePolicy(process.env,r.code,r.form_version)),maxValidityDays:r.type==='REQ'?r.snapshot?.maxValidityDays??null:null })) };
   }
   @Get('support-groups') async groups(@Headers() h: H) {
     const actor = await this.identity.identity(auth(h)); if (!actor.groups.length) throw new NotFoundException();
-    return { items: (await this.db.pool.query('SELECT id,name FROM support_groups ORDER BY name')).rows };
+    return { items: (await this.db.pool.query('SELECT id,name FROM support_groups WHERE enabled ORDER BY name')).rows };
   }
   @Get('support-groups/:id/members') async members(@Headers() h: H,@Param('id') id: string) {
     const actor = await this.identity.identity(auth(h)); if (!actor.groups.length) throw new NotFoundException();
-    if (!(await this.db.pool.query('SELECT id FROM support_groups WHERE id=$1',[id])).rowCount) throw new NotFoundException();
+    if (!(await this.db.pool.query('SELECT id FROM support_groups WHERE id=$1 AND enabled',[id])).rowCount) throw new NotFoundException();
     return { items:(await this.db.pool.query(`SELECT e.id,e.display_name AS name FROM employees e
       JOIN group_memberships m ON m.employee_id=e.id WHERE m.group_id=$1 AND e.active ORDER BY e.display_name,e.id`,[id])).rows };
   }
@@ -35,7 +39,8 @@ export class WorkspaceController {
       (d.state='DEAD' AND EXISTS(SELECT 1 FROM role_bindings r WHERE r.employee_id=$2 AND r.group_id=t.owner_group_id
         AND r.role_code IN ('DISPATCHER','GROUP_LEAD') AND ${ROLE_EFFECTIVE_SQL})) AS "canRetry"
       FROM notification_deliveries d JOIN outbox_events o ON o.id=d.outbox_id JOIN tickets t ON t.id=o.ticket_id
-      WHERE t.owner_group_id=ANY($1::text[]) ORDER BY d.updated_at DESC LIMIT 100`,[actor.groups,actor.id]);
+      WHERE t.owner_group_id=ANY($1::text[])
+      ORDER BY (d.state='REVIEW_REQUIRED') DESC,d.updated_at DESC,d.id LIMIT 100`,[actor.groups,actor.id]);
     return { mode: process.env.NOTIFICATION_MODE ?? 'disabled', items:result.rows };
   }
   @Get('routing-alerts') async routingAlerts(@Headers() h: H) {
@@ -57,7 +62,9 @@ export class WorkspaceController {
     if (!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(id)) throw new NotFoundException();
     return this.db.transaction(async client => {
       await client.query('SELECT pg_advisory_xact_lock_shared($1)',[ROLE_AUTHORIZATION_LOCK]);
-      const result = await client.query(`UPDATE notification_deliveries d SET state='PENDING',attempts=0,next_at=now(),last_error=NULL,updated_at=now()
+      const result = await client.query(`UPDATE notification_deliveries d SET
+        state=CASE WHEN d.provider_task_id IS NOT NULL THEN 'SENDING' ELSE 'PENDING' END,
+        attempts=0,next_at=now(),last_error=NULL,updated_at=now()
         FROM outbox_events o,tickets t WHERE d.id=$1 AND d.outbox_id=o.id AND o.ticket_id=t.id AND t.owner_group_id=ANY($2::text[])
         AND d.state='DEAD' AND EXISTS(SELECT 1 FROM role_bindings r WHERE r.employee_id=$3 AND r.group_id=t.owner_group_id
           AND r.role_code IN ('DISPATCHER','GROUP_LEAD') AND ${ROLE_EFFECTIVE_SQL}) RETURNING d.id`,[id,actor.groups,actor.id]);

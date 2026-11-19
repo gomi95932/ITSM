@@ -1,18 +1,28 @@
-import type { PoolClient } from 'pg';
+import type { Pool, PoolClient } from 'pg';
 
-type Audience = { requester?: boolean; owner?: boolean; pending?: boolean; queue?: boolean; escalation?: boolean; reviewer?: boolean; platformAdmin?: boolean };
+type Audience = { requester?: boolean; owner?: boolean; pending?: boolean; queue?: boolean; escalation?: boolean; reviewer?: boolean; platformAdmin?: boolean; fulfillment?: boolean; deliveryFailure?: boolean; waiting?: boolean };
 const audiences: Readonly<Record<string, Audience>> = {
   SUBMIT_AND_ROUTE: { requester:true, owner:true, queue:true },
+  REQUEST_APPROVED: { requester:true, owner:true, queue:true },
+  REQUEST_REJECTED: { requester:true, owner:true },
   ACCEPT: { requester:true, owner:true },
   REQUEST_INFO: { requester:true, owner:true },
   ADD_INFO: { requester:true, owner:true },
   WAIT_VENDOR: { owner:true },
+  RESUME_VENDOR: { requester:true, owner:true },
+  WAITING_USER_FOLLOW_UP_DUE: { waiting:true },
+  WAITING_VENDOR_FOLLOW_UP_DUE: { waiting:true },
   RESOLVE: { requester:true, owner:true },
   CONFIRM: { requester:true, owner:true },
   REOPEN: { requester:true, owner:true, queue:true },
   CANCEL: { requester:true, owner:true },
   AUTO_CLOSE: { requester:true, owner:true },
   REASSIGN: { owner:true, pending:true, queue:true },
+  INITIATE_HANDOVER: { owner:true, pending:true, escalation:true },
+  CONTINUATION_PROPOSE: { owner:true, escalation:true },
+  CONTINUATION_APPROVE: { owner:true, escalation:true },
+  CONTINUATION_REJECT: { owner:true, escalation:true },
+  CONTINUATION_REVOKE: { owner:true, escalation:true },
   ACCEPT_HANDOVER: { requester:true, owner:true },
   DECLINE_HANDOVER: { owner:true, queue:true },
   CANCEL_HANDOVER: { owner:true, queue:true },
@@ -28,8 +38,14 @@ const audiences: Readonly<Record<string, Audience>> = {
   P1_REVIEW_ROUTED: { owner:true, escalation:true, reviewer:true },
   SLA_BREACH: { owner:true, escalation:true },
   OWNERSHIP_RECOVERED: { owner:true, escalation:true },
-  OWNERSHIP_ESCALATION_REQUIRED: { escalation:true, platformAdmin:true },
+  OWNERSHIP_ESCALATION_REQUIRED: { owner:true, escalation:true, platformAdmin:true },
   FEEDBACK_SUBMITTED: { owner:true },
+  DELIVERY_FAILURE_RESOLVED: { owner:true, escalation:true },
+  DELIVERY_FAILURE_REQUIRED: { deliveryFailure:true },
+  FULFILLMENT_REVIEW_REQUIRED: { fulfillment:true },
+  FULFILLMENT_REVOKE_REQUIRED: { fulfillment:true },
+  FULFILLMENT_REVIEW_OVERDUE: { fulfillment:true },
+  FULFILLMENT_REVOKE_OVERDUE: { fulfillment:true },
 };
 
 export function notificationAudience(action: string): Readonly<Audience> {
@@ -42,6 +58,42 @@ export async function notificationRecipients(client: Pick<PoolClient,'query'>, e
   if (!event.rowCount) return [];
   const a = notificationAudience(event.rows[0]!.action);
   if (!Object.keys(a).length) return [];
+  if (a.waiting) {
+    const recipients = await client.query<{id:string}>(`SELECT e.id FROM ticket_waiting_active_signals s
+      JOIN tickets t ON t.id=s.ticket_id JOIN employees e ON e.active
+      WHERE s.event_id=$1 AND ($2::text IS NULL OR e.id=$2) AND (
+        (s.waiting_status='WAITING_USER' AND e.id=t.requester_id) OR
+        (e.id=t.assignee_id AND ticket_processing_eligible(t.id,e.id)) OR
+        ((t.assignee_id IS NULL OR NOT ticket_processing_eligible(t.id,t.assignee_id)) AND EXISTS(
+          SELECT 1 FROM role_bindings r JOIN group_memberships m ON m.employee_id=r.employee_id AND m.group_id=r.group_id
+          WHERE r.employee_id=e.id AND r.group_id=s.group_id AND r.role_code='GROUP_LEAD' AND r.status='ACTIVE'
+            AND r.valid_from<=clock_timestamp() AND r.valid_to>clock_timestamp()))
+      ) ORDER BY e.id`,[eventId,employeeId]);
+    return recipients.rows.map(row=>row.id);
+  }
+  if(a.deliveryFailure){
+    const recipients=await client.query<{id:string}>(`SELECT e.id FROM ticket_events v
+      JOIN request_delivery_commands c ON c.id::text=v.detail->>'commandId'
+      JOIN request_approvals p ON p.id=c.approval_id AND p.ticket_id=v.ticket_id
+      JOIN tickets t ON t.id=v.ticket_id JOIN group_memberships m ON m.group_id=t.owner_group_id
+      JOIN employees e ON e.id=m.employee_id AND e.active
+      WHERE v.id=$1 AND ($2::text IS NULL OR e.id=$2)
+        AND NOT EXISTS(SELECT 1 FROM request_delivery_resolutions r WHERE r.command_id=c.id)
+        AND request_delivery_resolution_eligible(c.id,e.id) ORDER BY e.id`,[eventId,employeeId]);
+    return recipients.rows.map(row=>row.id);
+  }
+  if(a.fulfillment){
+    const recipients=await client.query<{id:string}>(`SELECT e.id FROM request_fulfillment_active_signals s
+      JOIN group_memberships m ON m.group_id=s.group_id JOIN employees e ON e.id=m.employee_id AND e.active
+      WHERE s.event_id=$1 AND ($2::text IS NULL OR e.id=$2) AND (
+        (s.kind='REVIEW_REQUIRED' AND request_fulfillment_operator_eligible(s.fulfillment_id,e.id,'REVIEW')) OR
+        (s.kind='REVOKE_REQUIRED' AND request_fulfillment_operator_eligible(s.fulfillment_id,e.id,'REVOKE')) OR
+        (s.kind IN ('REVIEW_OVERDUE','REVOKE_OVERDUE') AND s.escalate_at<=clock_timestamp() AND EXISTS(
+          SELECT 1 FROM role_bindings r WHERE r.employee_id=e.id AND r.group_id=s.group_id AND r.role_code='GROUP_LEAD'
+            AND r.status='ACTIVE' AND r.valid_from<=clock_timestamp() AND r.valid_to>clock_timestamp()))
+      ) ORDER BY e.id`,[eventId,employeeId]);
+    return recipients.rows.map(row=>row.id);
+  }
   const result = await client.query<{ id:string }>(`SELECT e.id FROM ticket_events v JOIN tickets t ON t.id=v.ticket_id
     JOIN employees e ON e.active WHERE v.id=$1 AND ($2::text IS NULL OR e.id=$2) AND (
       ($3 AND e.id=t.requester_id) OR
@@ -49,7 +101,8 @@ export async function notificationRecipients(client: Pick<PoolClient,'query'>, e
       ($5 AND e.id=t.pending_assignee_id AND v.detail->>'assignmentVersion'=t.version::text
         AND v.detail->>'targetAssigneeId'=t.pending_assignee_id
         AND v.detail->>'targetGroupId'=t.pending_group_id AND EXISTS
-        (SELECT 1 FROM group_memberships m WHERE m.employee_id=e.id AND m.group_id=t.pending_group_id)) OR
+        (SELECT 1 FROM group_memberships m WHERE m.employee_id=e.id AND m.group_id=t.pending_group_id)
+        AND service_position_eligible(t.service_routing_snapshot,e.id,t.pending_group_id)) OR
       (($6 AND t.assignee_id IS NULL AND t.status NOT IN ('CLOSED','CANCELLED','REJECTED') OR $7) AND EXISTS
         (SELECT 1 FROM role_bindings r JOIN group_memberships m ON m.employee_id=r.employee_id AND m.group_id=r.group_id
           WHERE r.employee_id=e.id AND r.group_id=t.owner_group_id AND r.role_code IN ('DISPATCHER','GROUP_LEAD')
@@ -65,5 +118,37 @@ export async function expandNotification(client: PoolClient, outboxId: string, e
   const recipients = await notificationRecipients(client,eventId);
   await client.query(`INSERT INTO notification_deliveries(outbox_id,employee_id)
     SELECT $1,unnest($2::text[]) ON CONFLICT DO NOTHING`,[outboxId,recipients]);
-  await client.query("UPDATE outbox_events SET expanded_at=now(),state='EXPANDED' WHERE id=$1",[outboxId]);
+  await client.query("UPDATE outbox_events SET expanded_at=COALESCE(expanded_at,clock_timestamp()),audience_checked_at=clock_timestamp(),state='EXPANDED' WHERE id=$1",[outboxId]);
+}
+
+export async function refreshFulfillmentNotificationAudiences(db: Pick<Pool,'connect'>): Promise<void> {
+  const client=await db.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock_shared(71820512)');
+    const pending=await client.query<{id:string;event_id:string}>(`SELECT o.id,o.event_id FROM outbox_events o
+      JOIN request_fulfillment_active_signals s ON s.event_id=o.event_id AND s.ticket_id=o.ticket_id
+      WHERE o.expanded_at IS NOT NULL
+        AND (o.audience_checked_at IS NULL OR o.audience_checked_at<=clock_timestamp()-interval '60 seconds')
+      ORDER BY o.audience_checked_at NULLS FIRST,o.created_at,o.id LIMIT 20 FOR UPDATE OF o SKIP LOCKED`);
+    for (const event of pending.rows) await expandNotification(client,event.id,event.event_id);
+    await client.query('COMMIT');
+  } catch (error) { await client.query('ROLLBACK'); throw error; }
+  finally { client.release(); }
+}
+
+export async function refreshWaitingNotificationAudiences(db: Pick<Pool,'connect'>): Promise<void> {
+  const client = await db.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock_shared(71820512)');
+    const pending = await client.query<{id:string;event_id:string}>(`SELECT o.id,o.event_id FROM outbox_events o
+      JOIN ticket_waiting_active_signals s ON s.event_id=o.event_id AND s.ticket_id=o.ticket_id
+      WHERE o.expanded_at IS NOT NULL
+        AND (o.audience_checked_at IS NULL OR o.audience_checked_at<=clock_timestamp()-interval '60 seconds')
+      ORDER BY o.audience_checked_at NULLS FIRST,o.created_at,o.id LIMIT 20 FOR UPDATE OF o SKIP LOCKED`);
+    for (const event of pending.rows) await expandNotification(client,event.id,event.event_id);
+    await client.query('COMMIT');
+  } catch (error) { await client.query('ROLLBACK'); throw error; }
+  finally { client.release(); }
 }

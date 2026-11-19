@@ -1,6 +1,18 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { matches, type ApprovalObservation } from './request-approval.js';
+import { approvalStageAllowed,matches, type ApprovalObservation } from './request-approval.js';
+
+test('approval provenance permits processing and closed grants but never cancelled or rejected requests',()=>{
+  assert.equal(approvalStageAllowed('WAITING_APPROVAL',false),true);
+  for(const status of ['IN_PROGRESS','WAITING_USER','WAITING_VENDOR','PENDING_CONFIRMATION','CLOSED']){
+    assert.equal(approvalStageAllowed(status,false),false,status);
+    assert.equal(approvalStageAllowed(status,true),true,status);
+  }
+  for(const status of ['QUEUED','NEW','CANCELLED','REJECTED',undefined]){
+    assert.equal(approvalStageAllowed(status,false),false);
+    assert.equal(approvalStageAllowed(status,true),false);
+  }
+});
 
 const row: Parameters<typeof matches>[0] = {
   id: 'approval-1',
@@ -21,6 +33,7 @@ const row: Parameters<typeof matches>[0] = {
   provider_instance_id: 'instance-1',
   attempts: 1,
   lease_token: null,
+  last_error: null,
   clock: new Date('2026-11-13T00:00:00Z'),
 };
 

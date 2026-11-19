@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { requireRootOwnedPath, validatePromotionApproval } from './promote-release.mjs';
 import { validateStagedRelease } from './stage-release.mjs';
 import { verifyReleaseSource } from './verify-release-source.mjs';
+import { recoveryMethod, validateRecoveryProof } from './release.mjs';
 
 const tools='/opt/itsm/tools/release';
 const installedPaths=Object.freeze({tools,releases:'/opt/itsm/releases',
@@ -118,6 +119,7 @@ export async function executeApprovedDeployment(requestId,{paths=installedPaths,
     || sourceKeys.some(key => promotion[key] !== approval[key])) throw new Error('APPROVED_PROMOTION_BINDING_REQUIRED');
   await verifyPrivateTree(bundle);
   const manifest=await validateStagedRelease(bundle,approval);
+  if (manifest.recoveryVerification !== recoveryMethod) throw new Error('RELEASE_RECOVERY_CAPABILITY_REQUIRED');
   if (promotion.schemaFingerprint !== manifest.schemaFingerprint
     || imageNames.some(name => promotion.images?.[name] !== manifest.images[name]))
     throw new Error('APPROVED_PROMOTION_BINDING_REQUIRED');
@@ -156,15 +158,20 @@ export async function executeApprovedDeployment(requestId,{paths=installedPaths,
       throw new Error('FIXED_BACKUP_EVIDENCE_REQUIRED');
     await requireRootOwnedPath(backupDirectory,{directory:true,privateFile:true});
     await requireRootOwnedPath(backup,{privateFile:true});
-    const metadata=JSON.parse(await readPrivate(`${backup}.json`));
+    const metadata=JSON.parse(await readPrivate(`${backup}.json`,1024*1024));
     if (metadata.file !== backup || metadata.release !== approval.sha || !/^[a-f0-9]{64}$/.test(metadata.sha256 ?? ''))
       throw new Error('FIXED_BACKUP_EVIDENCE_REQUIRED');
     receipt.backup={path:backup,sha256:metadata.sha256};
     receipt.phase='restore-check'; await updateReceipt(receiptPath,receipt);
     await execute(bundle,['restore-check','--backup',backup]);
+    const restoreProof=JSON.parse(await readPrivate(`${backup}.restore.json`));
+    const inventorySha256=validateRecoveryProof(metadata,restoreProof);
+    if (Date.parse(restoreProof.verifiedAt) < Date.parse(receipt.startedAt) || Date.parse(restoreProof.verifiedAt) > now())
+      throw new Error('FRESH_RESTORE_DATA_EVIDENCE_REQUIRED');
     if ((await currentState(paths))?.sha !== approval.sha) throw new Error('DEPLOYMENT_BASELINE_CHANGED');
     receipt={...receipt,status:'succeeded',phase:'complete',images:manifest.images,
-      businessAcceptance:deployed.businessAcceptance,restoreCheck:'isolated-schema-and-ticket-reads',
+      businessAcceptance:deployed.businessAcceptance,restoreCheck:recoveryMethod,
+      recoveryEvidence:{inventorySha256,tableCount:restoreProof.tableCount,verifiedAt:restoreProof.verifiedAt},
       completedAt:new Date(now()).toISOString()};
     await updateReceipt(receiptPath,receipt);
     return receipt;

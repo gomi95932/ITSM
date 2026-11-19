@@ -51,7 +51,7 @@ export class RolesService {
   async options(actor:Identity,search:unknown) {
     const access=await this.access(this.db.pool,actor.id);
     if(search!==undefined&&(typeof search!=='string'||search.length>100))throw new BadRequestException({code:'INVALID_ROLE_BINDING'});
-    const groups=await this.db.pool.query('SELECT id,name FROM support_groups WHERE $1 OR id=ANY($2::text[]) ORDER BY name,id',[access.admin,access.groups]);
+    const groups=await this.db.pool.query('SELECT id,name FROM support_groups WHERE enabled AND ($1 OR id=ANY($2::text[])) ORDER BY name,id',[access.admin,access.groups]);
     const people=await this.db.pool.query(`SELECT e.id,e.display_name AS name,COALESCE(array_agg(m.group_id) FILTER (WHERE m.group_id IS NOT NULL),'{}') AS groups
       FROM employees e LEFT JOIN group_memberships m ON m.employee_id=e.id AND ($1 OR m.group_id=ANY($2::text[])) WHERE e.active AND e.id<>$3
       AND ($1 OR EXISTS(SELECT 1 FROM group_memberships x WHERE x.employee_id=e.id AND x.group_id=ANY($2::text[])))

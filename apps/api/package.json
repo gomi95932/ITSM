@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@itsm/contracts": "0.1.0",
+    "@itsm/workflow": "0.1.0",
     "@nestjs/common": "^11.1.0",
     "@nestjs/core": "^11.1.0",
     "@nestjs/platform-express": "^11.2.9",

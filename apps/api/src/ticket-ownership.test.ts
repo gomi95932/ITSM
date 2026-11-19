@@ -4,14 +4,34 @@ import { ownershipDenial, type Ownership } from './ticket-ownership.js';
 import { transition } from './ticket-state.js';
 
 const queued:Ownership={status:'QUEUED',assignee_id:null,pending_assignee_id:null};
+test('an approved unclaimed request can be dispatched without inventing a personal owner',()=>{
+  const request:Ownership={...queued,service_type:'REQ',status:'IN_PROGRESS'};
+  for(const action of ['REASSIGN','ASSIGN_OFFER'] as const){
+    assert.equal(ownershipDenial(request,'a',true,action),undefined);
+    assert.equal(ownershipDenial({...request,service_type:'INC'},'a',true,action),'PERSONAL_OWNER_REQUIRED');
+    assert.equal(ownershipDenial(request,'a',false,action),'OWNER_GROUP_REQUIRED');
+  }
+  for(const action of ['RESOLVE','WAIT_VENDOR','RESUME_VENDOR','REQUEST_INFO'] as const)
+    assert.equal(ownershipDenial(request,'a',true,action),'PERSONAL_OWNER_REQUIRED');
+  for(const service_type of ['INC','REQ'])
+    assert.equal(ownershipDenial({...request,service_type,assignee_id:'a'},'a',true,'ASSIGN_OFFER'),'TICKET_ALREADY_ASSIGNED');
+});
 test('only an unassigned group ticket can be claimed; a peer cannot act for its owner',()=>{
   assert.equal(ownershipDenial(queued,'a',true,'ACCEPT'),undefined);
   assert.equal(ownershipDenial(queued,'a',false,'ACCEPT'),'OWNER_GROUP_REQUIRED');
   const owned:Ownership={...queued,status:'IN_PROGRESS',assignee_id:'a'};
   assert.equal(ownershipDenial(owned,'b',true,'ACCEPT'),'TICKET_ALREADY_ASSIGNED');
-  for(const action of ['REASSIGN','REQUEST_INFO','WAIT_VENDOR','RESOLVE'] as const)
+  for(const action of ['REASSIGN','REQUEST_INFO','WAIT_VENDOR','RESUME_VENDOR','RESOLVE'] as const)
     assert.equal(ownershipDenial(owned,'b',true,action),'PERSONAL_OWNER_REQUIRED');
   assert.equal(ownershipDenial(owned,'a',true,'RESOLVE'),undefined);
+});
+test('only the current member owner can resume vendor processing, including during a pending handover',()=>{
+  const waiting:Ownership={...queued,status:'WAITING_VENDOR',assignee_id:'a',pending_assignee_id:'b',assignment_kind:'HANDOVER'};
+  assert.equal(ownershipDenial(waiting,'a',true,'RESUME_VENDOR'),undefined);
+  assert.equal(ownershipDenial(waiting,'a',false,'RESUME_VENDOR'),'OWNER_GROUP_REQUIRED');
+  for(const actor of ['b','c'])
+    assert.equal(ownershipDenial(waiting,actor,true,'RESUME_VENDOR'),'PERSONAL_OWNER_REQUIRED');
+  assert.equal(ownershipDenial({...waiting,assignee_id:null},'b',true,'RESUME_VENDOR'),'PERSONAL_OWNER_REQUIRED');
 });
 test('handover is explicit and only its named recipient accepts or declines',()=>{
   const pending:Ownership={...queued,pending_assignee_id:'b',assignment_kind:'HANDOVER'};

@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { test } from 'node:test';
-import { requiredReleaseFiles, schemaFingerprint } from '../../scripts/release.mjs';
+import { inventoryFingerprint, recoveryMethod, requiredReleaseFiles, schemaFingerprint } from '../../scripts/release.mjs';
 
 assert.equal(process.getuid(),0,'Only run in disposable Linux CI with sudo, never on the Mac or development server');
 const checkout=fileURLToPath(new URL('../../',import.meta.url));
@@ -46,7 +46,7 @@ async function fixture(t) {
   const images=Object.fromEntries(['api','web','worker','postgres','redis'].map(name =>
     [name,`ghcr.io/gomi95932/itsm-${name}@sha256:${'c'.repeat(64)}`]));
   const manifest={repository:approval.repository,ref:approval.ref,sha,runId:'123',runAttempt:2,
-    images,files:manifestFiles,schemaFingerprint:schemaFingerprint(manifestFiles)};
+    images,files:manifestFiles,schemaFingerprint:schemaFingerprint(manifestFiles),recoveryVerification:recoveryMethod};
   await writeFile(join(bundle,'release.json'),JSON.stringify(manifest),{mode:0o600});
   const promotionPath=join(paths.releases,`${sha}.promotion.json`);
   const promotion={...approval,bundlePath:bundle,images,schemaFingerprint:manifest.schemaFingerprint,
@@ -78,10 +78,15 @@ async function fixture(t) {
         const directory=join(paths.state,'backups'); await mkdir(directory,{mode:0o700});
         const backup=join(directory,'itsm-2026-11-15T03-00-00-000Z.dump'),data='fixture backup';
         await writeFile(backup,data,{mode:0o600});
-        await writeFile(`${backup}.json`,JSON.stringify({file:backup,release:sha,sha256:digest(data)}),{mode:0o600});
+        await writeFile(`${backup}.json`,JSON.stringify({file:backup,release:sha,sha256:digest(data),
+          inventoryMethod:'public-table-chunked-sha256-v1',inventory:[],inventorySha256:inventoryFingerprint([])}),{mode:0o600});
         return `Backup verified: ${backup}`;
       }
       assert.deepEqual(args,['restore-check','--backup',join(paths.state,'backups','itsm-2026-11-15T03-00-00-000Z.dump')]);
+      const metadata=JSON.parse(await readFile(`${args[2]}.json`,'utf8'));
+      await writeFile(`${args[2]}.restore.json`,JSON.stringify({method:recoveryMethod,status:'passed',
+        backupSha256:metadata.sha256,inventorySha256:metadata.inventorySha256,tableCount:0,
+        verifiedAt:new Date(clock).toISOString()}),{mode:0o600});
       return 'fixture isolated recovery completed';
     },
   };
@@ -95,7 +100,8 @@ test('runs only deploy, backup and isolated recovery after exact approval and pr
   assert.equal(receipt.status,'succeeded');
   assert.equal(receipt.phase,'complete');
   assert.equal(receipt.expectedCurrentSha,baseline);
-  assert.equal(receipt.restoreCheck,'isolated-schema-and-ticket-reads');
+  assert.equal(receipt.restoreCheck,recoveryMethod);
+  assert.equal(receipt.recoveryEvidence.inventorySha256,inventoryFingerprint([]));
   assert.deepEqual(receipt.images,f.manifest.images);
   assert.equal(f.queries(),1);
   assert.deepEqual(f.calls.map(args => args[0]),['deploy','backup','restore-check']);
@@ -118,6 +124,15 @@ test('an existing consumed receipt is never overwritten on replay even when base
     assert.deepEqual(f.calls,[]);
     assert.deepEqual(await readdir(f.paths.executions),[`${requestId}.json`]);
   }
+});
+
+test('rejects legacy recovery capability before deployment or receipt consumption',async t => {
+  const f=await fixture(t),manifest={...f.manifest};
+  delete manifest.recoveryVerification;
+  await writeFile(join(f.bundle,'release.json'),JSON.stringify(manifest));
+  await assert.rejects(f.helpers.executeApprovedDeployment(requestId,f.dependencies),/RELEASE_RECOVERY_CAPABILITY_REQUIRED/);
+  assert.deepEqual(f.calls,[]);
+  assert.deepEqual(await readdir(f.paths.executions),[]);
 });
 
 test('refuses source drift, baseline changes and invalid read identity before application commands',async t => {
@@ -252,6 +267,29 @@ test('backup must be private, fixed-path and bound to the deployed release',asyn
       kind === 'permissions' ? /TRUSTED_ROOT_PATH_REQUIRED/ : /FIXED_BACKUP_EVIDENCE_REQUIRED/);
     assert.equal(JSON.parse(await readFile(f.receiptPath,'utf8')).phase,'backup');
     assert.deepEqual(f.calls.map(args => args[0]),['deploy','backup']);
+  }
+});
+
+test('successful restore commands still require fresh, bound data integrity evidence',async t => {
+  for (const kind of ['missing','checksum','inventory','method','old']) {
+    const f=await fixture(t),execute=f.dependencies.execute;
+    f.dependencies.execute=async (bundle,args) => {
+      const result=await execute(bundle,args);
+      if (args[0] !== 'restore-check') return result;
+      const path=`${args[2]}.restore.json`;
+      if (kind === 'missing') { await rm(path); return result; }
+      const proof=JSON.parse(await readFile(path,'utf8'));
+      if (kind === 'checksum') proof.backupSha256='0'.repeat(64);
+      if (kind === 'inventory') proof.inventorySha256='0'.repeat(64);
+      if (kind === 'method') proof.method='isolated-schema-and-ticket-reads';
+      if (kind === 'old') proof.verifiedAt='2020-01-01T00:00:00Z';
+      await writeFile(path,JSON.stringify(proof));
+      return result;
+    };
+    await assert.rejects(f.helpers.executeApprovedDeployment(requestId,f.dependencies));
+    const receipt=JSON.parse(await readFile(f.receiptPath,'utf8'));
+    assert.equal(receipt.status,'failed');
+    assert.equal(receipt.phase,'restore-check');
   }
 });
 

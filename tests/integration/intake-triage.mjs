@@ -46,6 +46,25 @@ const catalog=await request('/catalog');assert.equal(catalog.data.items.find(i=>
 for(const code of ['INC-NONEXISTENT','INC-TRIAGE-OFF','INC-TRIAGE-HIDDEN'])assert.equal((await create(requester,{serviceCode:code})).status,400);
 assert.equal((await create(requester,{serviceCode:'REQ-ACCOUNT'})).status,503,'GEN must not unlock request fulfillment');
 assert.equal((await create(requester,{requesterId:'employee-2'})).status,400);
+const cancelCreated=await create();assert.equal(cancelCreated.status,201,JSON.stringify(cancelCreated));
+assert.equal(await sql(`SELECT count(*) FROM ticket_responsibility_history WHERE ticket_id=${quote(cancelCreated.data.id)}
+  AND revision=1 AND source='CREATED' AND service_type='GEN' AND service_code='GEN-OTHER'`),'1',
+  'GEN creation must commit with its responsibility observation');
+const cancelTicket=cancelCreated.data,cancelPath=`/tickets/${cancelTicket.id}/actions`,cancelBody={action:'CANCEL',expectedVersion:cancelTicket.version},cancelKey=randomUUID();
+assert.equal((await request(cancelPath,peer,cancelBody)).status,403,'visible agent cannot cancel for the requester');
+assert.equal((await request(cancelPath,requester,{...cancelBody,expectedVersion:cancelTicket.version+1})).status,409,'stale version cannot cancel');
+const cancelled=await request(cancelPath,requester,cancelBody,cancelKey);
+assert.equal(cancelled.status,200,JSON.stringify(cancelled));assert.equal(cancelled.data.status,'CANCELLED');
+assert.deepEqual((await request(cancelPath,requester,cancelBody,cancelKey)).data,cancelled.data,'same key and request replay the receipt');
+assert.equal((await request(cancelPath,requester,{...cancelBody,reason:'Changed request'},cancelKey)).status,409,'same key with a different body is rejected');
+assert.equal(await sql(`SELECT count(*) FROM ticket_events e JOIN audit_logs a ON a.event_id=e.id JOIN outbox_events o ON o.event_id=e.id
+  WHERE e.ticket_id=${quote(cancelTicket.id)} AND e.action='CANCEL' AND e.actor_id=${quote(requester)} AND e.to_status='CANCELLED'`),'1');
+const raceCreated=await create();assert.equal(raceCreated.status,201,JSON.stringify(raceCreated));
+const raceTicket=raceCreated.data,raceBody={action:'CANCEL',expectedVersion:raceTicket.version};
+const cancelRaces=await Promise.all([request(`/tickets/${raceTicket.id}/actions`,requester,raceBody),request(`/tickets/${raceTicket.id}/actions`,requester,raceBody)]);
+assert.deepEqual(cancelRaces.map(r=>r.status).sort(),[200,409],'concurrent distinct cancellation keys have one winner');
+assert.equal(await sql(`SELECT count(*) FROM ticket_events e JOIN audit_logs a ON a.event_id=e.id JOIN outbox_events o ON o.event_id=e.id
+  WHERE e.ticket_id=${quote(raceTicket.id)} AND e.action='CANCEL'`),'1');
 const historical=(await create()).data,grantId=await grant();
 assert.equal((await request(`/tickets/${historical.id}`,proxy)).status,404,'a grant is not access to historical tickets');
 const submitted={delegationId:grantId,subject:`Delegated ${randomUUID()}`},creationKey=randomUUID();
@@ -70,13 +89,15 @@ const action=async(ticket,user,name,fields={})=>{
   assert.equal(response.status,200,JSON.stringify(response));return response.data;
 };
 t=await action(t,owner,'ACCEPT',{comment:'Triage started'});
-t=await action(t,owner,'REQUEST_INFO',{comment:'Please clarify the network location',dueAt:new Date(Date.now()+86400000).toISOString()});
+t=await action(t,owner,'REQUEST_INFO',{comment:'Please clarify the network location',waitingReason:'USER_INFORMATION',dueAt:new Date(Date.now()+86400000).toISOString()});
 t=await action(t,proxy,'ADD_INFO',{comment:'Office floor two'});
 const classify=(ticket,user=owner,extra={},key)=>request(`/tickets/${ticket.id}/classification`,user,{expectedVersion:ticket.version,serviceCode:'INC-NET',formVersion:1,fields:{location:'Office floor two'},reason:'Confirmed network issue',...extra},key);
 assert.equal((await classify(t,requester)).status,403);assert.equal((await classify(t,peer)).status,403);
 assert.equal((await classify(t,owner,{fields:{}})).status,400);
 assert.equal((await classify(t,owner,{formVersion:2})).status,409);
-assert.equal((await classify(t,owner,{serviceCode:'REQ-ACCOUNT',fields:{}})).status,503);
+const requestClassification=await classify(t,owner,{serviceCode:'REQ-ACCOUNT',fields:{}});
+assert.equal(requestClassification.status,409);
+assert.equal(requestClassification.data.code,'REQUEST_CLASSIFICATION_NOT_ALLOWED');
 assert.equal((await classify(t,owner,{serviceCode:'INC-TRIAGE-APP',fields:{}})).status,409);
 assert.equal((await classify(t,owner,{serviceCode:'INC-TRIAGE-HIDDEN',fields:{}})).status,400,'both actor and requester must see target catalog');
 assert.equal((await classify(t,owner,{reason:'password=blocked-triage-sentinel'})).status,403);
@@ -88,6 +109,10 @@ assert.equal((await classify(before,owner,{reason:'Changed body'},correctionKey)
 assert.equal(await sql(`SELECT json_build_object('sla',(SELECT row_to_json(s) FROM sla_cycles s WHERE s.ticket_id=t.id),'updated',updated_at,
   'original',original_catalog_snapshot,'fields',original_fields,'owner',owner_group_id,'assignee',assignee_id,'priority',priority)::text FROM tickets t WHERE id=${quote(t.id)}`),preserved);
 detail=(await request(`/tickets/${t.id}`,owner)).data;assert.equal(detail.serviceCode,'INC-NET');assert.equal(detail.originalServiceCode,'GEN-OTHER');
+assert.ok(Number(await sql(`SELECT count(*) FROM ticket_responsibility_history WHERE ticket_id=${quote(t.id)}
+  AND service_type='GEN' AND service_code='GEN-OTHER'`))>0,'original GEN observations remain after classification');
+assert.equal(await sql(`SELECT service_type||':'||service_code FROM ticket_responsibility_history WHERE ticket_id=${quote(t.id)}
+  ORDER BY revision DESC LIMIT 1`),'INC:INC-NET','classification appends the corrected service without rewriting GEN history');
 assert.equal((await classify(t)).status,409,'same classification is rejected');
 assert.equal(await sql(`SELECT count(*) FROM ticket_events e JOIN audit_logs a ON a.event_id=e.id JOIN outbox_events o ON o.event_id=e.id
   WHERE e.ticket_id=${quote(t.id)} AND e.action='CLASSIFICATION_CORRECTED' AND a.before_value->>'serviceCode'='GEN-OTHER' AND a.after_value->>'serviceCode'='INC-NET'`),'1');

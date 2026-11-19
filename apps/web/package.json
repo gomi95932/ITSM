@@ -4,10 +4,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "vue-tsc --noEmit && vite build",
+    "build": "vue-tsc --noEmit && rsbuild build",
     "typecheck": "vue-tsc --noEmit",
-    "dev": "vite --host 0.0.0.0"
+    "dev": "rsbuild dev --host 0.0.0.0"
   },
   "dependencies": { "@itsm/contracts": "0.1.0", "vue": "^3.5.0", "lucide-vue-next": "^0.468.0", "dingtalk-jsapi": "^3.0.0" },
-  "devDependencies": { "@vitejs/plugin-vue": "^6.0.0", "typescript": "~5.9.3", "vite": "^7.0.0", "vue-tsc": "^3.0.0" }
+  "devDependencies": { "@rsbuild/core": "^2.3.3", "@rsbuild/plugin-vue": "^2.0.1", "typescript": "~5.9.3", "vue-tsc": "3.0.1" }
 }

@@ -12,6 +12,12 @@ export async function canDispatch(client: Pick<PoolClient,'query'>, employee: st
   return !!result.rowCount;
 }
 
+export async function canManageContinuity(client: Pick<PoolClient,'query'>, employee: string, group: string): Promise<boolean> {
+  const result=await client.query(`SELECT 1 FROM role_bindings r WHERE r.employee_id=$1 AND r.group_id=$2
+    AND r.role_code='GROUP_LEAD' AND ${ROLE_EFFECTIVE_SQL} LIMIT 1`,[employee,group]);
+  return !!result.rowCount;
+}
+
 export function roleReviewDenial(actor: string, proposer: string, subject: string): string | undefined {
   if (actor===proposer || actor===subject) return 'ROLE_INDEPENDENT_REVIEW_REQUIRED';
   return undefined;

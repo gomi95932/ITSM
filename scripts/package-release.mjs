@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { copyFile, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
-import { requiredReleaseFiles, schemaFingerprint, validateRelease } from './release.mjs';
+import { recoveryMethod, requiredReleaseFiles, schemaFingerprint, validateRelease } from './release.mjs';
 
 const [sha,destination]=process.argv.slice(2);
 if (!/^[a-f0-9]{40}$/.test(sha ?? '') || !destination || process.env.GITHUB_REF !== 'refs/heads/main' || process.env.GITHUB_REPOSITORY !== 'gomi95932/ITSM')
@@ -18,6 +18,7 @@ paths.push('scripts/stage-release.mjs');
 paths.push('scripts/extract-release.py');
 paths.push('scripts/promote-release.mjs');
 paths.push('scripts/execute-approved-deployment.mjs');
+paths.push('scripts/inspect-development.mjs');
 paths.push('infra/systemd/itsm-deploy-approved@.service');
 const images={};
 for (const name of ['api','web','worker','postgres','redis']) {
@@ -38,7 +39,7 @@ for (const path of paths) {
 await writeFile(resolve(destination,'release.json'),`${JSON.stringify({
   sha,repository:process.env.GITHUB_REPOSITORY,ref:process.env.GITHUB_REF,runId:process.env.GITHUB_RUN_ID,
   runAttempt:Number(process.env.GITHUB_RUN_ATTEMPT),
-  schemaFingerprint:schemaFingerprint(files),files,images,
+  schemaFingerprint:schemaFingerprint(files),files,images,recoveryVerification:recoveryMethod,
 },null,2)}\n`,{flag:'wx'});
 await validateRelease(destination,sha);
 console.log(`Release bundle prepared for ${sha}; no environment files or credentials included`);

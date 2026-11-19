@@ -24,6 +24,7 @@ export class AuthService {
     if (token && /^[a-f0-9]{64}$/.test(token)) {
       const session = await this.db.pool.query('SELECT employee_id,csrf_token FROM auth_sessions WHERE token_hash=$1 AND expires_at>now()', [digest(token)]);
       id = session.rows[0]?.employee_id; csrf = session.rows[0]?.csrf_token;
+      if (!id) throw new UnauthorizedException({ code: 'LOGIN_REQUIRED' });
       if (write && (!csrf || csrf !== headers.csrf)) throw new ForbiddenException({ code: 'CSRF_FAILED' });
     } else if (devEnabled()) { id = headers.devUser; }
     if (!id) throw new UnauthorizedException({ code: 'LOGIN_REQUIRED' });

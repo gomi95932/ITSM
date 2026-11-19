@@ -50,6 +50,13 @@ ticket=await ok(ticket,dispatcher,'ASSIGN_OFFER',offer,key);
 assert.equal(ticket.status,'QUEUED');assert.equal(ticket.assigneeId,null);
 assert.equal(ticket.pendingAssigneeId,candidate);assert.equal(ticket.assignmentKind,'OFFER');
 assert.ok(Date.parse(ticket.assignmentDueAt)>Date.now());
+for(const [user,mine] of [['employee-1',true],[dispatcher,false]]) {
+  const list=await request(`/tickets?mine=${mine}&page=1&size=100`,user);
+  assert.equal(list.status,200,JSON.stringify(list));
+  const offered=list.data.items.find(item=>item.id===ticket.id);
+  assert.ok(offered,'the pending offer remains visible in requester and support lists');
+  assert.equal(offered.assignmentDueAt,ticket.assignmentDueAt,'JSON-aggregated deadlines serialize like direct receipts');
+}
 assert.deepEqual((await act(old,dispatcher,'ASSIGN_OFFER',offer,key)).data,ticket);
 assert.equal((await act(ticket,peer,'ACCEPT',{comment:'Taking it'})).data.code,'HANDOVER_PENDING');
 assert.equal((await act(ticket,peer,'ACCEPT_OFFER',{comment:'Taking it'})).status,409);

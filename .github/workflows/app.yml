@@ -3,7 +3,8 @@ name: Application CI
 on:
   pull_request:
   push:
-    branches: [main, 'feat/**']
+    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -32,12 +33,16 @@ jobs:
       - run: npm run build
       - run: npm run typecheck
       - run: npm test
+      - name: Discover browser tests before starting the isolated stack
+        run: npx playwright test --list
       - name: Reject unsafe release archives with isolated Python fixtures
         run: python3 tests/unit/release-extraction.py
       - name: Verify privileged promotion boundary in disposable root-owned CI fixtures
         run: sudo -n env -i PATH=/usr/bin:/bin "$(command -v node)" tests/integration/release-promotion.mjs
       - name: Verify approved deployment execution boundary in disposable root-owned CI fixtures
         run: sudo -n env -i PATH=/usr/bin:/bin "$(command -v node)" tests/integration/approved-deployment.mjs
+      - name: Verify read-only development inspection and drift detection in disposable root-owned CI fixtures
+        run: sudo -n env -i PATH=/usr/bin:/bin "$(command -v node)" tests/integration/development-inspection.mjs
       - name: Validate fixed approved deployment service template
         run: systemd-analyze verify infra/systemd/itsm-deploy-approved@.service
       - name: Set disposable CI configuration path
@@ -70,12 +75,14 @@ jobs:
           '
       - name: Exercise workspace permissions, SLA and voice draft invariants
         run: node tests/integration/workspace.mjs
+      - name: Verify immediate session revocation after employee or identity changes
+        run: node tests/integration/identity-revocation.mjs
       - name: Verify ordinary intake blocks sensitive payloads without persistence
         run: |
           node tests/integration/intake-policy.mjs
           docker compose --env-file "$ITSM_CI_ENV" -f infra/compose/compose.yaml exec -T db sh -ec '
             export PGPASSWORD="$POSTGRES_PASSWORD"
-            for table in tickets ticket_events audit_logs outbox_events api_idempotency voice_drafts operational_audits notification_deliveries; do
+            for table in tickets ticket_events audit_logs outbox_events api_idempotency voice_drafts operational_audits notification_deliveries ticket_responsibility_history; do
               psql -U itsm -d itsm -tAc "SELECT count(*) FROM $table t WHERE strpos(row_to_json(t)::text, '\''blocked-intake-sentinel'\'') > 0" | grep -q "^0$"
             done
             psql -U itsm -d itsm -tAc "SELECT count(*) > 0 FROM operational_audits WHERE action='\''SECURITY_CHANNEL_REQUIRED'\''" | grep -q "^t$"
@@ -92,32 +99,118 @@ jobs:
         run: node tests/integration/routing-config.mjs
       - name: Verify targeted notification audiences, live revocation and scoped retries
         run: node tests/integration/notification-audience.mjs
+      - name: Verify notification recovery without duplicate sends
+        run: |
+          compose=(docker compose --env-file "$ITSM_CI_ENV" -f infra/compose/compose.yaml)
+          "${compose[@]}" stop worker
+          trap '"${compose[@]}" up -d --no-deps --wait worker' EXIT
+          "${compose[@]}" run --no-deps --rm -T -e ITSM_NOTIFICATION_CI=true --entrypoint node worker --input-type=module < tests/integration/notification-dispatch-runner.mjs
       - name: Verify resolution-based confirmation auto-close
         run: node tests/integration/auto-close.mjs
       - name: Verify requester-only immutable service feedback
         run: node tests/integration/ticket-feedback.mjs
-      - name: Verify knowledge review, immutable publication and audience boundaries
+      - name: Verify knowledge review, immutable publication, reader feedback and audience boundaries
         run: node tests/integration/knowledge.mjs
       - name: Verify immediate P1 alerts and scoped supervisor confirmation
         run: node tests/integration/priority-review.mjs
       - name: Verify GEN intake, classification and revocable proxy boundaries
         run: node tests/integration/intake-triage.mjs
+      - name: Verify appointment withdrawal, supervised continuity and expiring per-ticket exceptions
+        run: node tests/integration/ticket-continuity.mjs
       - name: Install CI browser
         run: npx playwright install --with-deps chromium
       - name: Exercise desktop and mobile employee and agent flows
-        run: npx playwright test
+        run: npx playwright test --output test-results/workspace
       - name: Verify REQ policy versions, publisher scope and fail-closed OA boundary
         run: node tests/integration/request-catalog.mjs
       - name: Verify durable OA and controlled manual fulfillment without enabling live service requests
         run: node tests/integration/request-approval.mjs
       - name: Verify requester-only REQ approval and fulfillment progress
         run: node tests/integration/request-progress.mjs
+      - name: Verify scoped fulfillment review, revocation, current appointments and exactly-once commands
+        run: node tests/integration/fulfillment.mjs
+      - name: Verify approved request delivery, independent review, confirmation and guarded closure
+        run: node tests/integration/request-lifecycle.mjs
+      - name: Verify fulfillment reminders, late appointments, recovery rollback and concurrent deduplication
+        run: node tests/integration/fulfillment-attention.mjs
       - name: Verify service report boundaries and lifecycle metrics
         run: node tests/integration/reports.mjs
+      - name: Verify structured waiting, follow-up deadlines, ownership continuity and scoped reports
+        run: node tests/integration/ticket-waiting.mjs
+      - name: Verify waiting reminders, live recipient qualification, atomic recovery and concurrent deduplication
+        run: |
+          compose=(docker compose --env-file "$ITSM_CI_ENV" -f infra/compose/compose.yaml)
+          "${compose[@]}" stop worker
+          trap 'result=$?; "${compose[@]}" up -d --no-deps --wait --wait-timeout 90 worker || result=1; exit "$result"' EXIT
+          node tests/integration/waiting-follow-up.mjs
+      - name: Verify historical responsibility capture, legacy baseline and scoped interval reports
+        run: node tests/integration/responsibility-history.mjs
+      - name: Verify scoped notification reports, private-field filtering and full-cohort limits
+        env:
+          ITSM_NOTIFICATION_REPORT_WORKER_STOPPED: 'true'
+        run: |
+          compose=(docker compose --env-file "$ITSM_CI_ENV" -f infra/compose/compose.yaml)
+          "${compose[@]}" stop worker
+          trap 'result=$?; "${compose[@]}" up -d --no-deps --wait --wait-timeout 90 worker || result=1; exit "$result"' EXIT
+          node tests/integration/notification-report.mjs
       - name: Verify repeatable development acceptance on a populated database
         run: |
           node scripts/verify-development.mjs --base-url http://127.0.0.1:8088 --allow-synthetic-writes
           node scripts/verify-development.mjs --base-url http://127.0.0.1:8088 --allow-synthetic-writes
+      - name: Verify configurable support structure and scoped membership removal
+        run: node tests/integration/support-structure.mjs
+      - name: Verify configurable service domains, appointments and historical routing
+        run: node tests/integration/service-structure.mjs
+      - name: Verify reviewed service catalog and position routing bundles
+        run: node tests/integration/service-catalog.mjs
+      - name: Verify support group lifecycle, dependency guards and historical preservation
+        run: node tests/integration/support-group-lifecycle.mjs
+      - name: Enable manual delivery HTTP boundary in disposable CI only
+        id: enable-manual-delivery
+        env:
+          ENABLE_MANUAL_REQUEST_DELIVERY: 'true'
+        run: |
+          compose=(docker compose --env-file "$ITSM_CI_ENV" -f infra/compose/compose.yaml)
+          "${compose[@]}" up -d --no-deps --wait --wait-timeout 90 api
+          "${compose[@]}" up -d --no-deps --force-recreate --wait --wait-timeout 90 web
+      - name: Verify queued delivery intent, worker reinspection, concurrency and atomic receipts
+        run: node tests/integration/request-delivery.mjs
+      - name: Verify failed delivery investigation, independent resolution and blocked retries
+        run: node tests/integration/delivery-failures.mjs
+      - name: Verify desktop and mobile first-delivery workspace against synthetic provider
+        env:
+          ITSM_DELIVERY_CI_ENABLED: 'true'
+        run: npx playwright test tests/e2e/request-delivery.spec.ts --output test-results/request-delivery
+      - name: Restore default closed manual-delivery boundary
+        if: ${{ always() && steps.enable-manual-delivery.outcome != 'skipped' && steps.enable-manual-delivery.outcome != '' }}
+        run: |
+          compose=(docker compose --env-file "$ITSM_CI_ENV" -f infra/compose/compose.yaml)
+          "${compose[@]}" up -d --no-deps --wait --wait-timeout 90 api
+          "${compose[@]}" up -d --no-deps --force-recreate --wait --wait-timeout 90 web
+      - name: Verify atomic request intake and employee progress with synthetic approval identities
+        run: |
+          compose=(docker compose --env-file "$ITSM_CI_ENV" -f infra/compose/compose.yaml)
+          default_boundary() {
+            "${compose[@]}" up -d --no-deps --wait --wait-timeout 90 api &&
+            "${compose[@]}" up -d --no-deps --force-recreate --wait --wait-timeout 90 web &&
+            "${compose[@]}" exec -T api sh -ec 'test "$ENABLE_REQUEST_INTAKE" = false && test "$ENABLE_LIVE_OA_APPROVAL" = false && test "$ENABLE_MANUAL_REQUEST_DELIVERY" = false'
+          }
+          trap 'result=$?; default_boundary || result=1; exit "$result"' EXIT
+          "${compose[@]}" exec -T worker sh -ec 'test "$ENABLE_LIVE_OA_APPROVAL" = false && test "$ENABLE_LIVE_NOTIFICATIONS" = false'
+          ENABLE_REQUEST_INTAKE=true ENABLE_LIVE_OA_APPROVAL=true ENABLE_MANUAL_REQUEST_DELIVERY=true \
+            REQUEST_INTAKE_CATALOG_VERSIONS=REQ-INTAKE-CI@1,REQ-INTAKE-UI@1 REQUEST_APPROVAL_TIMEOUT_MINUTES=60 \
+            DINGTALK_CORP_ID=ci-intake-corp DINGTALK_APP_KEY=ci-placeholder DINGTALK_APP_SECRET=ci-placeholder \
+            "${compose[@]}" up -d --no-deps --wait --wait-timeout 90 api
+          "${compose[@]}" up -d --no-deps --force-recreate --wait --wait-timeout 90 web
+          node tests/integration/request-intake.mjs
+          ITSM_REQUEST_INTAKE_CI_ENABLED=true npx playwright test tests/e2e/request-intake.spec.ts --output test-results/request-intake
+      - name: Verify browser evidence survived all isolated test phases
+        run: |
+          for viewport in desktop mobile; do
+            for scene in request-lifecycle-feedback reports-requests reports-personal reports-history reports-notifications waiting-detail waiting-reports request-delivery-completed request-intake-progress; do
+              test -s "test-results/${scene}-${viewport}.png"
+            done
+          done
       - uses: actions/upload-artifact@v4
         if: always()
         with:

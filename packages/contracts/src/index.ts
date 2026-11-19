@@ -1,6 +1,10 @@
 export const API_PREFIX = 'api/v1';
+export * from './service-structure.js';
+export * from './service-structure-template.js';
+export * from './waiting.js';
 export { DEFAULT_CALENDAR, SLA_TARGETS, serviceMinutes, type ServiceCalendar } from './sla.js';
 export { assignmentDeadline } from './assignment.js';
+export type {SupportChangeKind,SupportChangeInput,SupportChangeDecision,SupportGroupView,SupportChangeView,SupportMemberView,SupportStructureView,SupportMembersView,SupportPeopleView,SupportAuditView,SupportDependencyKind,SupportDependenciesView} from './support.js';
 
 export interface HealthResponse {
   status: 'ok';
@@ -20,7 +24,7 @@ export interface TicketListResponse {
   counts: Partial<Record<TicketStatus, number>>;
   workQueues?: WorkQueueCounts;
 }
-export const TICKET_ACTIONS = ['ACCEPT', 'REQUEST_INFO', 'ADD_INFO', 'WAIT_VENDOR', 'RESOLVE', 'CONFIRM', 'REOPEN', 'CANCEL', 'REASSIGN', 'ACCEPT_HANDOVER', 'DECLINE_HANDOVER', 'CANCEL_HANDOVER', 'ASSIGN_OFFER', 'ACCEPT_OFFER', 'DECLINE_OFFER', 'CANCEL_OFFER'] as const;
+export const TICKET_ACTIONS = ['ACCEPT', 'REQUEST_INFO', 'ADD_INFO', 'WAIT_VENDOR', 'RESUME_VENDOR', 'RESOLVE', 'CONFIRM', 'REOPEN', 'CANCEL', 'REASSIGN', 'INITIATE_HANDOVER', 'ACCEPT_HANDOVER', 'DECLINE_HANDOVER', 'CANCEL_HANDOVER', 'ASSIGN_OFFER', 'ACCEPT_OFFER', 'DECLINE_OFFER', 'CANCEL_OFFER', 'CONTINUATION_PROPOSE', 'CONTINUATION_APPROVE', 'CONTINUATION_REJECT', 'CONTINUATION_REVOKE'] as const;
 export type TicketAction = typeof TICKET_ACTIONS[number];
 export type TicketType = 'INC' | 'REQ' | 'GEN';
 export type Impact = 'COMPANY' | 'DEPARTMENT' | 'INDIVIDUAL';
@@ -51,6 +55,7 @@ export interface CreateTicketInput {
   fields: Record<string, unknown>;
   draftId?: string;
   delegationId?: string;
+  requestedValidityDays?: number;
 }
 
 export interface TicketActionInput {
@@ -60,12 +65,14 @@ export interface TicketActionInput {
   comment?: string;
   reason?: string;
   dueAt?: string;
+  waitingReason?: import('./waiting.js').WaitReason;
   vendorReference?: string;
   vendorOwner?: string;
   resolutionCategory?: string;
   evidence?: string;
   targetGroupId?: string;
   targetAssigneeId?: string;
+  continuationId?: string;
 }
 
 export interface TicketFeedbackInput {
@@ -81,7 +88,7 @@ export interface TicketFeedback {
 }
 
 export interface CatalogField { key: string; label: string; required: boolean; options?: string[] }
-export interface CatalogItem { code: string; name: string; description: string; type: TicketType; formVersion: number; fields: CatalogField[]; available: boolean }
+export interface CatalogItem { code: string; name: string; description: string; type: TicketType; formVersion: number; fields: CatalogField[]; available: boolean; maxValidityDays?: number | null }
 export const MANAGED_ROLE_CODES=['PLATFORM_ADMIN','DISPATCHER','GROUP_LEAD'] as const;
 export type ManagedRoleCode=typeof MANAGED_ROLE_CODES[number];
 export interface RoleBindingInput {
@@ -103,6 +110,12 @@ export interface TicketView extends TicketReceipt {
   canCorrectClassification?: boolean; canAddInfo?: boolean;
   canDispatchQueued?: boolean;
   canAssignOffer?: boolean;
+  canClaim?: boolean;
+  canProcess?: boolean;
+  requestCompletionReady?: boolean;
+  ownerContinuityRequired?: boolean;
+  canManageContinuity?: boolean;
+  continuations?: {id:string;employeeId:string;proposedBy:string;status:string;expiresAt:string;reason:string;current:boolean;effective:boolean}[];
   priorityReviewState: PriorityReviewState;
   priorityCandidateAt: string | null;
   priorityReviewedAt: string | null;
@@ -110,11 +123,13 @@ export interface TicketView extends TicketReceipt {
   priorityReviewReason: string | null;
   canReviewPriority?: boolean;
   canFeedback?: boolean;
+  waiting?: import('./waiting.js').TicketWaiting | null;
   feedback?: TicketFeedback | null;
   priorityAlert?: { reviewersAvailable: boolean; overdue: boolean; notificationMode: string; deliveries: Record<string, number> };
   events?: { action: string; fromStatus: string | null; toStatus: string; detail: Record<string, string>; createdAt: string }[];
-  sla?: { cycle: number; priority: Priority; responseTarget: number; resolutionTarget: number; responseMinutes: number; resolutionMinutes: number; responded: boolean; completed: boolean; paused: boolean; breached: boolean }[];
+  sla?: { cycle: number; priority: Priority; responseTarget: number; resolutionTarget: number; responseMinutes: number; resolutionMinutes: number; responded: boolean; completed: boolean; paused: boolean; pauseReason?:'USER'|'APPROVAL'|null; breached: boolean }[];
   requestProgress?: {
+    cancellation?: 'NOT_SENT' | 'OA_CONFIRMATION_REQUIRED' | 'OA_CREATION_UNCERTAIN' | 'OA_CLOSED';
     approval: { state: string; updatedAt: string } | null;
     fulfillment: { state: string; deliveredAt: string | null; accessExpiresAt: string | null; revokedAt: string | null; reviewedAt: string | null; updatedAt: string } | null;
   };
@@ -137,3 +152,4 @@ export interface TicketReceipt {
   assignmentDueAt?: string | null;
   assignmentPolicyVersionId?: string | null;
 }
+export * from './fulfillment.js';

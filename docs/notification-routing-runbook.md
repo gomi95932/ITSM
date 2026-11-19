@@ -2,7 +2,7 @@
 
 ## Scope
 
-This change implements blueprint B10/B11 audience selection and dead-letter retry authorization. It does not enable live DingTalk delivery or prove real DingTalk integration. Existing environment gates remain unchanged. No schema migration is required.
+This change implements blueprint B10/B11 audience selection, restricted retries and recovery when a send outcome is unknown. Live delivery remains subject to DingTalk configuration and acceptance.
 
 ## Recipient Rules
 
@@ -27,7 +27,17 @@ Only an effective dispatcher or group lead for the ticket's current owning group
 
 The notification list returns a live `canRetry` flag per delivery. The web client shows the retry command only for DEAD deliveries with that flag. The flag is presentation guidance, not an authorization token; POST always checks current permissions again.
 
+## Unconfirmed Sends
+
+The worker commits `DISPATCHING` before submitting a live notification. A provable token or configuration failure can return the delivery to the send queue. A timeout, interruption, or missing task ID after the checkpoint moves the delivery to `REVIEW_REQUIRED`. A known provider task may only be queried for a receipt. The worker matches the original enterprise, application and recipient before querying a receipt or recording SLA evidence.
+
+The DingTalk receipt must include the intended recipient in `read_user_id_list` or `unread_user_id_list` and exclude them from the failed, forbidden and invalid recipient lists. The worker preserves the numeric task ID exactly when querying the receipt. First-response timing still uses the configured acceptance notification policy. Confirm that policy in the live acceptance test.
+
+The notification list prioritizes records that require review. The current support group should check the work notification in DingTalk or contact the intended recipient. For a P1 incident, use the approved on-call channel and record the outcome in the ticket timeline. Keep the original delivery record for investigation. Migration 029 moves older in-flight deliveries with unverified send attempts or unbound task IDs to review.
+
 ## Verification
+
+The candidate notification health report at `GET /api/v1/reports/notifications` summarizes the full authorized current-group cohort by the Shanghai outbox event date, with optional current-state filtering. It separates provider-confirmed delivery, simulation, skipped delivery, retries and uncertain outcomes, and reports unexpanded and expanded-without-recipient events separately. Provider details and recipient identities are excluded. This is a current-state snapshot, not lifetime failed-attempt history: manual retry resets the current attempt cycle. See `docs/p1-notification-report.md` for boundaries and pending CI/live acceptance. Investigation and retry continue in the existing restricted workspace.
 
 CI runs the action policy unit tests and `tests/integration/notification-audience.mjs` in the disposable Compose environment. It verifies exact recipients, no group broadcast, stale handover exclusion, idempotent expansion, revocation/expiry/employee checks and API-level retry scope/audits. Do not run fixture tests against the development server's persistent database.
 

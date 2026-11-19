@@ -35,7 +35,9 @@ export class KnowledgeService {
 
   private async appointed(client: PoolClient, actor: Identity, group: string, role: 'editors'|'reviewers') {
     if (!actor.groups.includes(group)) throw new NotFoundException();
-    const result = await client.query(`SELECT 1 FROM knowledge_${role} WHERE employee_id=$1 AND group_id=$2`,[actor.id,group]);
+    const result = await client.query(`SELECT 1 FROM knowledge_${role} k
+      JOIN group_memberships m ON m.employee_id=k.employee_id AND m.group_id=k.group_id JOIN employees e ON e.id=m.employee_id
+      WHERE k.employee_id=$1 AND k.group_id=$2 AND e.active FOR SHARE OF k,m,e`,[actor.id,group]);
     if (!result.rowCount) throw new ForbiddenException({code:'KNOWLEDGE_ROLE_REQUIRED'});
   }
   private async locked(client: PoolClient, id: string): Promise<Article> {
@@ -168,6 +170,40 @@ export class KnowledgeService {
     return {items:result.rows};
   }
 
+  async feedback(actor: Identity, id: string, body: unknown, key: string, requestId: string) {
+    if (!plain(body) || !only(body,['version','helpful']) || !Number.isInteger(body.version)
+      || (body.version as number)<1 || typeof body.helpful!=='boolean')
+      throw new BadRequestException({code:'INVALID_KNOWLEDGE_FEEDBACK'});
+    return this.db.transaction(async client => {
+      const row=await this.locked(client,id);
+      const employee=await client.query('SELECT 1 FROM employees WHERE id=$1 AND active FOR SHARE',[actor.id]);
+      if (!employee.rowCount) throw new ForbiddenException({code:'EMPLOYEE_DISABLED'});
+      const publication=await client.query<{audience:string;available:boolean}>(`SELECT audience,review_due_at>clock_timestamp() AS available
+        FROM knowledge_versions WHERE article_id=$1 AND version=$2`,[id,row.published_version]);
+      if (row.status==='ARCHIVED' || !publication.rows[0]?.available) throw new NotFoundException();
+      if (publication.rows[0].audience==='SUPPORT_GROUP') {
+        const membership=await client.query(`SELECT 1 FROM group_memberships WHERE employee_id=$1 AND group_id=$2 FOR SHARE`,
+          [actor.id,row.owner_group_id]);
+        if (!membership.rowCount) throw new NotFoundException();
+      }
+      const {hash,response}=await this.replay(client,actor,id,'FEEDBACK',body,key);
+      if (response) return response;
+      if (body.version!==row.published_version) throw new ConflictException({code:'KNOWLEDGE_VERSION_OR_STATE_CONFLICT'});
+      const existing=await client.query('SELECT 1 FROM knowledge_feedback WHERE article_id=$1 AND version=$2 AND employee_id=$3',
+        [id,body.version,actor.id]);
+      if (existing.rowCount) throw new ConflictException({code:'KNOWLEDGE_FEEDBACK_ALREADY_SUBMITTED'});
+      const result=await client.query<{created_at:Date}>(`INSERT INTO knowledge_feedback(article_id,version,employee_id,helpful)
+        VALUES ($1,$2,$3,$4) RETURNING created_at`,[id,body.version,actor.id,body.helpful]);
+      const output={version:body.version,helpful:body.helpful,submittedAt:result.rows[0].created_at};
+      await this.audit(client,row,actor,'FEEDBACK',key,hash,null,output,requestId);
+      return output;
+    }).catch((error:unknown) => {
+      if (plain(error) && error.code==='23505' && error.constraint==='knowledge_audits_actor_id_idempotency_key_key')
+        throw new ConflictException({code:'IDEMPOTENCY_KEY_REUSED'});
+      throw error;
+    });
+  }
+
   async get(actor: Identity, id: string, managed=false) {
     if (!uuid.test(id)) throw new NotFoundException();
     if (managed) {
@@ -175,12 +211,18 @@ export class KnowledgeService {
         AND (EXISTS(SELECT 1 FROM knowledge_editors e WHERE e.employee_id=$3 AND e.group_id=a.owner_group_id)
           OR EXISTS(SELECT 1 FROM knowledge_reviewers r WHERE r.employee_id=$3 AND r.group_id=a.owner_group_id))`,[id,actor.groups,actor.id]);
       if (!result.rowCount) throw new NotFoundException();
-      return this.summary(result.rows[0]);
+      const row=result.rows[0];
+      const summary=await this.db.pool.query(`SELECT count(*)::integer AS total,
+        count(*) FILTER (WHERE helpful)::integer AS helpful,count(*) FILTER (WHERE NOT helpful)::integer AS "notHelpful"
+        FROM knowledge_feedback WHERE article_id=$1 AND version=$2`,[id,row.published_version]);
+      return {...this.summary(row),feedbackSummary:row.published_version===null?null:{version:row.published_version,...summary.rows[0]}};
     }
-    const result=await this.db.pool.query(`SELECT v.version,v.title,v.body,v.audience,v.published_at AS "publishedAt",v.review_due_at AS "reviewDueAt"
+    const result=await this.db.pool.query(`SELECT v.version,v.title,v.body,v.audience,v.published_at AS "publishedAt",v.review_due_at AS "reviewDueAt",
+      CASE WHEN f.employee_id IS NULL THEN NULL ELSE jsonb_build_object('version',f.version,'helpful',f.helpful,'submittedAt',f.created_at) END AS feedback
       FROM knowledge_articles a JOIN knowledge_versions v ON v.article_id=a.id AND v.version=a.published_version
+      LEFT JOIN knowledge_feedback f ON f.article_id=v.article_id AND f.version=v.version AND f.employee_id=$3
       WHERE a.id=$1 AND a.status<>'ARCHIVED' AND v.review_due_at>now()
-        AND (v.audience='EMPLOYEE' OR a.owner_group_id=ANY($2::text[]))`,[id,actor.groups]);
+        AND (v.audience='EMPLOYEE' OR a.owner_group_id=ANY($2::text[]))`,[id,actor.groups,actor.id]);
     if (!result.rowCount) throw new NotFoundException();
     return {id,...result.rows[0]};
   }
