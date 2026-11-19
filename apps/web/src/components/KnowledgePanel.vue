@@ -1,18 +1,21 @@
 <script setup lang="ts">
 import { computed,onMounted,ref } from 'vue';
-import { ArrowLeft,BookOpen,Check,FilePlus2,RefreshCw,Search } from 'lucide-vue-next';
+import { ArrowLeft,BookOpen,Check,FilePlus2,RefreshCw,Search,ThumbsDown,ThumbsUp } from 'lucide-vue-next';
 import type { SessionUser } from '@itsm/contracts';
 import { api,errorText } from '../api';
 import { createRequestKey } from '../request-key';
 import { formatDate } from '../labels';
 
 type Role={groupId:string;editor:boolean;reviewer:boolean};
+type Feedback={version:number;helpful:boolean;submittedAt:string};
 type Article={id:string;status?:string;draftVersion?:number;publishedVersion?:number|null;version?:number;
   groupId?:string;authorId?:string;reviewedBy?:string|null;title:string;body:string;audience:string;
-  reviewDueAt:string;publishedAt?:string};
+  reviewDueAt:string;publishedAt?:string;feedback?:Feedback|null;
+  feedbackSummary?:{version:number;total:number;helpful:number;notHelpful:number}|null};
 const props=defineProps<{user:SessionUser}>();
 const roles=ref<Role[]>([]),scope=ref<'published'|'managed'>('published'),items=ref<Article[]>([]);
 const selected=ref<Article>(),search=ref(''),error=ref(''),busy=ref(false),formOpen=ref(false);
+const pendingFeedback=ref<{id:string;version:number;helpful:boolean;key:string}>();
 const form=ref({groupId:'',title:'',body:'',audience:'EMPLOYEE',dueDate:''});
 const activeRole=computed(()=>roles.value.find(role=>role.groupId===selected.value?.groupId));
 const isAuthor=computed(()=>selected.value?.authorId===props.user.id);
@@ -29,7 +32,7 @@ async function load(){
 }
 async function open(item:Article){
   busy.value=true;error.value='';
-  try{selected.value=await api<Article>(`/knowledge/${item.id}${scope.value==='managed'?'?scope=managed':''}`);}
+  try{selected.value=await api<Article>(`/knowledge/${item.id}${scope.value==='managed'?'?scope=managed':''}`);pendingFeedback.value=undefined;}
   catch(e){error.value=errorText(e);await load();}finally{busy.value=false;}
 }
 function startForm(){
@@ -62,6 +65,22 @@ async function transition(action:string){
     await load();
   }catch(e){error.value=errorText(e);}finally{busy.value=false;}
 }
+async function submitFeedback(helpful:boolean){
+  const article=selected.value;
+  if(busy.value||scope.value!=='published'||!article?.version||article.feedback)return;
+  if(!pendingFeedback.value||pendingFeedback.value.id!==article.id||pendingFeedback.value.version!==article.version
+    ||pendingFeedback.value.helpful!==helpful)
+    pendingFeedback.value={id:article.id,version:article.version,helpful,key:createRequestKey()};
+  const request=pendingFeedback.value;
+  busy.value=true;error.value='';
+  try{
+    const feedback=await api<Feedback>(`/knowledge/${request.id}/feedback`,{
+      method:'POST',key:request.key,body:{version:request.version,helpful:request.helpful},
+    });
+    if(selected.value?.id===request.id&&selected.value.version===request.version)selected.value.feedback=feedback;
+    pendingFeedback.value=undefined;
+  }catch(e){error.value=errorText(e);}finally{busy.value=false;}
+}
 function changeScope(next:'published'|'managed'){scope.value=next;selected.value=undefined;formOpen.value=false;void load();}
 onMounted(async()=>{try{roles.value=(await api<{groups:Role[]}>('/knowledge/roles')).groups;}catch(e){error.value=errorText(e);}await load();});
 </script>
@@ -69,9 +88,9 @@ onMounted(async()=>{try{roles.value=(await api<{groups:Role[]}>('/knowledge/role
 <template>
   <section class="knowledge-panel">
     <div class="list-toolbar">
-      <div class="segmented" aria-label="知识范围"><button :class="{selected:scope==='published'}" @click="changeScope('published')">已发布</button><button v-if="roles.length" :class="{selected:scope==='managed'}" @click="changeScope('managed')">内容管理</button></div>
-      <form class="knowledge-search" @submit.prevent="load"><label class="sr-only" for="knowledge-search">搜索知识</label><input id="knowledge-search" v-model.trim="search" maxlength="100" placeholder="搜索标题或内容"/><button class="icon-button" title="搜索" aria-label="搜索" type="submit"><Search :size="18"/></button></form>
-      <button v-if="scope==='managed'&&roles.some(role=>role.editor)" class="primary" @click="selected=undefined;startForm()"><FilePlus2 :size="17"/>新建知识</button>
+      <div class="segmented" aria-label="知识范围"><button :disabled="busy" :class="{selected:scope==='published'}" @click="changeScope('published')">已发布</button><button v-if="roles.length" :disabled="busy" :class="{selected:scope==='managed'}" @click="changeScope('managed')">内容管理</button></div>
+      <form class="knowledge-search" @submit.prevent="load"><label class="sr-only" for="knowledge-search">搜索知识</label><input id="knowledge-search" v-model.trim="search" :disabled="busy" maxlength="100" placeholder="搜索标题或内容"/><button class="icon-button" :disabled="busy" title="搜索" aria-label="搜索" type="submit"><Search :size="18"/></button></form>
+      <button v-if="scope==='managed'&&roles.some(role=>role.editor)" class="primary" :disabled="busy" @click="selected=undefined;startForm()"><FilePlus2 :size="17"/>新建知识</button>
     </div>
     <p v-if="error" class="error-banner" role="alert">{{error}}<button class="text-button" @click="load">重试</button></p>
     <div v-if="formOpen" class="knowledge-detail">
@@ -87,10 +106,19 @@ onMounted(async()=>{try{roles.value=(await api<{groups:Role[]}>('/knowledge/role
       </form>
     </div>
     <div v-else-if="selected" class="knowledge-detail">
-      <button class="text-button" @click="selected=undefined"><ArrowLeft :size="16"/>返回列表</button>
+      <button class="text-button" :disabled="busy" @click="selected=undefined"><ArrowLeft :size="16"/>返回列表</button>
       <div class="section-heading"><h2>{{selected.title}}</h2><span v-if="selected.status" class="status">{{labels[selected.status]??selected.status}}</span></div>
       <p class="muted">{{selected.audience==='EMPLOYEE'?'全体员工':'责任组'}} · 复核 {{formatDate(selected.reviewDueAt)}} · 版本 {{selected.draftVersion??selected.version}}</p>
       <p class="multiline knowledge-body">{{selected.body}}</p>
+      <div v-if="scope==='published'" class="knowledge-feedback" role="group" aria-label="知识反馈" :aria-busy="busy">
+        <p>这篇知识有帮助吗？</p>
+        <div class="action-list">
+          <button class="secondary" :disabled="busy||!!selected.feedback" :aria-pressed="selected.feedback?.helpful===true" @click="submitFeedback(true)"><ThumbsUp :size="17"/>有帮助</button>
+          <button class="secondary" :disabled="busy||!!selected.feedback" :aria-pressed="selected.feedback?.helpful===false" @click="submitFeedback(false)"><ThumbsDown :size="17"/>无帮助</button>
+        </div>
+        <p v-if="selected.feedback" class="muted" role="status">已反馈：{{selected.feedback.helpful?'有帮助':'无帮助'}}</p>
+      </div>
+      <p v-else-if="selected.feedbackSummary" class="muted" aria-label="知识反馈汇总">已发布版本 {{selected.feedbackSummary.version}}：有帮助 {{selected.feedbackSummary.helpful}} · 无帮助 {{selected.feedbackSummary.notHelpful}} · 共 {{selected.feedbackSummary.total}} 条</p>
       <div v-if="scope==='managed'" class="action-list">
         <button v-if="canEdit&&(selected.status==='DRAFT'||selected.status==='PUBLISHED')" class="secondary" @click="startForm">修订</button>
         <button v-if="canEdit&&selected.status==='DRAFT'" class="primary" :disabled="busy" @click="transition('submit')">提交审校</button>
@@ -117,6 +145,8 @@ onMounted(async()=>{try{roles.value=(await api<{groups:Role[]}>('/knowledge/role
 .knowledge-form{display:grid;gap:18px;margin-top:20px}
 .knowledge-form-row{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
 .knowledge-detail .action-list{margin-top:20px}
+.knowledge-feedback .action-list{margin-top:10px;display:flex;flex-wrap:wrap;gap:8px}
+.knowledge-feedback button[aria-pressed=true]{border-color:#12776d;background:#e8f5f1;color:#125a52}
 .knowledge-panel .table-wrap{background:white}
 .knowledge-panel .ticket-link{text-align:left;max-width:100%;overflow-wrap:anywhere}
 .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}

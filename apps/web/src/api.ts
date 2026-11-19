@@ -139,6 +139,8 @@ export const messages: Record<string,string> = {
   INVALID_KNOWLEDGE_ACTION:'操作参数无效，请刷新后重试。',KNOWLEDGE_ROLE_REQUIRED:'当前账号尚未被任命为该组知识编辑或审校人。',
   KNOWLEDGE_AUTHOR_REQUIRED:'只有原作者可修订此草稿。',KNOWLEDGE_VERSION_OR_STATE_CONFLICT:'知识状态或版本已变化，请刷新后重试。',
   KNOWLEDGE_SOURCE_UNAVAILABLE:'关联故障工单不可用。',INVALID_KNOWLEDGE_SEARCH:'搜索内容无效。',
+  INVALID_KNOWLEDGE_FEEDBACK:'请选择有帮助或无帮助，并重新打开当前发布版本。',
+  KNOWLEDGE_FEEDBACK_ALREADY_SUBMITTED:'你已反馈过此版本，请重新打开知识查看。',
 };
 export function errorText(error: unknown): string {
   return error instanceof ApiError ? messages[error.code] ?? `操作未完成（${error.status}），请检查后重试。` : '网络连接失败，请检查网络后重试。';

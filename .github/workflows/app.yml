@@ -109,7 +109,7 @@ jobs:
         run: node tests/integration/auto-close.mjs
       - name: Verify requester-only immutable service feedback
         run: node tests/integration/ticket-feedback.mjs
-      - name: Verify knowledge review, immutable publication and audience boundaries
+      - name: Verify knowledge review, immutable publication, reader feedback and audience boundaries
         run: node tests/integration/knowledge.mjs
       - name: Verify immediate P1 alerts and scoped supervisor confirmation
         run: node tests/integration/priority-review.mjs

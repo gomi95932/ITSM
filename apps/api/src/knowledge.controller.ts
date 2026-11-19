@@ -42,6 +42,11 @@ export class KnowledgeController {
     return this.knowledge.revise(await this.identity(h,true),id,body,this.key(h),this.requestId(h));
   }
 
+  @Post(':id/feedback') @HttpCode(200)
+  async feedback(@Headers() h: HeadersMap,@Param('id') id: string,@Body() body: unknown) {
+    return this.knowledge.feedback(await this.identity(h,true),id,body,this.key(h),this.requestId(h));
+  }
+
   @Post(':id/:action') @HttpCode(200)
   async transition(@Headers() h: HeadersMap,@Param('id') id: string,@Param('action') action: string,@Body() body: unknown) {
     if (!['submit','approve','reject','publish','archive'].includes(action)) throw new BadRequestException({code:'INVALID_KNOWLEDGE_ACTION'});
