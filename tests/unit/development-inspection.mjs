@@ -56,6 +56,16 @@ test('inspection binds all records to one deployed release and source artifact',
   }
 });
 
+test('inspection accepts the deployed directory trailing slash without accepting other paths',() => {
+  const input=evidence();
+  input.current.bundlePath=`${bundle}/`;
+  validateInspectionEvidence(input);
+  for (const path of [`${bundle}//`,`${bundle}/.`,`${bundle}/../${sha}`,`${bundle}-other/`,null]) {
+    input.current.bundlePath=path;
+    assert.throws(() => validateInspectionEvidence(input),/DEPLOYMENT_EVIDENCE_MISMATCH/);
+  }
+});
+
 test('readiness or mismatched acceptance records cannot pass as business acceptance',() => {
   for (const mutate of [
     e => { e.current.verificationLevel='readiness-only'; },

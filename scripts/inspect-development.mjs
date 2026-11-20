@@ -22,7 +22,7 @@ export function validateInspectionSelection(sha,requestId) {
 
 export function validateInspectionEvidence({sha,requestId,bundle,current,receipt,promotion,manifest}) {
   validateInspectionSelection(sha,requestId);
-  if (current?.sha !== sha || current.bundlePath !== bundle || manifest?.sha !== sha
+  if (current?.sha !== sha || ![bundle,`${bundle}/`].includes(current.bundlePath) || manifest?.sha !== sha
     || promotion?.sha !== sha || promotion.bundlePath !== bundle || receipt?.sha !== sha
     || receipt.requestId !== requestId || receipt.status !== 'succeeded' || receipt.phase !== 'complete'
     || !['isolated-schema-and-ticket-reads',recoveryMethod].includes(receipt.restoreCheck)
