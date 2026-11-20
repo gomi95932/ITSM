@@ -79,6 +79,11 @@ try {
   await deliver();
   assert.equal(checkpoint,'DISPATCHING','checkpoint committed before network call');
   assert.deepEqual(operations(),['asyncsend_v2'],'concurrent worker does not duplicate submission');
+  assert.equal(calls[0].body.to_all_user,false);assert.equal(calls[0].body.userid_list,userId);
+  assert.equal(calls[0].body.msg.msgtype,'action_card');
+  assert.equal(calls[0].body.msg.action_card.single_url,`https://itsm.example.test/#/tickets/${ambiguous.ticket}`);
+  assert.equal(calls[0].body.msg.action_card.single_title,'查看并处理');
+  assert.equal(JSON.stringify(calls[0].body.msg).includes('Disposable CI only'),false);
   assert.deepEqual(await row(ambiguous),{state:'REVIEW_REQUIRED',provider_task_id:null,last_error:'DINGTALK_SEND_UNCONFIRMED',responded_at:null});
   await due(ambiguous);
   await deliver();

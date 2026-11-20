@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { notificationLink } from './notification-message.js';
+import { notificationLink,notificationMessage } from './notification-message.js';
 
 test('vendor resume announces public progress without disclosing the engineer explanation',()=>{
   const input={ticket_id:'vendor-1',number:'INC-0001',action:'RESUME_VENDOR',to_status:'IN_PROGRESS',
@@ -76,4 +76,31 @@ test('unroutable tickets link administrators to the alert list, not an inaccessi
   });
   assert.equal(message.messageUrl,'https://itsm.example.test/#/routing-alerts');
   assert.match(message.text,/无人可接/);
+});
+
+test('work notifications use an ActionCard that opens an authenticated H5 page without action credentials',()=>{
+  const ticket={ticket_id:'ticket-1',number:'INC-0001',action:'REQUEST_INFO',to_status:'WAITING_USER',
+    detail:{comment:'private-comment',token:'private-token'}};
+  const message=notificationMessage('https://itsm.example.test/service/',ticket);
+  assert.deepEqual(message,{msgtype:'action_card',action_card:{title:'IT 服务台 · INC-0001',
+    markdown:'工单 INC\\-0001 状态已更新：WAITING\\_USER',single_title:'查看并处理',
+    single_url:'https://itsm.example.test/service/#/tickets/ticket-1'}});
+  assert.equal(JSON.stringify(message).includes('private-'),false);
+  assert.deepEqual(Object.keys(message.action_card).sort(),['markdown','single_title','single_url','title']);
+  for(const action of ['ACCEPT_OFFER','CANCEL','CONFIRM'])assert.equal(message.action_card.single_url.includes(action),false);
+});
+
+test('cards forbid credential-bearing or ambiguous public URLs and escape Markdown data',()=>{
+  const ticket={ticket_id:'t',number:'[text](https://other.invalid/)\nnext',action:'UPDATE',to_status:'OPEN'};
+  const message=notificationMessage('https://itsm.example.test/',ticket);
+  assert.equal(message.action_card.markdown.includes('[text]('),false);
+  assert.equal(message.action_card.markdown.includes('\n'),false);
+  assert.equal(message.action_card.title.includes('\n'),false);
+  const escaped=notificationMessage('https://itsm.example.test/',{...ticket,number:'*_[x]`\\|<>\u0000'});
+  assert.ok(escaped.action_card.markdown.includes('\\*\\_\\[x\\]\\`\\\\\\|\\<\\> '));
+  assert.equal(escaped.action_card.title.includes('\u0000'),false);
+  for(const url of ['http://itsm.example.test/','https://u:p@itsm.example.test/',
+    'https://itsm.example.test/?token=value','https://itsm.example.test/#/other',`https://itsm.example.test/${'x'.repeat(500)}`])
+    assert.throws(()=>notificationMessage(url,ticket),/HTTPS_DEEP_LINK_REQUIRED/);
+  assert.equal(notificationMessage('https://itsm.example.test/',{...ticket,number:'x'.repeat(100)}).action_card.title.length,64);
 });

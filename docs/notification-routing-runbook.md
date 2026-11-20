@@ -4,6 +4,14 @@
 
 This change implements blueprint B10/B11 audience selection, restricted retries and recovery when a send outcome is unknown. Live delivery remains subject to DingTalk configuration and acceptance.
 
+## ActionCard Processing Entry
+
+Work notifications use the classic DingTalk `action_card` message with a short identifier/status, a title and one `查看并处理` link. The link opens the existing H5 ticket, fulfillment or routing workspace. It contains no session, approval, action credential, description or private evidence. Message titles remove control characters and are capped at 64 characters; status text escapes Markdown. The configured base URL must be HTTPS without credentials, query or fragment, and the final link is capped at 500 characters. The contract is checked against the official DingTalk Java SDK 2.0.0 `OapiMessageCorpconversationAsyncsendV2Request.ActionCard` source snapshot; current enterprise compatibility still requires a real send.
+
+Opening or forwarding the card does not accept, approve or close a ticket. The H5 application authenticates the current user and reads current ticket/position permissions. A user explicitly submits the permitted action, with the existing CSRF, version and idempotency checks. Results are written to the same ITSM ticket/event/audit records as platform processing. This is an H5 processing entry inside DingTalk, not an inline interactive-card callback implementation. Native in-card commands and their callback verification remain outside this candidate and must not be reported as delivered.
+
+The isolated desktop/mobile deep-link cases exercise opening without mutation, authorized engineer processing and a forwarded link rejected for an unrelated employee. They use development identities and do not verify enterprise SSO. Live acceptance must additionally prove real message delivery, DingTalk mobile link opening, enterprise SSO, revoked-identity denial and a ticket update visible to its requester.
+
 ## Recipient Rules
 
 | Event | Recipients |

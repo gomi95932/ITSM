@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { notificationRecipients } from './notification-audience.js';
-import { notificationLink } from './notification-message.js';
+import { notificationMessage } from './notification-message.js';
 
 type Delivery = {
   id: string; event_id: string; employee_id: string; requester_id: string;
@@ -96,7 +96,7 @@ export async function deliverNotification(options: Options): Promise<boolean> {
   if (options.mode==='disabled') return false;
   const selected = await options.transaction<{
     processed: boolean;
-    dispatch?: { id: string; link: ReturnType<typeof notificationLink> };
+    dispatch?: { id: string; message: ReturnType<typeof notificationMessage> };
   }>(async client => {
     await client.query('SELECT pg_advisory_xact_lock_shared(71820512)');
     const row = (await client.query<Delivery>(`${deliverySelect}
@@ -133,8 +133,8 @@ export async function deliverNotification(options: Options): Promise<boolean> {
       await poll(client,row,target.userId,options);
       return processed;
     }
-    let link: ReturnType<typeof notificationLink>;
-    try { link = notificationLink(options.publicUrl,row); }
+    let message: ReturnType<typeof notificationMessage>;
+    try { message = notificationMessage(options.publicUrl,row); }
     catch {
       await retryLater(client,row,'HTTPS_DEEP_LINK_REQUIRED');
       return processed;
@@ -142,10 +142,10 @@ export async function deliverNotification(options: Options): Promise<boolean> {
     await client.query(`UPDATE notification_deliveries SET state='DISPATCHING',provider_recipient_hash=$2,
       next_at=clock_timestamp()+interval '60 seconds',last_error=NULL,updated_at=clock_timestamp() WHERE id=$1`,
     [row.id,recipientHash(options,target.userId)]);
-    return { ...processed, dispatch: { id:row.id, link } };
+    return { ...processed, dispatch: { id:row.id, message } };
   });
   if (!selected.dispatch) return selected.processed;
-  const { id, link } = selected.dispatch;
+  const { id, message } = selected.dispatch;
 
   // Commit the checkpoint before sending so a crash cannot return the item to the send queue.
   await options.transaction(async client => {
@@ -162,7 +162,7 @@ export async function deliverNotification(options: Options): Promise<boolean> {
     let data: ProviderResult;
     try {
       data = await options.provider('asyncsend_v2',{ agent_id:options.agentId,userid_list:target.userId,to_all_user:false,
-        msg:{msgtype:'link',link} });
+        msg:message });
     } catch (error) {
       if (error instanceof NotificationBeforeSendError) await retryLater(client,row,error.code);
       else await recordState(client,id,'REVIEW_REQUIRED','DINGTALK_SEND_UNCONFIRMED');

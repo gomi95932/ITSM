@@ -22,7 +22,21 @@ for(const [format,codec,mime] of [['wav','pcm_s16le','audio/wav'],['webm','libop
   console.log(`Decoding generated ${mime} fixture`);
   const result=await normalizedVoice(await sample(1,format,codec),mime);
   assert.equal(result.toString('ascii',0,4),'RIFF');assert.equal(result.readUInt32LE(24),16000);
-  assert.equal(result.readUInt16LE(22),1);assert.ok(result.length>30000&&result.length<34000);
+  assert.equal(result.readUInt16LE(22),1);assert.equal(result.readUInt16LE(34),16);
+  assert.equal(result.readUInt32LE(40),result.length-44);
+  const samples=(result.length-44)/2;
+  console.log(`Decoded ${mime}: ${samples} samples (${samples/16000} seconds)`);
+  // AAC has a 1024-sample encoder delay and can pad the final frame in a fragmented MP4.
+  // FFmpeg n7.1 libavcodec/aacenc.c defines frame_size=initial_padding=1024.
+  const padding=format==='mp4'?2*1024:0;
+  assert.ok(samples>=16000&&samples<=16000+padding,`${mime}: unexpected decoded sample count ${samples}`);
+  let energy=0,risingCrossings=0;
+  for(let index=3200;index<12800;index++){
+    const value=result.readInt16LE(44+index*2);energy+=value*value;
+    if(index>3200&&value>0&&result.readInt16LE(44+(index-1)*2)<=0)risingCrossings++;
+  }
+  assert.ok(Math.sqrt(energy/9600)>100,`${mime}: decoded signal must not be silence`);
+  assert.ok(risingCrossings>=260&&risingCrossings<=268,`${mime}: expected a 440 Hz signal, got ${risingCrossings} rising crossings`);
   console.log(`Verified ${mime}: ${result.length-44} PCM bytes`);
 }
 await assert.rejects(()=>normalizedVoice(Buffer.from('not real audio'),'audio/webm'));
@@ -31,5 +45,7 @@ await assert.rejects(()=>normalizedVoice(Buffer.alloc(2_000_001),'audio/wav'));
 await assert.rejects(()=>normalizedVoice(Buffer.from('OggSnotvalid'),'audio/mp4'));
 const long=await sample(31,'wav','pcm_s16le');
 await assert.rejects(()=>normalizedVoice(long,'audio/wav'),error=>{assert.match(JSON.stringify(error),/VOICE_TOO_LONG/);return true;});
+const longMp4=await sample(31,'mp4','aac');
+await assert.rejects(()=>normalizedVoice(longMp4,'audio/mp4'),error=>{assert.match(JSON.stringify(error),/VOICE_TOO_LONG/);return true;});
 assert.deepEqual(await readdir('/tmp'),before,'no recordings or decoder output are persisted to disk');
 console.log('Real decoder verified: WebM, Ogg, MP4, WAV, duration, malformed and oversized audio, in-memory processing');
