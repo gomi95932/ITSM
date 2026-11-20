@@ -7,7 +7,7 @@ export function useDevelopment(value: boolean) { development = value; }
 export class ApiError extends Error {
   constructor(public status: number,public code: string) { super(code); }
 }
-export async function api<T>(path: string,options: { method?: string; body?: unknown; key?: string } = {}): Promise<T> {
+export async function api<T>(path: string,options: { method?: string; body?: unknown; key?: string; signal?:AbortSignal } = {}): Promise<T> {
   const response = await fetch(`/api/v1${path}`,{
     method:options.method ?? 'GET',credentials:'same-origin',headers:{
       ...(development ? { 'X-Dev-User':devUser() } : {}),
@@ -15,13 +15,14 @@ export async function api<T>(path: string,options: { method?: string; body?: unk
       ...(options.key ? { 'Idempotency-Key':options.key } : {}),
       ...(currentUser?.csrfToken ? { 'X-CSRF-Token':currentUser.csrfToken } : {}),
       ...(path === '/auth/dingtalk' ? { 'X-ITSM-Login':'1' } : {}),
-    },body:options.body === undefined ? undefined : JSON.stringify(options.body),
+    },body:options.body === undefined ? undefined : JSON.stringify(options.body),signal:options.signal,
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new ApiError(response.status,data.code ?? 'REQUEST_FAILED');
   return data as T;
 }
 export const messages: Record<string,string> = {
+  DIRECTORY_ADMIN_REQUIRED:'仅平台管理员可查看人员同步状态。',
   INVALID_REQUEST_VALIDITY:'请填写服务允许范围内的申请有效天数；报障无需填写此项。',
   APPROVAL_IDENTITY_UNAVAILABLE:'申请人或审批人尚未关联有效的企业钉钉账号，请联系服务台核对。',
   APPROVAL_MANAGER_MAPPING_UNAVAILABLE:'直线经理信息尚未核验或即将过期，请联系服务台更新后再提交。',
@@ -133,7 +134,9 @@ export const messages: Record<string,string> = {
   LOGIN_REQUIRED:'登录已失效，请重新进入应用。',EMPLOYEE_DISABLED:'账号已停用，请联系服务台。',CSRF_FAILED:'会话校验失败，请重新登录。',
   VERSION_CONFLICT:'工单已由其他人更新，已为你刷新，请确认后重试。',FORM_VERSION_CONFLICT:'服务表单已更新，请重新选择服务。',
   REQUEST_APPROVAL_POLICY_NOT_CONFIGURED:'该服务尚未开放审批，请联系服务台。',DRAFT_EXPIRED:'草稿已过期，请重新整理或直接填写表单。',
-  ASR_UNAVAILABLE:'暂时无法转写，请继续使用文字填写。',INTAKE_RATE_LIMITED:'操作较频繁，请稍后再试。',
+  ASR_UNAVAILABLE:'暂时无法转写，请继续使用文字填写。',ASR_BUSY:'语音转写繁忙，请稍后重试或继续使用文字。',
+  INVALID_AUDIO:'录音无效或格式不支持，请重新录音或使用文字。',VOICE_TOO_LONG:'录音超过 30 秒，请分段描述或使用文字。',
+  INTAKE_RATE_LIMITED:'操作较频繁，请稍后再试。',
   EMPLOYEE_NOT_LINKED:'钉钉账号尚未关联公司员工，请联系管理员。',DINGTALK_NOT_CONFIGURED:'钉钉应用尚未配置，请联系管理员。',
   INVALID_KNOWLEDGE_DRAFT:'请检查标题、正文、责任组和复核日期（须在未来 1 至 366 天内）。',
   INVALID_KNOWLEDGE_ACTION:'操作参数无效，请刷新后重试。',KNOWLEDGE_ROLE_REQUIRED:'当前账号尚未被任命为该组知识编辑或审校人。',

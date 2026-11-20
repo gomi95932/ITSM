@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { test } from 'node:test';
 import { inventoryFingerprint, recoveryMethod, requiredReleaseFiles, schemaFingerprint } from '../../scripts/release.mjs';
+import { enterpriseEvidence } from '../fixtures/enterprise-uat.mjs';
 
 assert.equal(process.getuid(),0,'Only run in disposable Linux CI with sudo, never on the Mac or development server');
 const checkout=fileURLToPath(new URL('../../',import.meta.url));
@@ -12,11 +13,12 @@ const sha='a'.repeat(40),requestId='d'.repeat(32),instant=Date.parse('2026-11-18
 const digest=value => createHash('sha256').update(value).digest('hex');
 const tools=['inspect-development.mjs','release.mjs','promote-release.mjs','stage-release.mjs','verify-release-source.mjs'];
 
-async function fixture(t) {
+async function fixture(t,{enterprise=false}={}) {
   const root=await mkdtemp('/run/itsm-inspection-test-');
   t.after(() => rm(root,{recursive:true,force:true}));
   const paths=Object.fromEntries(['tools','releases','state','executions'].map(name => [name,join(root,name)]));
   for (const directory of Object.values(paths)) await mkdir(directory,{mode:0o700});
+  if(enterprise){paths.env=join(root,'enterprise.env');await writeFile(paths.env,'ENTERPRISE_FIXTURE_ONLY=true\n',{mode:0o600});}
   for (const name of tools) {
     const target=join(paths.tools,name);
     await copyFile(join(checkout,'scripts',name),target);
@@ -43,7 +45,7 @@ async function fixture(t) {
     }
   }
   const bundle=join(paths.releases,sha),files=[];
-  for (const path of [...requiredReleaseFiles,'scripts/verify-development.mjs','db/migrations/002_inspection_fixture.sql']) {
+  for (const path of [...requiredReleaseFiles,'scripts/verify-development.mjs','scripts/verify-enterprise-uat.mjs','db/migrations/002_inspection_fixture.sql']) {
     const target=join(bundle,path),content=`fixture ${path}`;
     await mkdir(dirname(target),{recursive:true,mode:0o700});
     await writeFile(target,content,{mode:0o600});
@@ -65,6 +67,12 @@ async function fixture(t) {
   await writeFile(`${backup}.json`,JSON.stringify({file:backup,release:sha,sha256:backupChecksum}),{mode:0o600});
   const receipt={...source,sha,requestId,images,status:'succeeded',phase:'complete',businessAcceptance,
     restoreCheck:'isolated-schema-and-ticket-reads',completedAt:'2026-11-18T01:01:00Z',backup:{path:backup,sha256:backupChecksum}};
+  if(enterprise){
+    const configurationSha256=digest(await readFile(paths.env)),readiness=enterpriseEvidence(configurationSha256,'2026-11-18T01:00:00Z');
+    Object.assign(current,{verificationLevel:'enterprise-uat-readiness',businessAcceptance:null,enterpriseReadiness:readiness});
+    Object.assign(receipt,{operation:'deploy-enterprise-uat',configurationSha256,businessAcceptance:null,
+      enterpriseReadiness:readiness,userAcceptance:'pending',startedAt:'2026-11-18T00:59:00Z'});
+  }
   const promotion={...source,sha,bundlePath:bundle,images,schemaFingerprint:manifest.schemaFingerprint,
     verificationLevel:'approved-root-promoted',deploymentPerformed:false};
   const records=[join(paths.state,'current.json'),join(paths.executions,`${requestId}.json`),join(paths.releases,`${sha}.promotion.json`)];
@@ -129,6 +137,22 @@ test('checks runtime and recorded evidence without changing records or exposing 
   assert.deepEqual(await readdir(f.paths.executions),[`${requestId}.json`]);
   assert.equal(f.calls.filter(args => args[0] === 'ps').length,10);
   assert.equal(f.calls.filter(args => args[0] === 'exec').length,1);
+});
+
+test('inspects enterprise readiness separately and detects private configuration drift without exposing contents',async t=>{
+  const f=await fixture(t,{enterprise:true});
+  const report=await f.inspect({sha,requestId},f.dependencies);
+  assert.equal(report.recordedBusinessAcceptance,null);assert.equal(report.userAcceptance,'pending');
+  assert.equal(report.recordedEnterpriseReadiness.configurationSha256,f.receipt.configurationSha256);
+  assert.equal(JSON.stringify(report).includes('ENTERPRISE_FIXTURE_ONLY'),false);
+  await writeFile(f.paths.env,'CHANGED=true\n',{mode:0o600});
+  await assert.rejects(f.inspect({sha,requestId},f.dependencies),/ENTERPRISE_CONFIGURATION_DRIFT/);
+});
+
+test('detects enterprise configuration changing while read-only runtime checks are in progress',async t=>{
+  const f=await fixture(t,{enterprise:true}),fetchImpl=f.dependencies.fetchImpl;
+  f.dependencies.fetchImpl=async(...args)=>{await writeFile(f.paths.env,'CHANGED=true\n',{mode:0o600});return fetchImpl(...args);};
+  await assert.rejects(f.inspect({sha,requestId},f.dependencies),/ENTERPRISE_CONFIGURATION_DRIFT/);
 });
 
 test('inspects a deployed trailing-slash directory without rewriting recorded evidence',async t => {

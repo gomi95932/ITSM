@@ -10,6 +10,8 @@ import { maintainWaitingFollowUps } from './waiting-follow-up.js';
 import { shouldAutoClose } from './auto-close.js';
 import { deliverNotification, NotificationBeforeSendError, parseNotificationResponse, serializeNotificationRequest } from './notification-delivery.js';
 import { expandNotification, refreshFulfillmentNotificationAudiences, refreshWaitingNotificationAudiences } from './notification-audience.js';
+import { dingtalkDirectory } from './directory-provider.js';
+import { directorySettings,synchronizeDirectory } from './directory-sync.js';
 
 const db = new Pool({ host:process.env.DB_HOST ?? 'db',database:process.env.DB_NAME ?? 'itsm',user:process.env.DB_USER ?? 'itsm',password:process.env.DB_PASSWORD,
   connectionTimeoutMillis:5000,statement_timeout:30000 });
@@ -20,7 +22,7 @@ const mode = process.env.NOTIFICATION_MODE ?? 'disabled';
 const liveApproval=process.env.ENABLE_LIVE_OA_APPROVAL==='true';
 if(liveApproval&&(!process.env.DINGTALK_CORP_ID||!process.env.DINGTALK_APP_KEY||!process.env.DINGTALK_APP_SECRET))
   throw new Error('OA_APPROVAL_NOT_CONFIGURED');
-const approvalProvider=liveApproval?dingtalkRequestApproval({corpId:process.env.DINGTALK_CORP_ID!,token:async signal=>{
+async function applicationToken(signal:AbortSignal){
   if(!access||access.expires<Date.now()){
     const url=new URL('https://oapi.dingtalk.com/gettoken');
     url.searchParams.set('appkey',process.env.DINGTALK_APP_KEY!);
@@ -32,7 +34,20 @@ const approvalProvider=liveApproval?dingtalkRequestApproval({corpId:process.env.
     access={token:data.access_token,expires:Date.now()+Math.min(data.expires_in??7200,7200)*1000-60000};
   }
   return access.token;
-}}):undefined;
+}
+const approvalProvider=liveApproval?dingtalkRequestApproval({corpId:process.env.DINGTALK_CORP_ID!,token:applicationToken}):undefined;
+const directoryConfig=directorySettings(process.env);
+if(directoryConfig&&(!process.env.DINGTALK_APP_KEY||!process.env.DINGTALK_APP_SECRET))throw new Error('DIRECTORY_CONFIG_INVALID');
+const directoryProvider=directoryConfig?dingtalkDirectory({roots:directoryConfig.roots,token:applicationToken}):undefined;
+let directoryNextAt=0;
+let directoryTask:Promise<void>|undefined;
+function scheduleDirectory(){
+  if(!directoryConfig||!directoryProvider||directoryTask||Date.now()<directoryNextAt)return;
+  // Directory paging must not stall notifications, SLA scans or the worker heartbeat.
+  directoryTask=synchronizeDirectory(db,directoryConfig,directoryProvider).then(result=>{
+    directoryNextAt=Date.now()+(result.state==='SUCCEEDED'?300000:60000);
+  }).catch(()=>{directoryNextAt=Date.now()+60000;}).finally(()=>{directoryTask=undefined;});
+}
 const fulfillmentReminders={
   reviewMinutes:fulfillmentReminderMinutes(process.env.FULFILLMENT_REVIEW_REMINDER_MINUTES,1440),
   revokeMinutes:fulfillmentReminderMinutes(process.env.FULFILLMENT_REVOKE_REMINDER_MINUTES,60),
@@ -260,7 +275,9 @@ async function timers() {
 }
 let ticks = 0;
 async function tick() {
+  timer=undefined;
   try {
+    scheduleDirectory();
     if (ticks++ % 15 === 0) { await recoverOwnership(); await expireAssignments(); await priorityReviewTimers(); await maintainRequestApprovals(db); await maintainRequestFulfillments(db); await maintainFulfillmentAttention(db,fulfillmentReminders); await maintainWaitingFollowUps(db); await timers(); }
     if(approvalProvider)for(let i=0;i<5&&!stopped;i++)if(!await processNextRequestApproval(db,approvalProvider))break;
     if(approvalProvider&&process.env.ENABLE_MANUAL_REQUEST_DELIVERY==='true')
@@ -272,9 +289,9 @@ async function tick() {
     await writeFile('/tmp/itsm-worker-heartbeat', String(Date.now()), { mode:0o600 });
   }
   catch { console.error('ITSM worker cycle failed; retrying without logging payloads'); }
-  finally { if (!stopped) timer = setTimeout(() => { void tick(); },2000); else await db.end(); }
+  finally { if (!stopped) timer = setTimeout(() => { void tick(); },2000); else { await directoryTask; await db.end(); } }
 }
-function shutdown() { stopped=true; if (timer) { clearTimeout(timer); void db.end(); } }
+function shutdown() { stopped=true; if (timer) { clearTimeout(timer); void (async()=>{await directoryTask;await db.end();})(); } }
 process.once('SIGTERM',shutdown); process.once('SIGINT',shutdown);
 console.log(`ITSM worker started; notification mode: ${mode}`);
 void tick();

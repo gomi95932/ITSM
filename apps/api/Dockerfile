@@ -11,6 +11,7 @@ COPY . .
 RUN npm run build -w @itsm/contracts && npm run build -w @itsm/workflow && npm run build -w @itsm/api
 
 FROM node:22-alpine
+RUN apk add --no-cache ffmpeg
 ENV NODE_ENV=production PORT=3000
 WORKDIR /srv
 COPY --from=build /srv/node_modules ./node_modules

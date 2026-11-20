@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { enterpriseEvidence } from '../fixtures/enterprise-uat.mjs';
 import { inspectDevelopment, inspectionDockerInvocation, validateInspectionEvidence,
   validateInspectionSelection, validateMigrationLedger } from '../../scripts/inspect-development.mjs';
 
@@ -90,6 +91,20 @@ test('migration inspection compares the entire name and checksum ledger',() => {
     [{...rows[0],checksum:'wrong'},rows[1]],[{...rows[0],name:'003_extra.sql'},rows[1]]])
     assert.throws(() => validateMigrationLedger(manifest,actual),/MIGRATION_LEDGER_MISMATCH/);
   assert.throws(() => validateMigrationLedger({files:[]},[]),/MIGRATION_LEDGER_MISMATCH/);
+});
+
+test('enterprise readiness records remain distinct from synthetic and real business acceptance',()=>{
+  const input=evidence(),readiness=enterpriseEvidence('f'.repeat(64),'2026-11-18T01:00:00Z');
+  Object.assign(input.current,{verificationLevel:'enterprise-uat-readiness',businessAcceptance:null,enterpriseReadiness:structuredClone(readiness)});
+  Object.assign(input.receipt,{operation:'deploy-enterprise-uat',configurationSha256:'f'.repeat(64),
+    businessAcceptance:null,enterpriseReadiness:structuredClone(readiness),userAcceptance:'pending',startedAt:'2026-11-18T00:59:00Z'});
+  validateInspectionEvidence(input);
+  for(const change of [e=>{e.receipt.operation='deploy-development';},e=>{e.receipt.userAcceptance='passed';},
+    e=>{e.current.businessAcceptance={status:'passed'};},e=>{e.receipt.enterpriseReadiness.runId='different';},
+    e=>{e.receipt.startedAt='2026-11-18T01:00:30Z';},e=>{e.receipt.completedAt='2026-11-18T00:58:00Z';}]){
+    const changed=structuredClone(input);change(changed);
+    assert.throws(()=>validateInspectionEvidence(changed),/RECORDED_ENTERPRISE_READINESS_REQUIRED/);
+  }
 });
 
 test('Docker inspection uses fixed executable, no shell and no inherited remote Docker configuration',() => {

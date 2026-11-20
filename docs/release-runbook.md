@@ -121,6 +121,8 @@ CI 在临时 root-owned Linux 夹具中覆盖批准、可信路径、来源、�
 
 ### 2.3 已部署版本的只读核验（新增代码候选）
 
+真实钉钉联调另见 [一期真实企业联调实施说明](enterprise-uat-runbook.md)。本批增加 `deploy-enterprise-uat` 批准与 `--verify-enterprise-uat` 参数，保留配置摘要绑定、备份恢复和独立的就绪证据；用户验收始终待现场完成。下述合成模式要求仅适用于 `deploy-development`，不能用于真实身份环境。
+
 `inspect-development.mjs` 用于日常检查或部署后的证据复核。新发布包将此文件纳入哈希清单，但不会自动安装到受信工具目录。管理员先核对同一提交的 CI、源文件及哈希，再以 root:root 0600 安装至 `/opt/itsm/tools/release/inspect-development.mjs`；它依赖同目录的 `release.mjs`、`promote-release.mjs`、`stage-release.mjs` 与 `verify-release-source.mjs`。沿用 2.2 节的可信路径和运行时要求，不新增通用 sudo 授权。旧发布包无需为检查而改写清单或补放文件。
 
 核验命令要求精确的已部署 40 位 SHA 和成功部署回执的 32 位 requestId，不能传 `main`、任意目录、Docker 参数或 Shell。以下变量须从受控部署记录取得，不能使用示例夹具值：

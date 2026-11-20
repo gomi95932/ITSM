@@ -125,7 +125,21 @@ export function validateRuntimeContainer(container, expectedImage, service) {
     throw new Error('RUNNING_CONTAINER_NOT_HEALTHY');
 }
 
-export async function validateRelease(directory, expected, { requireBusinessAcceptance = false } = {}) {
+export function validateEnterpriseReadinessEvidence(evidence,configurationSha256) {
+  const checks=['enterprise-configuration','loopback-readiness','dingtalk-auth-only','anonymous-rejected',
+    'development-header-rejected','public-https-web','public-auth-consistency'];
+  const modules=['directory','notifications','oa','requests','voice','interpreter'];
+  if(evidence?.version!==1||evidence.kind!=='enterprise-uat-readiness'||evidence.status!=='passed'||
+    !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(evidence.runId??'')||evidence.userAcceptance!=='pending'||
+    !/^[a-f0-9]{64}$/.test(configurationSha256??'')||evidence.configurationSha256!==configurationSha256||
+    !Number.isFinite(Date.parse(evidence.completedAt))||!Array.isArray(evidence.checks)||
+    evidence.checks.length!==checks.length||checks.some(check=>!evidence.checks.includes(check))||
+    !evidence.modules||Object.keys(evidence.modules).length!==modules.length||
+    modules.some(name=>typeof evidence.modules[name]!=='boolean'))
+    throw new Error('ENTERPRISE_READINESS_EVIDENCE_REQUIRED');
+}
+
+export async function validateRelease(directory, expected, { requireBusinessAcceptance = false, requireEnterpriseReadiness = false } = {}) {
   if (!/^[a-f0-9]{40}$/.test(expected ?? '')) throw new Error('FULL_COMMIT_SHA_REQUIRED');
   const base=await realpath(directory);
   if (!(await lstat(resolve(directory,'release.json'))).isFile()) throw new Error('INVALID_RELEASE_MANIFEST');
@@ -145,6 +159,8 @@ export async function validateRelease(directory, expected, { requireBusinessAcce
     if (!seen.has(required)) throw new Error('INCOMPLETE_RELEASE');
   if (requireBusinessAcceptance && !seen.has('scripts/verify-development.mjs'))
     throw new Error('HASHED_BUSINESS_ACCEPTANCE_TOOL_REQUIRED');
+  if (requireEnterpriseReadiness && !seen.has('scripts/verify-enterprise-uat.mjs'))
+    throw new Error('HASHED_ENTERPRISE_READINESS_TOOL_REQUIRED');
   if (schemaFingerprint(manifest.files) !== manifest.schemaFingerprint) throw new Error('SCHEMA_FINGERPRINT_MISMATCH');
   for (const name of ['api','web','worker','postgres','redis']) {
     if (!new RegExp(`^ghcr\\.io/gomi95932/itsm-${name}@sha256:[a-f0-9]{64}$`).test(manifest.images?.[name] ?? '')) throw new Error('IMMUTABLE_IMAGE_DIGEST_REQUIRED');
@@ -208,7 +224,7 @@ export async function main(argv) {
   for (let i=0;i<args.length;i++) {
     if (args[i].startsWith('--')) {
       const key=args[i].slice(2);
-      if (key === 'verify-development' && !options[key]) { options[key]=true; continue; }
+      if (['verify-development','verify-enterprise-uat'].includes(key) && !options[key]) { options[key]=true; continue; }
       if (!['env','state','backup'].includes(key) || !args[i+1] || args[i+1].startsWith('--') || options[key]) throw new Error('INVALID_RELEASE_ARGUMENT');
       options[key]=args[++i];
     } else positionals.push(args[i]);
@@ -216,7 +232,9 @@ export async function main(argv) {
   if (!['check','deploy','backup','restore-check','rollback'].includes(command)
     || positionals.length !== (command === 'deploy' ? 1 : 0)
     || (options.backup && command !== 'restore-check')
-    || (options['verify-development'] && !['deploy','rollback'].includes(command))) throw new Error('INVALID_RELEASE_COMMAND');
+    || (options['verify-development'] && !['deploy','rollback'].includes(command))
+    || (options['verify-enterprise-uat'] && !['check','deploy','rollback'].includes(command))
+    || (options['verify-development'] && options['verify-enterprise-uat'])) throw new Error('INVALID_RELEASE_COMMAND');
   const envFile=resolve(options.env ?? '/opt/itsm/shared/development.env');
   const state=resolve(options.state ?? '/opt/itsm/shared/release-state');
   const envInfo=await lstat(envFile);
@@ -225,12 +243,13 @@ export async function main(argv) {
   const stateInfo=await lstat(state);
   if (!stateInfo.isDirectory() || (stateInfo.mode & 0o077) || ![0,process.getuid?.()].includes(stateInfo.uid)) throw new Error('STATE_DIRECTORY_MUST_BE_PRIVATE');
   const lock=await open(resolve(state,'operation.lock'),'wx',0o600).catch(() => { throw new Error('RELEASE_OPERATION_ALREADY_LOCKED'); });
-  let phase='preflight', backupPath, businessAcceptance;
+  let phase='preflight', backupPath, businessAcceptance,enterpriseReadiness;
   try {
   await lock.writeFile(`${process.pid}\n`);
   let pinned={};
   const baseEnv={...process.env};
-  for (const line of (await readFile(envFile,'utf8')).split('\n')) {
+  const environmentText=await readFile(envFile,'utf8'),configurationSha256=sha256(environmentText);
+  for (const line of environmentText.split('\n')) {
     const key=/^([A-Z][A-Z0-9_]*)\s*=/.exec(line)?.[1];
     if (key) delete baseEnv[key];
   }
@@ -240,9 +259,14 @@ export async function main(argv) {
     const config=JSON.parse(await compose(['config','--format','json']));
     const port=validateConfig(config);
     if (options['verify-development']) validateBusinessAcceptanceConfig(config);
+    if (options['verify-enterprise-uat']) {
+      const {validateEnterpriseUatConfig}=await import('./verify-enterprise-uat.mjs');
+      validateEnterpriseUatConfig(config);
+    }
     const existing=await optionalJson(currentPath);
-    if (options['verify-development'])
-      await validateRelease(root,command === 'deploy' ? positionals[0] : existing?.sha,{requireBusinessAcceptance:true});
+    if (options['verify-development'] || (options['verify-enterprise-uat'] && command!=='check'))
+      await validateRelease(root,command === 'deploy' ? positionals[0] : existing?.sha,
+        {requireBusinessAcceptance:!!options['verify-development'],requireEnterpriseReadiness:!!options['verify-enterprise-uat']});
     const backup=async () => {
       const directory=resolve(state,'backups'); await mkdir(directory,{recursive:true,mode:0o700});
       const path=resolve(directory,`itsm-${new Date().toISOString().replace(/[:.]/g,'-')}.dump`);
@@ -288,6 +312,13 @@ SELECT '{"inventoryCompleted":true}';`;
     };
     const verifyRuntime=images => verifyRuntimeImages(images,service => compose(['ps','--status','running','-q',service]));
     const acceptBusiness=async () => {
+      if(options['verify-enterprise-uat']) {
+        if(sha256(await readFile(envFile,'utf8'))!==configurationSha256)throw new Error('ENTERPRISE_CONFIGURATION_CHANGED');
+        const {verifyEnterpriseUat}=await import('./verify-enterprise-uat.mjs');
+        enterpriseReadiness=await verifyEnterpriseUat({config,port,configurationSha256});
+        validateEnterpriseReadinessEvidence(enterpriseReadiness,configurationSha256);
+        return;
+      }
       if (!options['verify-development']) return;
       // An explicit flag and isolated fake-only configuration authorize synthetic writes.
       const { verifyDevelopment }=await import('./verify-development.mjs');
@@ -336,6 +367,7 @@ SELECT '{"inventoryCompleted":true}';`;
       pinned.ITSM_POSTGRES_IMAGE=existing.images.postgres;
       pinned.ITSM_REDIS_IMAGE=existing.images.redis;
       phase='rollback'; await compose(['pull','api','web','worker']);
+      if(options['verify-enterprise-uat']&&sha256(await readFile(envFile,'utf8'))!==configurationSha256)throw new Error('ENTERPRISE_CONFIGURATION_CHANGED');
       await compose(['up','-d','--no-build','--no-deps','--wait','--wait-timeout','180','api','worker','web']);
       phase='rollback-runtime-images';
       const rollbackImages={...previousManifest.images,postgres:existing.images.postgres,redis:existing.images.redis};
@@ -345,8 +377,10 @@ SELECT '{"inventoryCompleted":true}';`;
       phase='rollback-business-acceptance'; await acceptBusiness();
       phase='rollback-final-runtime-images';
       const runtime=await verifyRuntime(rollbackImages);
+      if(options['verify-enterprise-uat']&&sha256(await readFile(envFile,'utf8'))!==configurationSha256)throw new Error('ENTERPRISE_CONFIGURATION_CHANGED');
       const record={...previous,images:rollbackImages,digests:{...previous.digests,postgres:existing.digests.postgres,redis:existing.digests.redis},
-        runtime,businessAcceptance:businessAcceptance ?? null,verificationLevel:businessAcceptance ? 'synthetic-business' : 'readiness-only',
+        runtime,businessAcceptance:businessAcceptance ?? null,enterpriseReadiness:enterpriseReadiness??null,
+        verificationLevel:enterpriseReadiness?'enterprise-uat-readiness':businessAcceptance ? 'synthetic-business' : 'readiness-only',
         verifiedAt:new Date().toISOString()};
       await atomicJson(resolve(state,`rollback-${Date.now()}-${previous.sha}.json`),record);
       await atomicJson(previousPath,existing);
@@ -365,6 +399,7 @@ SELECT '{"inventoryCompleted":true}';`;
       if (containers || volumes.split('\n').includes(volume)) throw new Error('EXISTING_STACK_REQUIRES_EXPLICIT_ADOPTION');
     }
     phase='pull'; await compose(['pull']);
+    if(options['verify-enterprise-uat']&&sha256(await readFile(envFile,'utf8'))!==configurationSha256)throw new Error('ENTERPRISE_CONFIGURATION_CHANGED');
     phase='quiesce'; await compose(['stop','web','api','worker']);
     if (running) { phase='backup'; backupPath=await backup(); }
     phase='data-services'; await compose(['up','-d','--no-build','--no-deps','--wait','--wait-timeout','180','db','redis']);
@@ -378,8 +413,10 @@ SELECT '{"inventoryCompleted":true}';`;
     const images={...manifest.images};
     const digests={};
     for (const [name,image] of Object.entries(images)) digests[name]=JSON.parse(await run('docker',['image','inspect',image,'--format','{{json .RepoDigests}}']));
+    if(options['verify-enterprise-uat']&&sha256(await readFile(envFile,'utf8'))!==configurationSha256)throw new Error('ENTERPRISE_CONFIGURATION_CHANGED');
     const record={sha:manifest.sha,bundlePath:root,schemaFingerprint:manifest.schemaFingerprint,images,digests,backup:backupPath,
-      runtime,businessAcceptance:businessAcceptance ?? null,verificationLevel:businessAcceptance ? 'synthetic-business' : 'readiness-only',
+      runtime,businessAcceptance:businessAcceptance ?? null,enterpriseReadiness:enterpriseReadiness??null,
+      verificationLevel:enterpriseReadiness?'enterprise-uat-readiness':businessAcceptance ? 'synthetic-business' : 'readiness-only',
       verifiedAt:new Date().toISOString()};
     await atomicJson(resolve(state,`release-${Date.now()}-${manifest.sha}.json`),record);
     if (existing) await atomicJson(previousPath,existing);
@@ -387,7 +424,8 @@ SELECT '{"inventoryCompleted":true}';`;
     console.log(`Development deployment verified: ${manifest.sha}`);
   } catch (error) {
     await atomicJson(resolve(state,`failure-${Date.now()}.json`),{phase,backup:backupPath ?? null,
-      businessAcceptance:businessAcceptance ?? error.report ?? null,at:new Date().toISOString()}).catch(() => {});
+      businessAcceptance:businessAcceptance ?? error.report ?? null,enterpriseReadiness:enterpriseReadiness??null,
+      at:new Date().toISOString()}).catch(() => {});
     console.error(`Release stopped at ${phase}; no automatic database rollback was attempted`);
     throw error;
   } finally {

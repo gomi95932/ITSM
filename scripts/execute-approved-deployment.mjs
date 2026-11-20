@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { constants } from 'node:fs';
 import { mkdir, open, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
@@ -6,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { requireRootOwnedPath, validatePromotionApproval } from './promote-release.mjs';
 import { validateStagedRelease } from './stage-release.mjs';
 import { verifyReleaseSource } from './verify-release-source.mjs';
-import { recoveryMethod, validateRecoveryProof } from './release.mjs';
+import { recoveryMethod, validateEnterpriseReadinessEvidence, validateRecoveryProof, validateRelease } from './release.mjs';
 
 const tools='/opt/itsm/tools/release';
 const installedPaths=Object.freeze({tools,releases:'/opt/itsm/releases',
@@ -19,8 +20,11 @@ const sourceKeys=['sha','runId','runAttempt','artifactId','artifactDigest','arti
 const imageNames=['api','web','worker','postgres','redis'];
 
 export function validateDeploymentApproval(approval,requestId,now=Date.now()) {
+  const enterprise=approval?.operation==='deploy-enterprise-uat';
   if (typeof requestId !== 'string' || !/^[a-f0-9]{32}$/.test(requestId) || approval?.requestId !== requestId
-    || approval.operation !== 'deploy-development' || approval.verifyDevelopment !== true
+    || (enterprise ? approval.verifyDevelopment!==false||approval.verifyEnterpriseUat!==true||
+      !/^[a-f0-9]{64}$/.test(approval.configurationSha256??'') :
+      approval.operation !== 'deploy-development' || approval.verifyDevelopment !== true || approval.verifyEnterpriseUat===true)
     || !(approval.expectedCurrentSha === null || /^[a-f0-9]{40}$/.test(approval.expectedCurrentSha ?? '')))
     throw new Error('EXACT_DEVELOPMENT_DEPLOYMENT_APPROVAL_REQUIRED');
   return validatePromotionApproval(approval,approval.sha,approval.runId,now);
@@ -112,6 +116,12 @@ export async function executeApprovedDeployment(requestId,{paths=installedPaths,
   const requestPath=join(paths.approvals,`${requestId}.json`);
   const requestText=await readPrivate(requestPath);
   const approval=validateDeploymentApproval(JSON.parse(requestText),requestId,now());
+  const enterprise=approval.operation==='deploy-enterprise-uat';
+  const verifyConfiguration=async()=>{
+    if(enterprise&&createHash('sha256').update(await readPrivate(paths.env,65536)).digest('hex')!==approval.configurationSha256)
+      throw new Error('APPROVED_ENTERPRISE_CONFIGURATION_MISMATCH');
+  };
+  await verifyConfiguration();
   const bundle=join(paths.releases,approval.sha);
   const promotion=JSON.parse(await readPrivate(join(paths.releases,`${approval.sha}.promotion.json`)));
   if (promotion.repository !== approval.repository || promotion.verificationLevel !== 'approved-root-promoted'
@@ -119,6 +129,7 @@ export async function executeApprovedDeployment(requestId,{paths=installedPaths,
     || sourceKeys.some(key => promotion[key] !== approval[key])) throw new Error('APPROVED_PROMOTION_BINDING_REQUIRED');
   await verifyPrivateTree(bundle);
   const manifest=await validateStagedRelease(bundle,approval);
+  await validateRelease(bundle,approval.sha,{requireEnterpriseReadiness:enterprise,requireBusinessAcceptance:!enterprise});
   if (manifest.recoveryVerification !== recoveryMethod) throw new Error('RELEASE_RECOVERY_CAPABILITY_REQUIRED');
   if (promotion.schemaFingerprint !== manifest.schemaFingerprint
     || imageNames.some(name => promotion.images?.[name] !== manifest.images[name]))
@@ -134,21 +145,29 @@ export async function executeApprovedDeployment(requestId,{paths=installedPaths,
       || sourceKeys.some(key => source[key] !== approval[key])) throw new Error('APPROVED_RELEASE_SOURCE_MISMATCH');
     if (await readPrivate(requestPath) !== requestText) throw new Error('DEPLOYMENT_APPROVAL_CHANGED');
     validateDeploymentApproval(approval,requestId,now());
+    await verifyConfiguration();
     if (((await currentState(paths))?.sha ?? null) !== approval.expectedCurrentSha)
       throw new Error('DEPLOYMENT_BASELINE_CHANGED');
     const initialReceipt={version:1,requestId,repository:approval.repository,sha:approval.sha,runId:approval.runId,
       runAttempt:approval.runAttempt,artifactId:approval.artifactId,artifactDigest:approval.artifactDigest,
       approvedBy:approval.approvedBy,approvalRef:approval.approvalRef,expectedCurrentSha:approval.expectedCurrentSha,
+      ...(enterprise?{operation:approval.operation,configurationSha256:approval.configurationSha256}:{}),
       status:'running',phase:'deploy',startedAt:new Date(now()).toISOString()};
     // A receipt consumes this approval before any application or database change. Retries need a new approval.
     await writeFile(receiptPath,`${JSON.stringify(initialReceipt,null,2)}\n`,{flag:'wx',mode:0o600});
     receipt=initialReceipt;
-    await execute(bundle,['deploy',approval.sha,'--verify-development']);
+    await execute(bundle,['deploy',approval.sha,enterprise?'--verify-enterprise-uat':'--verify-development']);
     const deployed=await currentState(paths);
-    if (deployed?.sha !== approval.sha || deployed.verificationLevel !== 'synthetic-business'
-      || deployed.businessAcceptance?.status !== 'passed'
+    if (deployed?.sha !== approval.sha || deployed.verificationLevel !== (enterprise?'enterprise-uat-readiness':'synthetic-business')
+      || (!enterprise&&deployed.businessAcceptance?.status !== 'passed')
       || imageNames.some(name => deployed.images?.[name] !== manifest.images[name]))
       throw new Error('DEPLOYMENT_BUSINESS_EVIDENCE_REQUIRED');
+    if(enterprise) {
+      validateEnterpriseReadinessEvidence(deployed.enterpriseReadiness,approval.configurationSha256);
+      if(deployed.businessAcceptance!=null||Date.parse(deployed.enterpriseReadiness.completedAt)<Date.parse(receipt.startedAt)||
+        Date.parse(deployed.enterpriseReadiness.completedAt)>now())throw new Error('ENTERPRISE_READINESS_EVIDENCE_REQUIRED');
+      await verifyConfiguration();
+    }
     receipt.phase='backup'; await updateReceipt(receiptPath,receipt);
     const backupOutput=await execute(bundle,['backup']);
     const match=/^Backup verified: (.+)$/.exec(backupOutput);
@@ -169,8 +188,10 @@ export async function executeApprovedDeployment(requestId,{paths=installedPaths,
     if (Date.parse(restoreProof.verifiedAt) < Date.parse(receipt.startedAt) || Date.parse(restoreProof.verifiedAt) > now())
       throw new Error('FRESH_RESTORE_DATA_EVIDENCE_REQUIRED');
     if ((await currentState(paths))?.sha !== approval.sha) throw new Error('DEPLOYMENT_BASELINE_CHANGED');
+    await verifyConfiguration();
     receipt={...receipt,status:'succeeded',phase:'complete',images:manifest.images,
-      businessAcceptance:deployed.businessAcceptance,restoreCheck:recoveryMethod,
+      businessAcceptance:deployed.businessAcceptance??null,
+      ...(enterprise?{enterpriseReadiness:deployed.enterpriseReadiness,userAcceptance:'pending'}:{}),restoreCheck:recoveryMethod,
       recoveryEvidence:{inventorySha256,tableCount:restoreProof.tableCount,verifiedAt:restoreProof.verifiedAt},
       completedAt:new Date(now()).toISOString()};
     await updateReceipt(receiptPath,receipt);

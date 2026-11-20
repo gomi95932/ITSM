@@ -2,7 +2,8 @@ export function notificationLink(publicUrl: string, ticket: {
   ticket_id: string; number: string; action: string; to_status: string;
 }) {
   const base = new URL(publicUrl);
-  if (base.protocol !== 'https:') throw new Error('HTTPS_DEEP_LINK_REQUIRED');
+  if (base.protocol !== 'https:' || base.username || base.password || base.search || base.hash)
+    throw new Error('HTTPS_DEEP_LINK_REQUIRED');
   const routingAlert = ticket.action === 'OWNERSHIP_ESCALATION_REQUIRED';
   const fulfillmentMessages:Record<string,string>={
     DELIVERY_FAILURE_REQUIRED:'交付登记未通过，请独立核查实际授权并登记处置结果。',
@@ -16,6 +17,7 @@ export function notificationLink(publicUrl: string, ticket: {
   const waiting = ticket.action === 'WAITING_USER_FOLLOW_UP_DUE' ? '补充资料期限已到，请查看工单并跟进。'
     : ticket.action === 'WAITING_VENDOR_FOLLOW_UP_DUE' ? '厂商跟进期限已到，请查看工单并跟进。' : undefined;
   base.hash = fulfillment ? '/fulfillments' : routingAlert ? '/routing-alerts' : `/tickets/${encodeURIComponent(ticket.ticket_id)}`;
+  if (base.toString().length > 500) throw new Error('HTTPS_DEEP_LINK_REQUIRED');
   return {
     title: `${ticket.action.startsWith('P1_') ? 'P1 候选 · ' : 'IT 服务台 · '}${ticket.number}`,
     text: waiting ? `工单 ${ticket.number} ${waiting}` : fulfillment ? `工单 ${ticket.number} ${fulfillment}` : ticket.action.startsWith('P1_')
@@ -29,5 +31,20 @@ export function notificationLink(publicUrl: string, ticket: {
       : `工单 ${ticket.number} 状态已更新：${ticket.to_status}`,
     messageUrl: base.toString(),
     picUrl: '',
+  };
+}
+
+export function notificationMessage(publicUrl:string,ticket:Parameters<typeof notificationLink>[1]) {
+  const link=notificationLink(publicUrl,ticket);
+  const plain=(value:string)=>value.replace(/[\u0000-\u001f\u007f]/g,' ');
+  const markdown=Array.from(plain(link.text),character=>'\\`*_{}[]()#+.!<>|~-'.includes(character)?`\\${character}`:character).join('');
+  return {
+    msgtype:'action_card' as const,
+    action_card:{
+      title:plain(link.title).slice(0,64),
+      markdown,
+      single_title:'查看并处理',
+      single_url:link.messageUrl,
+    },
   };
 }
