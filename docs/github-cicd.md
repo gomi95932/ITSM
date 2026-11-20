@@ -2,16 +2,16 @@
 
 ## 现状与目标
 
-仓库已有应用代码、锁文件和 `Application CI`。本次补齐发布框架，结果需以对应提交的实际 Actions 运行核实。`10.10.81.125` 的 Docker/Compose 有历史安装记录，但完整部署、恢复和真实接口联调尚未验收。不要将本文件当成部署完成记录。
+本文定义开发与发布约定，不作为当前服务器版本或现场验收的证明。部署回执、现场检查结果、备份位置和维护细节在内部记录中保存；不提交到公开仓库。
 
-2026-11-12 核验记录见 [开发发布验收状态](deployment-verification-2026-11-12.md)：main 发布流水线和发布包内部署恢复演练已通过，但开发机部署仍待现场验证。GitHub 设置页确认仓库私有、没有经典分支保护规则或 ruleset，并提示当前私有仓库套餐不强制执行 ruleset；下文所列门禁是目标配置，不代表已经启用。不得为获得规则支持而将企业代码公开。
+2026-11-12 的 [开发发布验收状态](deployment-verification-2026-11-12.md) 是历史记录，不能替代当前检查。仓库当前为 public，2026-11-20 已启用 main 经典分支保护。仓库可见性与 GHCR 包可见性分别管理；企业配置、真实数据及凭据留在受控环境。
 
-目标链路：本机只编辑/提交代码 -> 功能分支 PR -> GitHub 托管 Runner 构建/测试 -> 合并 `main` -> 构建带提交 SHA 的镜像并发布至私有 GHCR -> 经批准部署到开发测试机 -> 健康检查、记录版本和回退点。开发测试机可在必要时构建测试镜像，但不编辑业务代码；本机不运行应用或测试数据库。
+开发发布链路：本机只编辑/提交代码 -> 功能分支 PR -> GitHub 托管 Runner 构建/测试 -> 合并 `main` -> 发布 SHA 镜像及 digest 发布包 -> 经批准部署到开发测试机 -> 健康与业务检查、记录版本及备份。开发测试机可在必要时构建测试镜像，但不编辑业务代码；本机不运行应用或测试数据库。
 
-## GitHub 仓库设置（需仓库管理员操作）
+## GitHub 仓库设置
 
-1. 保持仓库私有；开启 2FA，按最小权限邀请成员，不向 CI 提供个人长期令牌。
-2. 为 `main` 设置 ruleset：必须经 PR、至少一人审阅、要求 `Bootstrap checks / repository-config` 与 `Application CI / build-test` 成功、禁止强制推送和删除。首次启用前核对 GitHub 实际显示的检查名。
+1. 当前仓库 public；不在本流程中自动改变可见性。按最小权限邀请成员，不向普通 PR 提供部署凭据。仓库转为 private 时重新确认套餐能否强制执行保护规则。
+2. `main` 经典保护已启用：必须经 PR、基于最新 main 通过 `repository-config`、`build-test`、`security / dependencies`、`security / sast`、`security / secrets`；检查绑定 GitHub Actions app ID `15368`。管理员同样受约束，禁止强推和删除，要求讨论解决。当前单人开发不强制另一人审批（审批数 0），团队建立后可调整；PR 和 CI 仍为硬性要求。发布专用 job 不要求 PR 执行。
 3. 为部署建立 `development` Environment；仅在真实部署工作流就绪后启用审批规则。不要把普通 PR 的代码放在有部署权限的 Runner 上执行。
 4. GHCR 镜像需由具有 `packages: write` 的专用工作流发布，使用 `GITHUB_TOKEN`；镜像以提交 SHA 标记，不用可变的 `latest` 作为回退依据。
 5. 保护仓库 Secrets/Environment Secrets；不把数据库密码、钉钉密钥、SSH 私钥、真实数据写入仓库或 Actions 日志。私有包拉取权限要单独验证。
@@ -54,8 +54,8 @@
 
 GitHub 临时 Linux Runner 增加 root 自有 `/run/itsm-promotion-test-*` 夹具测试，通过独立模拟来源验证提升与拒绝路径。模拟 API 不证明服务器 GitHub 身份、真实下载、sudo 入口或现场权限已经生效。禁止直接 `sudo node <普通用户可改写目录>/scripts/release.mjs`，不能仅凭预备证明绕过批准或信任边界。服务器上的部署身份、可信工具安装、批准机制接入、实际 main 制品提升与发布、备份恢复和回退证据仍待完成；不提供通用 Node 或 Docker 的免密 sudo 权限。
 
-Compose 项目名为 `itsm-dev`，数据库和 Redis 仅在独立内部网络中访问，使用独立命名卷；没有宿主机端口映射。Web 仅绑定 `127.0.0.1:8088`，须经 SSH 隧道访问。不要执行 `docker compose down -v`、全局 `docker system prune` 或修改宿主机已有 PostgreSQL、Redis、OpenClaw。启动前单独确认 HTTP 端口、磁盘、备份目标与访问控制。
+Compose 项目名为 `itsm-dev`，数据库和 Redis 仅在独立内部网络中访问，使用独立命名卷；没有宿主机端口映射。Web 仅绑定 `127.0.0.1:8088`，可经 SSH 隧道访问；LAN 代理的配置见 `infra/systemd/`，实际开放范围以内部批准及现场检查为准。不要执行 `docker compose down -v`、全局 `docker system prune` 或修改宿主机已有 PostgreSQL、Redis、OpenClaw。启动前单独确认 HTTP 端口、磁盘、备份目标与访问控制。
 
 ## 下一项开发任务
 
-先核实当前提交 CI、main 镜像/发布包和服务器授权接入，完成真实部署、员工/工程师操作、备份恢复及兼容回退验证；未完成项明确保留。业务能力按 [实施基线](implementation-baseline.md) 顺序推进：安全入口与个人责任、P1 确认优先于 REQ/OA 和 INC 收尾；监控/CI 第二期，完整 SEC 第三期。
+按阶段批量完成、统一验收发布，文档及日常巡检不需要重复部署应用。实际待办以内部验收记录和 [实施基线](implementation-baseline.md) 为准；监控/CI 第二期，完整 SEC 第三期。更新工具或文档不能提升历史验收证据的等级。

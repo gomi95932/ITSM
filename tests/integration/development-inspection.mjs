@@ -131,6 +131,15 @@ test('checks runtime and recorded evidence without changing records or exposing 
   assert.equal(f.calls.filter(args => args[0] === 'exec').length,1);
 });
 
+test('inspects a deployed trailing-slash directory without rewriting recorded evidence',async t => {
+  const f=await fixture(t);
+  await writeFile(f.records[0],JSON.stringify({...f.current,bundlePath:`${f.bundle}/`}));
+  const before=await Promise.all(f.records.map(path => readFile(path,'utf8')));
+  const report=await f.inspect({sha,requestId},f.dependencies);
+  assert.equal(report.status,'passed');
+  assert.deepEqual(await Promise.all(f.records.map(path => readFile(path,'utf8'))),before);
+});
+
 test('reports stronger recovery evidence only with a matching private proof and receipt',async t => {
   for (const kind of ['valid','missing','checksum','receipt','time']) {
     const f=await fixture(t);
