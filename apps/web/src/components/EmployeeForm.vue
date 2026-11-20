@@ -15,6 +15,7 @@ const requestedValidityDays=ref<number | ''>('');
 const isRequest=computed(()=>service.value?.type==='REQ');
 const requestKey=ref(createRequestKey());
 const contentSafe=ref(false),voiceSafe=ref(false);
+const draftNotice=ref('');
 const delegationId=ref(''),delegations=ref<DelegationView[]>([]);
 onMounted(async()=>{try{const list=await api<{items:DelegationView[]}>('/delegations');delegations.value=list.items.filter(item=>item.active&&item.delegateId!==item.requesterId);const me=await api<{id:string}>('/auth/me');delegations.value=delegations.value.filter(item=>item.delegateId===me.id);}catch(e){error.value=errorText(e);}});
 watch([serviceCode,subject,description,impact,urgency,fields,delegationId,requestedValidityDays],()=>{ requestKey.value=createRequestKey(); review.value=false; contentSafe.value=false; },{ deep:true });
@@ -75,12 +76,13 @@ async function interpret() {
   if(!voiceSafe.value){voiceError.value='请先确认内容安全声明。';return;}
   voiceBusy.value=true;voiceError.value='';
   try {
-    const result=await api<{id:string;candidate:{serviceCode:string|null;subject:string;description:string;fields:Record<string,string>}}>('/voice/interpret',{method:'POST',body:{text:transcript.value,contentClass:'GENERAL'}});
+    const result=await api<{id:string;candidate:{serviceCode:string|null;subject:string;description:string;fields:Record<string,string>;fallbackReason?:string}}>('/voice/interpret',{method:'POST',body:{text:transcript.value,contentClass:'GENERAL'}});
     const candidate=result.candidate;
     if(candidate.serviceCode && props.catalog.some(item=>item.code===candidate.serviceCode && item.available))serviceCode.value=candidate.serviceCode;
     else serviceCode.value='';
     await nextTick();
     subject.value=candidate.subject;description.value=candidate.description;fields.value=candidate.fields;draftId.value=result.id;
+    draftNotice.value=candidate.fallbackReason==='INTAKE_LOW_CONFIDENCE'?'暂时无法确定服务，请选择服务并核对信息。':candidate.fallbackReason?'已保留问题描述，请核对服务和必填信息。':'';
     voiceOpen.value=false;
   }catch(e){voiceError.value=errorText(e);}finally{voiceBusy.value=false;}
 }
@@ -109,6 +111,7 @@ async function submit() {
     <button class="text-button" @click="emit('close')"><ArrowLeft :size="17"/> 返回</button>
     <div class="page-title"><div><p class="eyebrow">IT 服务台</p><h1>{{isRequest?'提交服务申请':'提交报障'}}</h1></div><button class="icon-button" title="语音输入" aria-label="语音输入" @click="openVoice"><Mic :size="20"/></button></div>
     <p v-if="review&&delegationId" class="muted">申请人：{{delegations.find(item=>item.id===delegationId)?.requesterName}}（授权代报）</p>
+    <p v-if="draftNotice&&!review" role="status" class="muted">{{draftNotice}}</p>
     <form v-if="!review" class="request-form" @submit.prevent="check">
       <label v-if="delegations.length">申请人<select v-model="delegationId" aria-label="申请人"><option value="">本人</option><option v-for="item in delegations" :key="item.id" :value="item.id">{{item.requesterName}}（已授权代报）</option></select></label>
       <label>服务类型 <span class="required">*</span><select v-model="serviceCode" required aria-label="服务类型"><option value="" disabled>请选择</option><option v-for="item in catalog.filter(item=>item.available)" :key="item.code" :value="item.code">{{ item.name }}</option></select></label>

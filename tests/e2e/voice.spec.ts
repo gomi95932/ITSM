@@ -94,3 +94,33 @@ test('microphone denial preserves text and delayed permission after cancel stops
   await expect.poll(()=>page.evaluate(()=>(window as unknown as {stopped:boolean}).stopped)).toBe(true);
   await expect(dialog.getByRole('button',{name:'开始录音'})).toBeEnabled();expect(uploads).toBe(0);
 });
+
+test('semantic draft suggestions stay editable and low confidence requires manual service selection',async({page})=>{
+  let creates=0;
+  page.on('request',request=>{if(request.method()==='POST'&&new URL(request.url()).pathname==='/api/v1/tickets')creates++;});
+  await recorder(page);
+  const dialog=page.getByRole('dialog');
+  await page.route('**/api/v1/voice/interpret',route=>route.fulfill({json:{id:'synthetic-browser-draft',candidate:{
+    serviceCode:'INC-BIZ',subject:'WMS 登录后无响应',description:'三楼 WMS 登录后一直转圈',fields:{system:'WMS'},
+    requiresReview:true,interpreter:'internal-model',confidence:0.9,missingFields:['impact','urgency'],
+  }}}));
+  await dialog.getByRole('textbox',{name:'问题描述',exact:true}).fill('三楼 WMS 登录后一直转圈');
+  await dialog.getByRole('checkbox',{name:'本次内容不含密码、密钥及安全事件证据'}).last().check();
+  await dialog.getByRole('button',{name:'整理为草稿'}).click();
+  await expect(page.getByRole('textbox',{name:'问题标题'})).toHaveValue('WMS 登录后无响应');
+  await expect(page.getByRole('combobox',{name:'服务类型'})).toHaveValue('INC-BIZ');
+  await expect(page.getByRole('combobox',{name:'影响范围'})).toHaveValue('');
+  await expect(page.getByRole('combobox',{name:'紧急程度'})).toHaveValue('');
+  await page.getByRole('textbox',{name:'问题标题'}).fill('WMS 登录后无响应，已重试');expect(creates).toBe(0);
+  await page.getByRole('button',{name:'语音输入',exact:true}).click();
+  await page.route('**/api/v1/voice/interpret',route=>route.fulfill({json:{id:'synthetic-browser-low-draft',candidate:{
+    serviceCode:null,subject:'现场问题需要协助',description:'现场问题需要协助',fields:{},requiresReview:true,
+    confidence:0.4,fallbackReason:'INTAKE_LOW_CONFIDENCE',
+  }}}));
+  await dialog.getByRole('textbox',{name:'问题描述',exact:true}).fill('现场问题需要协助');
+  await dialog.getByRole('checkbox',{name:'本次内容不含密码、密钥及安全事件证据'}).last().check();
+  await dialog.getByRole('button',{name:'整理为草稿'}).click();
+  await expect(page.getByRole('combobox',{name:'服务类型'})).toHaveValue('');
+  await expect(page.getByRole('status')).toContainText('暂时无法确定服务');
+  await expect(page.getByRole('textbox',{name:'详细情况'})).toHaveValue('现场问题需要协助');expect(creates).toBe(0);
+});

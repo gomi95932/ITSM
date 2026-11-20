@@ -5,6 +5,7 @@ import { WorkspaceController } from './workspace.controller.js';
 import { IntakePolicyService } from './intake-policy.service.js';
 import type { Database } from './database.service.js';
 import type { AuthService } from './auth.service.js';
+import { IntakeInterpreterService } from './intake-interpreter.service.js';
 
 const approved={ENABLE_VOICE_ASR:'true',VOICE_ASR_DATA_BOUNDARY:'internal-approved',VOICE_ASR_APPROVAL_REF:'ci-fixture-only',
   VOICE_ASR_MODEL:'ci-model',VOICE_ASR_TOKEN:'ci-placeholder',VOICE_ASR_ENDPOINT:'https://asr.internal/v1/audio/transcriptions'};
@@ -58,13 +59,13 @@ test('voice ingress authenticates, screens declarations before ASR and screens r
   const db={pool:{query:async(...args:unknown[])=>{queries.push(args);return {rows:[{count:1}]};}}} as unknown as Database;
   const identity={identity:async()=>({id:'employee-1'})} as unknown as AuthService;
   const voice={config:()=>({recordingEnabled:true}),transcribe:async()=>{calls++;return {text:'password=blocked-transcript-sentinel'};}} as unknown as VoiceAsrService;
-  const controller=new WorkspaceController(db,identity,new IntakePolicyService(db),voice);
+  const controller=new WorkspaceController(db,identity,new IntakePolicyService(db),voice,new IntakeInterpreterService());
   await assert.rejects(()=>controller.transcribe({}, {...input,contentClass:'SECURITY_SENSITIVE'}));assert.equal(calls,0);
   await assert.rejects(()=>controller.transcribe({},input),error=>{
     assert.equal(JSON.stringify(error).includes('blocked-transcript-sentinel'),false);return true;
   });
   assert.equal(calls,1);assert.equal(JSON.stringify(queries).includes('blocked-transcript-sentinel'),false);
-  const denied=new WorkspaceController(db,{identity:async()=>{throw new Error('IDENTITY_REQUIRED');}} as unknown as AuthService,new IntakePolicyService(db),voice);
+  const denied=new WorkspaceController(db,{identity:async()=>{throw new Error('IDENTITY_REQUIRED');}} as unknown as AuthService,new IntakePolicyService(db),voice,new IntakeInterpreterService());
   await assert.rejects(()=>denied.transcribe({},input),/IDENTITY_REQUIRED/);assert.equal(calls,1);
 });
 test('an identity revoked while transcription is pending cannot receive the result',async()=>{
@@ -72,6 +73,6 @@ test('an identity revoked while transcription is pending cannot receive the resu
   const db={pool:{query:async()=>({rows:[{count:1}]})}} as unknown as Database;
   const identity={identity:async()=>{if(++checks>1)throw new Error('IDENTITY_REVOKED');return {id:'employee-1'};}} as unknown as AuthService;
   const voice={config:()=>({recordingEnabled:true}),transcribe:async()=>({text:'WMS 页面打开失败'})} as unknown as VoiceAsrService;
-  const controller=new WorkspaceController(db,identity,new IntakePolicyService(db),voice);
+  const controller=new WorkspaceController(db,identity,new IntakePolicyService(db),voice,new IntakeInterpreterService());
   await assert.rejects(()=>controller.transcribe({},input),/IDENTITY_REVOKED/);assert.equal(checks,2);
 });

@@ -6,12 +6,13 @@ import { ROLE_AUTHORIZATION_LOCK, ROLE_EFFECTIVE_SQL } from './role-policy.js';
 import { requestIntakePolicy } from './request-intake-policy.js';
 import { VoiceAsrService } from './voice-asr.service.js';
 import { voiceCandidate } from './voice-catalog.js';
+import { applyIntakeSuggestion, IntakeInterpreterService } from './intake-interpreter.service.js';
 type H = Record<string,string | undefined>;
 const auth = (h: H) => ({ devUser: h['x-dev-user'], cookie: h.cookie, csrf: h['x-csrf-token'] });
 
 @Controller()
 export class WorkspaceController {
-  constructor(private readonly db: Database, private readonly identity: AuthService, private readonly intake: IntakePolicyService, private readonly voice: VoiceAsrService) {}
+  constructor(private readonly db: Database, private readonly identity: AuthService, private readonly intake: IntakePolicyService, private readonly voice: VoiceAsrService, private readonly interpreter: IntakeInterpreterService) {}
   @Get('intake-policy') async intakePolicy(@Headers() h: H) {
     await this.identity.identity(auth(h));
     return this.intake.config();
@@ -102,7 +103,17 @@ export class WorkspaceController {
     if (!b || typeof b !== 'object' || Array.isArray(b) || Object.keys(b).some(k => !['text','contentClass'].includes(k)) || typeof b.text !== 'string' || !b.text.trim() || b.text.length > 4000) throw new BadRequestException({ code:'INVALID_TRANSCRIPT' });
     await this.intake.requireGeneral(actor.id, b, 'voice-interpret');
     const visible=await this.catalog(h);
-    const candidate=voiceCandidate(b.text.trim(),visible.items);
+    const text=b.text.trim();
+    let candidate=await this.interpreter.interpret(text,visible.items);
+    await this.identity.identity(auth(h),true);
+    const current=await this.catalog(h);
+    // The model call can outlive a catalog publication or identity change.
+    if(candidate.interpreter==='internal-model') {
+      try {candidate=applyIntakeSuggestion({serviceCode:candidate.serviceCode,subject:candidate.subject,fields:candidate.fields,confidence:candidate.confidence!},text,current.items);}
+      catch {candidate={...voiceCandidate(text,current.items),fallbackReason:'INTAKE_UNAVAILABLE'};}
+    } else candidate={...voiceCandidate(text,current.items),...(candidate.fallbackReason?{fallbackReason:candidate.fallbackReason}:{}),
+      ...(candidate.fallbackReason==='INTAKE_LOW_CONFIDENCE'?{serviceCode:null,fields:{},missingFields:['impact','urgency','serviceCode']}: {})};
+    await this.intake.requireGeneral(actor.id,{contentClass:'GENERAL',candidate},'voice-interpret');
     const draft = await this.db.pool.query('INSERT INTO voice_drafts(employee_id,candidate) VALUES ($1,$2) RETURNING id,expires_at AS "expiresAt"',[actor.id,JSON.stringify(candidate)]);
     return { ...draft.rows[0],candidate };
   }
