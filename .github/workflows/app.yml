@@ -75,6 +75,8 @@ jobs:
           '
       - name: Exercise workspace permissions, SLA and voice draft invariants
         run: node tests/integration/workspace.mjs
+      - name: Verify real bounded audio decoding without recording files
+        run: node tests/integration/voice-audio.mjs
       - name: Verify immediate session revocation after employee or identity changes
         run: node tests/integration/identity-revocation.mjs
       - name: Verify directory synchronization, safe retirement and administrator permissions
@@ -209,7 +211,7 @@ jobs:
       - name: Verify browser evidence survived all isolated test phases
         run: |
           for viewport in desktop mobile; do
-            for scene in directory request-lifecycle-feedback reports-requests reports-personal reports-history reports-notifications waiting-detail waiting-reports request-delivery-completed request-intake-progress; do
+            for scene in directory voice request-lifecycle-feedback reports-requests reports-personal reports-history reports-notifications waiting-detail waiting-reports request-delivery-completed request-intake-progress; do
               test -s "test-results/${scene}-${viewport}.png"
             done
           done

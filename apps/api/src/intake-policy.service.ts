@@ -1,7 +1,8 @@
 import { BadRequestException, ForbiddenException, Injectable } from '@nestjs/common';
 import { Database } from './database.service.js';
+import { voiceConfiguration } from './voice-asr.service.js';
 
-type IntakeChannel = 'ticket-create' | 'ticket-action' | 'ticket-feedback' | 'voice-interpret' | 'priority-review' | 'classification' | 'request-catalog' | 'knowledge' | 'role-proposal' | 'role-decision' | 'routing-config' | 'support-structure' | 'service-structure' | 'fulfillment';
+type IntakeChannel = 'ticket-create' | 'ticket-action' | 'ticket-feedback' | 'voice-interpret' | 'voice-transcribe' | 'priority-review' | 'classification' | 'request-catalog' | 'knowledge' | 'role-proposal' | 'role-decision' | 'routing-config' | 'support-structure' | 'service-structure' | 'fulfillment';
 type Denial = 'CONTENT_DECLARATION_REQUIRED' | 'SECURITY_CHANNEL_REQUIRED';
 
 const sensitivePatterns = [
@@ -25,7 +26,7 @@ export class IntakePolicyService {
 
   config() {
     const contact = process.env.ITSM_SECURITY_CONTACT?.trim();
-    return { securityIntakeEnabled: false, recordingEnabled: false, contactConfigured: !!contact,
+    return { securityIntakeEnabled: false, recordingEnabled: !!voiceConfiguration(process.env), contactConfigured: !!contact,
       securityContact: contact?.slice(0, 300) || '请通过公司现有安全应急电话或线下联系信息安全负责人；请勿在普通工单或语音草稿中提交证据。' };
   }
 

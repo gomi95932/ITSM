@@ -19,40 +19,57 @@ const delegationId=ref(''),delegations=ref<DelegationView[]>([]);
 onMounted(async()=>{try{const list=await api<{items:DelegationView[]}>('/delegations');delegations.value=list.items.filter(item=>item.active&&item.delegateId!==item.requesterId);const me=await api<{id:string}>('/auth/me');delegations.value=delegations.value.filter(item=>item.delegateId===me.id);}catch(e){error.value=errorText(e);}});
 watch([serviceCode,subject,description,impact,urgency,fields,delegationId,requestedValidityDays],()=>{ requestKey.value=createRequestKey(); review.value=false; contentSafe.value=false; },{ deep:true });
 watch(serviceCode,()=>{ fields.value={};requestedValidityDays.value=''; });
-const voiceOpen=ref(false),transcript=ref(''),recording=ref(false),voiceBusy=ref(false),consent=ref(false),canRecord=ref(false),voiceError=ref('');
+const voiceOpen=ref(false),transcript=ref(''),recording=ref(false),voiceBusy=ref(false),consent=ref(false),recordingSafe=ref(false),canRecord=ref(false),voiceError=ref(''),recordedSeconds=ref(0);
+const requestingMic=ref(false),voiceTranscribing=ref(false);
 watch(transcript,()=>{voiceSafe.value=false;});
 let recorder:MediaRecorder | undefined,stream:MediaStream | undefined,timeout:ReturnType<typeof setTimeout> | undefined;
+let clock:ReturnType<typeof setInterval>|undefined,voiceRequest:AbortController|undefined,recordingGeneration=0;
 let disposed=false;
-function cleanup() { if(timeout) clearTimeout(timeout);stream?.getTracks().forEach(track=>track.stop());recording.value=false; }
-onBeforeUnmount(()=>{ disposed=true; if(recorder?.state==='recording') recorder.stop();cleanup(); });
+function cleanup() { if(timeout) clearTimeout(timeout);if(clock)clearInterval(clock);timeout=undefined;clock=undefined;stream?.getTracks().forEach(track=>track.stop());recording.value=false; }
+function cancelRecording() {recordingGeneration++;voiceRequest?.abort();if(recorder?.state==='recording')recorder.stop();cleanup();voiceBusy.value=false;requestingMic.value=false;voiceTranscribing.value=false;}
+onBeforeUnmount(()=>{ disposed=true;cancelRecording(); });
 async function openVoice() {
   voiceOpen.value=true;voiceError.value='';
-  try { const config=await api<{ recordingEnabled:boolean }>('/voice/config');canRecord.value=config.recordingEnabled && !!navigator.mediaDevices?.getUserMedia && typeof MediaRecorder!=='undefined'; }
+  try { const config=await api<{ recordingEnabled:boolean }>('/voice/config');
+    const mobileDingTalk=/DingTalk/i.test(navigator.userAgent)&&(/Android|iPhone|iPad|Mobile/i.test(navigator.userAgent)||(/Macintosh/i.test(navigator.userAgent)&&navigator.maxTouchPoints>1));
+    canRecord.value=config.recordingEnabled && mobileDingTalk && !!navigator.mediaDevices?.getUserMedia && typeof MediaRecorder!=='undefined'; }
   catch(e) {voiceError.value=errorText(e);}
 }
 async function record() {
   if(recording.value) {recorder?.stop();return;}
+  if(!consent.value||!recordingSafe.value||voiceBusy.value||requestingMic.value)return;
+  const generation=++recordingGeneration;
   voiceError.value='';
+  requestingMic.value=true;
   try {
-    stream=await navigator.mediaDevices.getUserMedia({audio:true});
-    if(disposed) {cleanup();return;}
+    const acquired=await navigator.mediaDevices.getUserMedia({audio:true});
+    if(disposed||generation!==recordingGeneration) {acquired.getTracks().forEach(track=>track.stop());return;}
+    stream=acquired;
+    requestingMic.value=false;
     const mime=['audio/webm','audio/mp4','audio/ogg'].find(value=>MediaRecorder.isTypeSupported(value));
     if(!mime) {cleanup();voiceError.value='当前客户端不支持录音格式，请使用文字。';return;}
     recorder=new MediaRecorder(stream,{mimeType:mime,audioBitsPerSecond:48000});
-    const chunks:BlobPart[]=[];
-    recorder.ondataavailable=event=>{chunks.push(event.data);};
-    recorder.onerror=()=>{voiceError.value='录音中断，请使用文字。';cleanup();};
+    const chunks:BlobPart[]=[];let bytes=0,tooLarge=false;
+    recorder.ondataavailable=event=>{if(generation!==recordingGeneration)return;bytes+=event.data.size;
+      if(bytes>2000000){tooLarge=true;if(recorder?.state==='recording')recorder.stop();}else chunks.push(event.data);};
+    recorder.onerror=()=>{if(generation!==recordingGeneration)return;cancelRecording();voiceError.value='录音中断，请使用文字。';};
     recorder.onstop=async()=>{
-      cleanup();if(disposed)return;voiceBusy.value=true;
+      if(disposed||generation!==recordingGeneration)return;cleanup();
+      if(tooLarge){voiceError.value='录音过大，请缩短录音或使用文字。';return;}
+      voiceBusy.value=true;voiceTranscribing.value=true;voiceRequest=new AbortController();
       try {
         const blob=new Blob(chunks,{type:mime});if(blob.size>2000000)throw new Error('Audio size');
         const audio=await new Promise<string>((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result).split(',')[1]);reader.onerror=reject;reader.readAsDataURL(blob);});
-        const result=await api<{text:string}>('/voice/transcribe',{method:'POST',body:{audio,mimeType:mime,consent:true}});
+        if(disposed||generation!==recordingGeneration)return;
+        const result=await api<{text:string}>('/voice/transcribe',{method:'POST',body:{audio,mimeType:mime,consent:true,contentClass:'GENERAL'},signal:voiceRequest.signal});
+        if(disposed||generation!==recordingGeneration)return;
         transcript.value=result.text;
-      }catch(e){voiceError.value=errorText(e);}finally{voiceBusy.value=false;}
+      }catch(e){if(!disposed&&generation===recordingGeneration)voiceError.value=errorText(e);}finally{if(generation===recordingGeneration){voiceBusy.value=false;voiceTranscribing.value=false;}}
     };
-    recorder.start();recording.value=true;timeout=setTimeout(()=>recorder?.state==='recording' && recorder.stop(),30000);
-  }catch{cleanup();voiceError.value='未获得麦克风权限，请继续使用文字。';}
+    recorder.start(500);recording.value=true;recordedSeconds.value=0;
+    const started=Date.now();clock=setInterval(()=>{recordedSeconds.value=Math.min(30,Math.floor((Date.now()-started)/1000));},250);
+    timeout=setTimeout(()=>recorder?.state==='recording' && recorder.stop(),29500);
+  }catch{if(!disposed&&generation===recordingGeneration){requestingMic.value=false;cleanup();voiceError.value='未获得麦克风权限，请继续使用文字。';}}
 }
 async function interpret() {
   if(!voiceSafe.value){voiceError.value='请先确认内容安全声明。';return;}
@@ -117,6 +134,24 @@ async function submit() {
       <p v-if="error" role="alert" class="error-banner">{{error}}</p>
       <div class="form-footer"><button class="secondary" :disabled="busy" @click="review=false">返回修改</button><button class="primary" :disabled="busy" @click="submit"><LoaderCircle v-if="busy" :size="17" class="spin"/><Check v-else :size="17"/> 确认提交</button></div>
     </div>
-    <div v-if="voiceOpen" class="modal-backdrop" @click.self="!recording&&!voiceBusy&&(voiceOpen=false)"><section role="dialog" aria-modal="true" aria-labelledby="voice-title" class="modal"><header class="section-heading"><h2 id="voice-title">一句话描述问题</h2><button class="icon-button" aria-label="关闭语音输入" title="关闭" :disabled="recording||voiceBusy" @click="voiceOpen=false"><X :size="20"/></button></header><p v-if="!canRecord" class="muted">录音暂未开放，可先输入问题描述。</p><template v-else><label class="checkbox-label"><input v-model="consent" type="checkbox"/> 同意将本次录音发送至公司批准的转写服务</label><button class="record-button" :class="{recording}" :disabled="!consent||voiceBusy" @click="record"><Square v-if="recording" :size="24"/><Mic v-else :size="24"/>{{recording?'停止录音':'开始录音'}}</button></template><label>问题描述<textarea v-model="transcript" rows="5" maxlength="4000" :disabled="recording||voiceBusy"/></label><ContentBoundary v-model="voiceSafe"/><p v-if="voiceError" class="error-banner" role="alert">{{voiceError}}</p><button class="primary full" :disabled="!voiceSafe||!transcript.trim()||recording||voiceBusy" @click="interpret"><LoaderCircle v-if="voiceBusy" :size="17" class="spin"/> 整理为草稿</button></section></div>
+    <div v-if="voiceOpen" class="modal-backdrop" @click.self="!recording&&!voiceBusy&&!requestingMic&&(voiceOpen=false)">
+      <section role="dialog" aria-modal="true" aria-labelledby="voice-title" class="modal">
+        <header class="section-heading"><h2 id="voice-title">一句话描述问题</h2><button class="icon-button" aria-label="关闭语音输入" title="关闭" :disabled="recording||voiceBusy||requestingMic" @click="voiceOpen=false"><X :size="20"/></button></header>
+        <p v-if="!canRecord" class="muted">录音暂未开放，可先输入问题描述。</p>
+        <template v-else>
+          <label class="checkbox-label"><input v-model="consent" type="checkbox" :disabled="recording||voiceBusy||requestingMic"/> 同意将本次录音发送至公司批准的内部转写服务</label>
+          <ContentBoundary v-if="!recording&&!voiceBusy&&!requestingMic" v-model="recordingSafe"/>
+          <button class="record-button" :class="{recording}" :disabled="(!recording&&(!consent||!recordingSafe))||voiceBusy||requestingMic" @click="record"><Square v-if="recording" :size="24"/><Mic v-else :size="24"/>{{recording?'停止录音':'开始录音'}}</button>
+          <p v-if="recording" role="status">已录音 {{recordedSeconds}} 秒 / 30 秒</p>
+          <p v-else-if="voiceTranscribing" role="status">正在转写…</p>
+          <p v-else-if="requestingMic" role="status">正在等待麦克风授权…</p>
+          <button v-if="recording||voiceTranscribing||requestingMic" class="secondary" type="button" @click="cancelRecording">取消本次录音</button>
+        </template>
+        <label>问题描述<textarea v-model="transcript" rows="5" maxlength="4000" :disabled="recording||voiceBusy||requestingMic"/></label>
+        <ContentBoundary v-model="voiceSafe"/>
+        <p v-if="voiceError" class="error-banner" role="alert">{{voiceError}}</p>
+        <button class="primary full" :disabled="!voiceSafe||!transcript.trim()||recording||voiceBusy||requestingMic" @click="interpret"><LoaderCircle v-if="voiceBusy" :size="17" class="spin"/> 整理为草稿</button>
+      </section>
+    </div>
   </section>
 </template>

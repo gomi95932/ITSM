@@ -1,15 +1,17 @@
-import { BadRequestException, Body, Controller, Get, Headers, HttpCode, NotFoundException, Param, Post, ServiceUnavailableException } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Headers, HttpCode, NotFoundException, Param, Post } from '@nestjs/common';
 import { AuthService } from './auth.service.js';
 import { Database } from './database.service.js';
 import { IntakePolicyService } from './intake-policy.service.js';
 import { ROLE_AUTHORIZATION_LOCK, ROLE_EFFECTIVE_SQL } from './role-policy.js';
 import { requestIntakePolicy } from './request-intake-policy.js';
+import { VoiceAsrService } from './voice-asr.service.js';
+import { voiceCandidate } from './voice-catalog.js';
 type H = Record<string,string | undefined>;
 const auth = (h: H) => ({ devUser: h['x-dev-user'], cookie: h.cookie, csrf: h['x-csrf-token'] });
 
 @Controller()
 export class WorkspaceController {
-  constructor(private readonly db: Database, private readonly identity: AuthService, private readonly intake: IntakePolicyService) {}
+  constructor(private readonly db: Database, private readonly identity: AuthService, private readonly intake: IntakePolicyService, private readonly voice: VoiceAsrService) {}
   @Get('intake-policy') async intakePolicy(@Headers() h: H) {
     await this.identity.identity(auth(h));
     return this.intake.config();
@@ -75,12 +77,19 @@ export class WorkspaceController {
   }
   @Get('voice/config') async voiceConfig(@Headers() h: H) {
     await this.identity.identity(auth(h));
-    return { recordingEnabled: false, maxSeconds:30, reason:'SECURITY_REVIEW_REQUIRED' };
+    return this.voice.config();
   }
   @Post('voice/transcribe') @HttpCode(200) async transcribe(@Headers() h: H,@Body() body: unknown) {
     const actor = await this.identity.identity(auth(h),true); await this.rateLimit(actor.id);
-    // Raw audio cannot be screened before external transcription. Keep this ingress closed.
-    throw new ServiceUnavailableException({ code:'ASR_UNAVAILABLE' });
+    // Configuration stays closed until the operator records approval for the internal audio boundary.
+    if(!this.voice.config().recordingEnabled)return this.voice.transcribe(body);
+    const b=body as Record<string,unknown>;
+    if(!b||typeof b!=='object'||Array.isArray(b))throw new BadRequestException({code:'INVALID_AUDIO'});
+    await this.intake.requireGeneral(actor.id,{contentClass:b.contentClass},'voice-transcribe');
+    const result=await this.voice.transcribe(body);
+    await this.intake.requireGeneral(actor.id,{contentClass:'GENERAL',text:result.text},'voice-transcribe');
+    await this.identity.identity(auth(h),true);
+    return result;
   }
   private async rateLimit(employee: string) {
     const result = await this.db.pool.query(`INSERT INTO intake_rate_limits(employee_id,bucket,count) VALUES ($1,date_trunc('minute',now()),1)
@@ -92,12 +101,8 @@ export class WorkspaceController {
     const b = body as Record<string,unknown>;
     if (!b || typeof b !== 'object' || Array.isArray(b) || Object.keys(b).some(k => !['text','contentClass'].includes(k)) || typeof b.text !== 'string' || !b.text.trim() || b.text.length > 4000) throw new BadRequestException({ code:'INVALID_TRANSCRIPT' });
     await this.intake.requireGeneral(actor.id, b, 'voice-interpret');
-    // Local extraction never executes tools or sends transcripts to an external model.
-    const text = b.text.trim(), system = /\b(ERP|WMS|MES|SRM)\b/i.exec(text)?.[1]?.toUpperCase();
-    const requested = /申请|开通|授权|权限|批准/.test(text);
-    const code = requested ? null : system ? 'INC-BIZ' : /网络|断网|VPN/i.test(text) ? 'INC-NET' : /邮箱|邮件/.test(text) ? 'INC-MAIL' : /电脑|显示器|打印机/.test(text) ? 'INC-PC' : null;
-    const candidate = { serviceCode:code,subject:text.slice(0,80),description:text,fields:system ? { system } : {},
-      missingFields:['impact','urgency',...(code ? [] : ['serviceCode'])],requiresReview:true,interpreter:'local-rules' };
+    const visible=await this.catalog(h);
+    const candidate=voiceCandidate(b.text.trim(),visible.items);
     const draft = await this.db.pool.query('INSERT INTO voice_drafts(employee_id,candidate) VALUES ($1,$2) RETURNING id,expires_at AS "expiresAt"',[actor.id,JSON.stringify(candidate)]);
     return { ...draft.rows[0],candidate };
   }
