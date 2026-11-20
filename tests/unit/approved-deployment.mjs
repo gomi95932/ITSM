@@ -27,6 +27,15 @@ test('deployment reuses exact main provenance and bounded approval expiry',() =>
     assert.throws(() => validateDeploymentApproval({...approval,...changes},requestId,now),/CURRENT_EXACT_ROOT_APPROVAL_REQUIRED/);
 });
 
+test('enterprise deployment requires a distinct approval and exact private configuration digest',()=>{
+  const enterprise={...approval,operation:'deploy-enterprise-uat',verifyDevelopment:false,verifyEnterpriseUat:true,configurationSha256:'f'.repeat(64)};
+  assert.equal(validateDeploymentApproval(enterprise,requestId,now),enterprise);
+  for(const changes of [{verifyDevelopment:true},{verifyEnterpriseUat:false},{verifyEnterpriseUat:'true'},
+    {configurationSha256:undefined},{configurationSha256:'F'.repeat(64)},{operation:'deploy-development'}])
+    assert.throws(()=>validateDeploymentApproval({...enterprise,...changes},requestId,now),/EXACT_DEVELOPMENT_DEPLOYMENT_APPROVAL_REQUIRED/);
+  assert.throws(()=>validateDeploymentApproval({...approval,verifyEnterpriseUat:true},requestId,now),/EXACT_DEVELOPMENT_DEPLOYMENT_APPROVAL_REQUIRED/);
+});
+
 test('child launch is fixed Node, no shell, sanitized environment and local Docker only',() => {
   const bundle=`/opt/itsm/releases/${sha}`;
   const invocation=releaseInvocation(bundle,['deploy',sha,'--verify-development']);

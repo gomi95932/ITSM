@@ -13,6 +13,8 @@ if (execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim() !== sha) t
 const paths=requiredReleaseFiles.filter(path => !path.startsWith('db/migrations/'));
 // Legacy bundles remain valid rollback targets; every new bundle includes its hashed acceptance tool.
 paths.push('scripts/verify-development.mjs');
+paths.push('scripts/verify-enterprise-uat.mjs');
+paths.push('docs/enterprise-uat-runbook.md');
 paths.push('scripts/verify-release-source.mjs');
 paths.push('scripts/stage-release.mjs');
 paths.push('scripts/extract-release.py');

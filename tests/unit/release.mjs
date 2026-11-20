@@ -100,6 +100,7 @@ test('bundle verifies exact SHA, file contents and migration fingerprint',async 
     }
     await writeFile(resolve(directory,'release.json'),JSON.stringify(manifest));
     await assert.rejects(validateRelease(directory,sha,{requireBusinessAcceptance:true}),/HASHED_BUSINESS_ACCEPTANCE_TOOL_REQUIRED/);
+    await assert.rejects(validateRelease(directory,sha,{requireEnterpriseReadiness:true}),/HASHED_ENTERPRISE_READINESS_TOOL_REQUIRED/);
     for (const required of requiredReleaseFiles) {
       const incomplete=files.filter(file => file.path !== required);
       await writeFile(resolve(directory,'release.json'),JSON.stringify({...manifest,files:incomplete,schemaFingerprint:schemaFingerprint(incomplete)}));
@@ -117,11 +118,12 @@ test('bundle verifies exact SHA, file contents and migration fingerprint',async 
   } finally { await rm(directory,{recursive:true,force:true}); }
 });
 
-test('business acceptance tool must be covered by the verified release manifest', async () => {
+for (const [tool,option] of [['verify-development.mjs','requireBusinessAcceptance'],['verify-enterprise-uat.mjs','requireEnterpriseReadiness']])
+test(`${tool} must be covered by the verified release manifest`, async () => {
   const directory=await mkdtemp(resolve(tmpdir(),'itsm-release-business-'));
   try {
     const files=[];
-    for (const path of [...requiredReleaseFiles,'scripts/verify-development.mjs']) {
+    for (const path of [...requiredReleaseFiles,`scripts/${tool}`]) {
       await mkdir(resolve(directory,path,'..'),{recursive:true}); await writeFile(resolve(directory,path),'fixture');
       files.push({path,sha256:createHash('sha256').update('fixture').digest('hex')});
     }
@@ -129,8 +131,8 @@ test('business acceptance tool must be covered by the verified release manifest'
       .map(name=>[name,`ghcr.io/gomi95932/itsm-${name}@sha256:${'b'.repeat(64)}`]));
     await writeFile(resolve(directory,'release.json'),JSON.stringify({sha,repository:'gomi95932/ITSM',
       ref:'refs/heads/main',files,schemaFingerprint:schemaFingerprint(files),images}));
-    assert.equal((await validateRelease(directory,sha,{requireBusinessAcceptance:true})).sha,sha);
-    await writeFile(resolve(directory,'scripts/verify-development.mjs'),'tampered');
-    await assert.rejects(validateRelease(directory,sha,{requireBusinessAcceptance:true}),/RELEASE_CHECKSUM_MISMATCH/);
+    assert.equal((await validateRelease(directory,sha,{[option]:true})).sha,sha);
+    await writeFile(resolve(directory,`scripts/${tool}`),'tampered');
+    await assert.rejects(validateRelease(directory,sha,{[option]:true}),/RELEASE_CHECKSUM_MISMATCH/);
   } finally { await rm(directory,{recursive:true,force:true}); }
 });

@@ -5,7 +5,7 @@ import { lstat, open } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { requireRootOwnedPath } from './promote-release.mjs';
-import { recoveryMethod, validateRecoveryProof, validateRelease, validateRuntimeContainer } from './release.mjs';
+import { recoveryMethod, validateEnterpriseReadinessEvidence, validateRecoveryProof, validateRelease, validateRuntimeContainer } from './release.mjs';
 
 const installedTools='/opt/itsm/tools/release';
 const installedPaths=Object.freeze({tools:installedTools,releases:'/opt/itsm/releases',
@@ -38,8 +38,21 @@ export function validateInspectionEvidence({sha,requestId,bundle,current,receipt
     throw new Error('DEPLOYMENT_EVIDENCE_MISMATCH');
   if (receipt.restoreCheck === recoveryMethod && manifest.recoveryVerification !== recoveryMethod)
     throw new Error('DEPLOYMENT_EVIDENCE_MISMATCH');
+  if(current.verificationLevel==='enterprise-uat-readiness') {
+    validateEnterpriseReadinessEvidence(current.enterpriseReadiness,receipt.configurationSha256);
+    if(receipt.operation!=='deploy-enterprise-uat'||receipt.userAcceptance!=='pending'||
+      current.businessAcceptance!=null||receipt.businessAcceptance!=null||
+      JSON.stringify(current.enterpriseReadiness)!==JSON.stringify(receipt.enterpriseReadiness)||
+      !Number.isFinite(Date.parse(receipt.startedAt))||!Number.isFinite(Date.parse(receipt.completedAt))||
+      Date.parse(current.enterpriseReadiness.completedAt)<Date.parse(receipt.startedAt)||
+      Date.parse(current.enterpriseReadiness.completedAt)>Date.parse(receipt.completedAt))
+      throw new Error('RECORDED_ENTERPRISE_READINESS_REQUIRED');
+    return;
+  }
   const acceptance=current.businessAcceptance;
   if (current.verificationLevel !== 'synthetic-business' || acceptance?.status !== 'passed'
+    || current.enterpriseReadiness!=null || receipt.enterpriseReadiness!=null
+    || (receipt.operation!=null&&receipt.operation!=='deploy-development')
     || typeof acceptance.runId !== 'string' || !acceptance.runId.length
     || !Array.isArray(acceptance.checks) || !acceptance.checks.length
     || JSON.stringify(acceptance) !== JSON.stringify(receipt.businessAcceptance)
@@ -119,7 +132,8 @@ async function assertIdle(paths) {
 export async function inspectDevelopment({sha,requestId},{paths=installedPaths,docker=runDocker,fetchImpl=fetch,now=Date.now}={}) {
   validateInspectionSelection(sha,requestId);
   if (process.getuid?.() !== 0 || process.geteuid?.() !== 0) throw new Error('ROOT_INSPECTION_REQUIRED');
-  for (const path of Object.values(paths)) await requireRootOwnedPath(path,{directory:true,privateFile:true});
+  for (const name of ['tools','releases','state','executions'])
+    await requireRootOwnedPath(paths[name],{directory:true,privateFile:true});
   for (const name of ['inspect-development.mjs','release.mjs','promote-release.mjs','stage-release.mjs','verify-release-source.mjs'])
     await requireRootOwnedPath(join(paths.tools,name));
   await assertIdle(paths);
@@ -129,9 +143,16 @@ export async function inspectDevelopment({sha,requestId},{paths=installedPaths,d
   const [current,receipt,promotion]=texts.map(text => JSON.parse(text));
   await requireRootOwnedPath(bundle,{directory:true,privateFile:true});
   await privateText(join(bundle,'release.json'));
-  const manifest=await validateRelease(bundle,sha,{requireBusinessAcceptance:true});
+  const enterprise=current.verificationLevel==='enterprise-uat-readiness';
+  const manifest=await validateRelease(bundle,sha,{requireBusinessAcceptance:!enterprise,requireEnterpriseReadiness:enterprise});
   for (const file of manifest.files) await requireRootOwnedPath(join(bundle,file.path),{privateFile:true});
   validateInspectionEvidence({sha,requestId,bundle,current,receipt,promotion,manifest});
+  const environmentPath=paths.env??'/opt/itsm/shared/development.env';
+  const verifyConfiguration=async()=>{
+    if(enterprise&&createHash('sha256').update(await privateText(environmentPath)).digest('hex')!==receipt.configurationSha256)
+      throw new Error('ENTERPRISE_CONFIGURATION_DRIFT');
+  };
+  await verifyConfiguration();
 
   const runtime={};
   for (const [service,imageName] of Object.entries(services)) {
@@ -182,12 +203,14 @@ export async function inspectDevelopment({sha,requestId},{paths=installedPaths,d
     if (!Array.isArray(inspected) || inspected.length !== 1) throw new Error('SINGLE_RUNNING_CONTAINER_REQUIRED');
     validateRuntimeContainer(inspected[0],item.imageId,service);
   }
+  await verifyConfiguration();
   return {status:'passed',verificationLevel:'read-only-runtime-and-recorded-evidence',repository:'gomi95932/ITSM',
     sha,requestId,checkedAt:new Date(now()).toISOString(),
     source:{runId:receipt.runId,runAttempt:receipt.runAttempt,artifactId:receipt.artifactId,
       artifactDigest:receipt.artifactDigest,verification:'recorded-at-approved-deployment'},
     runtime,migrations,readiness:{url:readyUrl,status:'ok'},
-    recordedBusinessAcceptance:{runId:current.businessAcceptance.runId,completedAt:current.businessAcceptance.completedAt},
+    recordedBusinessAcceptance:enterprise?null:{runId:current.businessAcceptance.runId,completedAt:current.businessAcceptance.completedAt},
+    ...(enterprise?{recordedEnterpriseReadiness:current.enterpriseReadiness,userAcceptance:'pending'}:{}),
     backup:{path:backup.path,sha256:backup.sha256,checksumVerifiedNow:true,
       restoreVerification:`recorded-${receipt.restoreCheck}`,recordedAt:receipt.completedAt,
       ...(receipt.restoreCheck === recoveryMethod ? {dataIntegrity:receipt.recoveryEvidence} : {})},

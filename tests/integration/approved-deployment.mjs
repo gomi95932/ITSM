@@ -7,6 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { test } from 'node:test';
 import { inventoryFingerprint, recoveryMethod, requiredReleaseFiles, schemaFingerprint } from '../../scripts/release.mjs';
+import { enterpriseEvidence } from '../fixtures/enterprise-uat.mjs';
 
 assert.equal(process.getuid(),0,'Only run in disposable Linux CI with sudo, never on the Mac or development server');
 const checkout=fileURLToPath(new URL('../../',import.meta.url));
@@ -16,7 +17,7 @@ const files=['execute-approved-deployment.mjs','promote-release.mjs','stage-rele
   'release.mjs','verify-release-source.mjs','extract-release.py'];
 const digest=value => createHash('sha256').update(value).digest('hex');
 
-async function fixture(t) {
+async function fixture(t,{enterprise=false}={}) {
   const root=await mkdtemp('/run/itsm-deployment-test-');
   t.after(() => rm(root,{recursive:true,force:true}));
   const paths={tools:join(root,'tools'),releases:join(root,'releases'),approvals:join(root,'approvals'),
@@ -34,10 +35,12 @@ async function fixture(t) {
     artifactId:456,artifactDigest:`sha256:${'b'.repeat(64)}`,artifactSize:100,approvedBy:'reviewer',
     approvalRef:'change/CHG-001',approvedAt:'2026-11-15T02:00:00Z',expiresAt:'2026-11-15T04:00:00Z',
     requestId,operation:'deploy-development',verifyDevelopment:true,expectedCurrentSha:baseline};
+  if(enterprise)Object.assign(approval,{operation:'deploy-enterprise-uat',verifyDevelopment:false,verifyEnterpriseUat:true,
+    configurationSha256:digest(await readFile(paths.env))});
   const approvalPath=join(paths.approvals,`${requestId}.json`);
   await writeFile(approvalPath,JSON.stringify(approval),{mode:0o600});
   const bundle=join(paths.releases,sha),manifestFiles=[];
-  for (const path of [...requiredReleaseFiles,'scripts/verify-development.mjs']) {
+  for (const path of [...requiredReleaseFiles,'scripts/verify-development.mjs','scripts/verify-enterprise-uat.mjs']) {
     const target=join(bundle,path),content=`fixture ${path}`;
     await mkdir(dirname(target),{recursive:true,mode:0o700});
     await writeFile(target,content,{mode:0o600});
@@ -68,9 +71,10 @@ async function fixture(t) {
       assert.equal(directory,bundle);
       calls.push(args);
       if (args[0] === 'deploy') {
-        assert.deepEqual(args,['deploy',sha,'--verify-development']);
-        await writeFile(statePath,JSON.stringify({sha,images,verificationLevel:'synthetic-business',
-          businessAcceptance:{status:'passed',checks:['fixture-only']}}),{mode:0o600});
+        assert.deepEqual(args,['deploy',sha,enterprise?'--verify-enterprise-uat':'--verify-development']);
+        await writeFile(statePath,JSON.stringify({sha,images,verificationLevel:enterprise?'enterprise-uat-readiness':'synthetic-business',
+          businessAcceptance:enterprise?null:{status:'passed',checks:['fixture-only']},
+          ...(enterprise?{enterpriseReadiness:enterpriseEvidence(approval.configurationSha256,new Date(clock).toISOString())}:{})}),{mode:0o600});
         return `Development deployment verified: ${sha}`;
       }
       if (args[0] === 'backup') {
@@ -113,6 +117,54 @@ test('runs only deploy, backup and isolated recovery after exact approval and pr
   await assert.rejects(f.helpers.executeApprovedDeployment(requestId,f.dependencies),/DEPLOYMENT_BASELINE_CHANGED/);
   assert.equal(await readFile(f.receiptPath,'utf8'),proof);
   assert.equal(f.calls.length,3);
+});
+
+test('enterprise deployment preserves backup recovery and records readiness without synthetic transactions or user acceptance',async t=>{
+  const f=await fixture(t,{enterprise:true});
+  const receipt=await f.helpers.executeApprovedDeployment(requestId,f.dependencies);
+  assert.equal(receipt.status,'succeeded');assert.equal(receipt.operation,'deploy-enterprise-uat');
+  assert.equal(receipt.configurationSha256,f.approval.configurationSha256);assert.equal(receipt.businessAcceptance,null);
+  assert.equal(receipt.userAcceptance,'pending');assert.equal(receipt.enterpriseReadiness.status,'passed');
+  assert.equal(receipt.restoreCheck,recoveryMethod);
+  assert.deepEqual(f.calls.map(args=>args[0]),['deploy','backup','restore-check']);
+});
+
+test('enterprise configuration changes before, during provenance, or after deployment cannot succeed',async t=>{
+  for(const phase of ['before','source','deploy','restore-check']){
+    const f=await fixture(t,{enterprise:true}),change=()=>writeFile(f.paths.env,'CHANGED=true\n',{mode:0o600});
+    if(phase==='before')await change();
+    else if(phase==='source'){
+      const verify=f.dependencies.verifySource;
+      f.dependencies.verifySource=async selection=>{const source=await verify(selection);await change();return source;};
+    }else{
+      const execute=f.dependencies.execute;
+      f.dependencies.execute=async(bundle,args)=>{const result=await execute(bundle,args);if(args[0]===phase)await change();return result;};
+    }
+    await assert.rejects(f.helpers.executeApprovedDeployment(requestId,f.dependencies),/APPROVED_ENTERPRISE_CONFIGURATION_MISMATCH/);
+    if(['before','source'].includes(phase))assert.equal(f.calls.length,0);
+    else assert.equal(JSON.parse(await readFile(f.receiptPath,'utf8')).status,'failed');
+  }
+});
+
+test('enterprise deployment rejects stale, incomplete, mismatched or synthetic acceptance evidence',async t=>{
+  for(const kind of ['stale','future','missing','configuration','synthetic']){
+    const f=await fixture(t,{enterprise:true}),execute=f.dependencies.execute;
+    f.dependencies.execute=async(bundle,args)=>{
+      const result=await execute(bundle,args);
+      if(args[0]==='deploy'){
+        const current=JSON.parse(await readFile(f.statePath,'utf8'));
+        if(kind==='stale')current.enterpriseReadiness.completedAt='2026-11-14T03:00:00Z';
+        if(kind==='future')current.enterpriseReadiness.completedAt='2026-11-16T03:00:00Z';
+        if(kind==='missing')delete current.enterpriseReadiness;
+        if(kind==='configuration')current.enterpriseReadiness.configurationSha256='0'.repeat(64);
+        if(kind==='synthetic')current.businessAcceptance={status:'passed'};
+        await writeFile(f.statePath,JSON.stringify(current),{mode:0o600});
+      }
+      return result;
+    };
+    await assert.rejects(f.helpers.executeApprovedDeployment(requestId,f.dependencies),/ENTERPRISE_READINESS_EVIDENCE_REQUIRED/);
+    assert.deepEqual(f.calls.map(args=>args[0]),['deploy']);
+  }
 });
 
 test('an existing consumed receipt is never overwritten on replay even when baseline still matches',async t => {
