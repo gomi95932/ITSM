@@ -22,6 +22,7 @@ export async function api<T>(path: string,options: { method?: string; body?: unk
   return data as T;
 }
 export const messages: Record<string,string> = {
+  DIRECTORY_ADMIN_REQUIRED:'仅平台管理员可查看人员同步状态。',
   INVALID_REQUEST_VALIDITY:'请填写服务允许范围内的申请有效天数；报障无需填写此项。',
   APPROVAL_IDENTITY_UNAVAILABLE:'申请人或审批人尚未关联有效的企业钉钉账号，请联系服务台核对。',
   APPROVAL_MANAGER_MAPPING_UNAVAILABLE:'直线经理信息尚未核验或即将过期，请联系服务台更新后再提交。',
