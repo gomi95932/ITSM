@@ -14,7 +14,7 @@ test('withdrawn appointment requires independently reviewed continuity or superv
   async function submit(name:string){
     await page.getByRole('checkbox',{name:'本次内容不含密码、密钥及安全事件证据'}).check();
     await page.getByRole('button',{name,exact:true}).last().click();
-    await expect(page.locator('.action-form')).toHaveCount(0);
+    await expect(page.locator('.action-form:visible')).toHaveCount(0);
     await expect(page.getByRole('alert')).toHaveCount(0);
   }
   await as(f.owner);

@@ -34,7 +34,7 @@ onMounted(load);
     <p class="muted">{{approved?'已批准':'试行，待业务与值班能力确认'}} · P1 连续计时，P2–P4 按服务日历计时</p>
     <p v-if="error" role="alert" class="error-banner">{{error}}</p>
     <form @submit.prevent="propose" class="action-form">
-      <div class="table-wrap"><table><thead><tr><th>影响范围</th><th v-for="u in urgencies" :key="u.code">{{u.name}}</th></tr></thead><tbody><tr v-for="i in impacts" :key="i.code"><th>{{i.name}}</th><td v-for="u in urgencies" :key="u.code"><select v-model="config.matrix[i.code][u.code]" :aria-label="`${i.name} ${u.name}`"><option v-for="p in PRIORITIES" :key="p" :value="p">{{p}}</option></select></td></tr></tbody></table></div>
+      <div class="table-wrap"><table class="priority-matrix"><thead><tr><th>影响范围</th><th v-for="u in urgencies" :key="u.code">{{u.name}}</th></tr></thead><tbody><tr v-for="i in impacts" :key="i.code"><th>{{i.name}}</th><td v-for="u in urgencies" :key="u.code"><select v-model="config.matrix[i.code][u.code]" :aria-label="`${i.name} ${u.name}`"><option v-for="p in PRIORITIES" :key="p" :value="p">{{p}}</option></select></td></tr></tbody></table></div>
       <div class="table-wrap"><table><thead><tr><th>优先级</th><th>首次响应（分钟）</th><th>解决 / 交付（分钟）</th></tr></thead><tbody><tr v-for="p in PRIORITIES" :key="p"><th>{{p}} · {{PRIORITY_LABELS[p]}}</th><td><input v-model.number="config.targets[p].response" type="number" min="1" max="43200" required :aria-label="`${p} 响应分钟`"/></td><td><input v-model.number="config.targets[p].resolution" type="number" min="1" max="43200" required :aria-label="`${p} 解决分钟`"/></td></tr></tbody></table></div>
       <label>P1 主管确认提醒（分钟）<input v-model.number="config.reviewMinutes" type="number" min="1" max="60" required/></label>
       <fieldset><legend>关键服务（中断且无替代方式时进入 P1 候选）</legend><label v-for="s in services" :key="s.code" class="checkbox-label"><input v-model="config.criticalServices" type="checkbox" :value="s.code"/>{{s.name}}</label></fieldset>
@@ -48,3 +48,11 @@ onMounted(load);
     </section>
   </section>
 </template>
+<style scoped>
+@media(max-width:760px){
+  .priority-matrix{table-layout:fixed;width:100%}
+  .priority-matrix th,.priority-matrix td{padding:10px 4px;white-space:normal;overflow-wrap:anywhere}
+  .priority-matrix th:first-child{width:30%}
+  .priority-matrix select{min-width:0;padding:8px 4px;font-size:13px}
+}
+</style>

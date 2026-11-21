@@ -28,6 +28,7 @@ test('dispatcher adjusts priority with evidence; administrator sees configuratio
   await page.getByRole('button',{name:'分级与时限',exact:true}).click();
   await expect(page.getByRole('region',{name:'分级与时限配置'})).toBeVisible();
   await expect(page.getByRole('spinbutton',{name:'P1 响应分钟'})).toHaveValue('15');
+  expect(await page.locator('.priority-matrix select').evaluateAll(nodes=>nodes.every(node=>node.getBoundingClientRect().width>=60))).toBe(true);
   await page.screenshot({path:'test-results/priority-config-mobile.png',fullPage:true});
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
   await page.setViewportSize({width:1440,height:1000});
