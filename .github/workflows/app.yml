@@ -332,10 +332,11 @@ jobs:
           node tests/integration/tickets.mjs
           node "$release_root/scripts/verify-development.mjs" --base-url http://127.0.0.1:8088 --allow-synthetic-writes
           node "$release_root/scripts/verify-development.mjs" --base-url http://127.0.0.1:8088 --allow-synthetic-writes
-          backup_output=$(release backup)
+          # Recovery must use the recorded release even when no local default image exists.
+          backup_output=$(ITSM_API_IMAGE=local/itsm-recovery-unapproved:missing release backup)
           backup_path=${backup_output#Backup verified: }
           [[ "$backup_path" == "$state/backups/"*.dump && -f "$backup_path" ]]
-          release restore-check --backup "$backup_path"
+          ITSM_API_IMAGE=local/itsm-recovery-unapproved:missing release restore-check --backup "$backup_path"
       - uses: actions/upload-artifact@v4
         with:
           name: itsm-release-${{ github.sha }}
