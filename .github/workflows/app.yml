@@ -57,6 +57,8 @@ jobs:
         run: |
           echo "postgres=$(docker image inspect postgres:16-alpine --format '{{index .RepoDigests 0}}')" >> "$GITHUB_OUTPUT"
           echo "redis=$(docker image inspect redis:7.4-alpine --format '{{index .RepoDigests 0}}')" >> "$GITHUB_OUTPUT"
+      - name: Verify proxy connection reuse and API address replacement
+        run: node tests/integration/proxy-keepalive.mjs
       - name: Verify running container images and deployment isolation
         run: node tests/integration/runtime-images.mjs
       - name: Check web and API routes
