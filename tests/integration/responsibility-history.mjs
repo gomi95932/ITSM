@@ -142,9 +142,9 @@ const baseline = await sql(`BEGIN; CREATE SCHEMA ${schema}; SET LOCAL search_pat
   CREATE TABLE tickets (LIKE public.tickets INCLUDING ALL);
   INSERT INTO tickets SELECT * FROM public.tickets WHERE id=${q(source.ticketId)};
   INSERT INTO tickets(id,number,requester_id,submitted_by_id,owner_group_id,service_code,service_type,
-    form_version,subject,description,fields,impact,urgency,priority,status,created_at)
+    form_version,subject,description,fields,impact,urgency,priority,initial_priority,status,created_at)
     VALUES(${q(legacyGenId)},${q(`GEN-${legacyGenId}`)},'employee-1','employee-1',${q(source.groupId)},
-      'GEN-OTHER','GEN',1,'Synthetic legacy GEN','Disposable migration fixture','{}','INDIVIDUAL','MEDIUM','P3',
+      'GEN-OTHER','GEN',1,'Synthetic legacy GEN','Disposable migration fixture','{}','INDIVIDUAL','MEDIUM','P3','P3',
       'QUEUED','2025-06-10 09:00:00+08');
   ${migration}
   DO $$ BEGIN
