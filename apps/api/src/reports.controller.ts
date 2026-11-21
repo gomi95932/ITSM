@@ -1,5 +1,5 @@
 import { BadRequestException, Controller, Get, Headers, NotFoundException, Query, ServiceUnavailableException } from '@nestjs/common';
-import { serviceMinutes, type ServiceCalendar } from '@itsm/contracts';
+import { prioritySlaMeasurements, type ServiceCalendar,type PriorityObligation } from '@itsm/contracts';
 import { AuthService } from './auth.service.js';
 import { Database } from './database.service.js';
 import { ownerMatches, reportMetrics, reportOwnerFilter, reportServiceFilter, responsibilitySummary,
@@ -21,6 +21,7 @@ type Cycle = {
   ticket_id: string; cycle: number; priority: string; calendar_snapshot: ServiceCalendar & { approved?: boolean };
   started_at: Date; responded_at: Date | null; completed_at: Date | null; paused_at: Date | null;
   paused_minutes: number; response_target: number; resolution_target: number; clock: Date;
+  priority_obligations:PriorityObligation[];pause_history:{from:string;to:string}[];
 };
 
 @Controller('reports')
@@ -147,7 +148,10 @@ export class ReportsController {
       const membership = await client.query(`SELECT now() AS clock FROM group_memberships m JOIN employees e ON e.id=m.employee_id
         JOIN support_groups g ON g.id=m.group_id WHERE e.id=$1 AND e.active AND g.enabled AND m.group_id=$2`, [actor.id, groupId]);
       if (!membership.rowCount) throw new NotFoundException();
-      const tickets = await client.query(`SELECT t.id,t.number,t.status,t.priority,t.created_at,f.rating,
+      const tickets = await client.query(`SELECT t.id,t.number,t.status,t.priority,t.initial_priority,t.created_at,f.rating,
+        (SELECT count(*)::integer FROM ticket_events e WHERE e.ticket_id=t.id
+          AND e.action IN ('PRIORITY_CHANGED','PRIORITY_REVIEWED')
+          AND e.detail->>'oldPriority' <> e.detail->>'priority') AS priority_change_count,
         t.service_code,c.name AS service_name,t.waiting_reason_code,t.waiting_since,t.waiting_due_at,
         t.assignee_id,a.display_name AS assignee_name,a.active AS assignee_active,
         t.pending_assignee_id,p.display_name AS pending_assignee_name,t.assignment_kind,
@@ -169,15 +173,11 @@ export class ReportsController {
       const items = tickets.rows.map(ticket => {
         const history = byTicket.get(ticket.id) ?? [];
         const measured = history.map(cycle => {
-          const endAt = cycle.completed_at ?? cycle.clock;
-          const always = cycle.priority === 'P1';
-          const responseMinutes = serviceMinutes(cycle.started_at, cycle.responded_at ?? endAt, cycle.calendar_snapshot, always);
-          const resolutionMinutes = Math.max(0, serviceMinutes(cycle.started_at, endAt, cycle.calendar_snapshot, always)
-            - cycle.paused_minutes - (cycle.paused_at && !cycle.completed_at
-              ? serviceMinutes(cycle.paused_at, endAt, cycle.calendar_snapshot, always) : 0));
-          return { cycle: cycle.cycle, responseMinutes, resolutionMinutes, responded: !!cycle.responded_at,
+          const obligations=prioritySlaMeasurements(cycle,cycle.clock);
+          const {responseMinutes,resolutionMinutes}=obligations[0];
+          return { cycle: cycle.cycle, obligations, responseMinutes, resolutionMinutes, responded: !!cycle.responded_at,
             completed: !!cycle.completed_at, responseTarget: cycle.response_target, resolutionTarget: cycle.resolution_target,
-            responseOverdue: responseMinutes > cycle.response_target, resolutionOverdue: resolutionMinutes > cycle.resolution_target,
+            responseOverdue: obligations.some(o=>o.responseMinutes>o.responseTarget), resolutionOverdue: obligations.some(o=>o.resolutionMinutes>o.resolutionTarget),
             calendarApproved: cycle.calendar_snapshot.approved === true };
         });
         const first = measured[0], latest = measured.at(-1);
@@ -185,7 +185,8 @@ export class ReportsController {
           waiting:ticketWaiting(ticket,membership.rows[0].clock),
           serviceCode: ticket.service_code as string, serviceName: ticket.service_name as string,
           acceptedHandoverCount: ticket.accepted_handover_count as number,
-          priority: ticket.priority, reopenCount: ticket.reopen_count as number, rating: ticket.rating as number | null,
+          priority: ticket.priority,initialPriority:ticket.initial_priority,priorityChangeCount:ticket.priority_change_count,
+          reopenCount: ticket.reopen_count as number, rating: ticket.rating as number | null,
           assigneeId: ticket.assignee_id as string | null, assigneeName: ticket.assignee_name as string | null,
           assigneeActive: ticket.assignee_active as boolean | null,
           pendingAssigneeId: ticket.pending_assignee_id as string | null,

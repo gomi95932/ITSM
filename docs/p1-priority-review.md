@@ -2,6 +2,8 @@
 
 ## Scope and Status
 
+2026-11-21 supplement: see [priority governance](p1-priority-governance.md) for the configurable P1-P4 matrix, evidence-based AI drafts, authorized adjustments, independent configuration approval, generation-specific reminders and preserved/added SLA obligations. This supersedes the fixed reminder threshold below. Its validation is tracked separately from older CI evidence.
+
 2026-11-10. Code candidate only; not business acceptance, not deployment evidence. Follow V1.1 and `docs/implementation-baseline.md`. Monitoring and configuration-item links remain phase 2; full SEC remains phase 3. Phase-1 ordinary-entry protection remains mandatory.
 
 ## Implemented Contract

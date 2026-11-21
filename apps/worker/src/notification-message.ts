@@ -28,6 +28,8 @@ export function notificationLink(publicUrl: string, ticket: {
       : ticket.action === 'REQUEST_APPROVED' ? `工单 ${ticket.number} 审批已通过，等待工程师接单交付。`
       : ticket.action === 'REQUEST_REJECTED' ? `工单 ${ticket.number} 审批未通过，请查看申请记录。`
       : ticket.action === 'RESUME_VENDOR' ? `工单 ${ticket.number} 已恢复处理，请查看最新进度。`
+      : ticket.action === 'PRIORITY_CHANGED' ? `工单 ${ticket.number} 优先级已调整，请查看分级依据及处理时限。`
+      : ticket.action === 'PRIORITY_SUGGESTED' ? `工单 ${ticket.number} 有新的调级建议，请服务台复核。`
       : `工单 ${ticket.number} 状态已更新：${ticket.to_status}`,
     messageUrl: base.toString(),
     picUrl: '',

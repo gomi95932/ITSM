@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed,nextTick,onBeforeUnmount,onMounted,ref,watch } from 'vue';
 import { ArrowLeft,ArrowRight,Check,LoaderCircle,Mic,Square,X } from 'lucide-vue-next';
-import type { CatalogItem,CreateTicketInput,DelegationView,Impact,TicketReceipt,Urgency } from '@itsm/contracts';
+import type { CatalogItem,CreateTicketInput,DelegationView,Impact,TicketReceipt,Urgency,PriorityEvidence } from '@itsm/contracts';
 import { api,errorText } from '../api';
 import { createRequestKey } from '../request-key';
 import ContentBoundary from './ContentBoundary.vue';
@@ -16,6 +16,12 @@ const isRequest=computed(()=>service.value?.type==='REQ');
 const requestKey=ref(createRequestKey());
 const contentSafe=ref(false),voiceSafe=ref(false);
 const draftNotice=ref('');
+const priorityEvidence=ref<PriorityEvidence>(),evidenceText=ref('');
+function adoptPriorityEvidence(){
+  if(!priorityEvidence.value||description.value!==evidenceText.value)return;
+  if(priorityEvidence.value.impact)impact.value=priorityEvidence.value.impact;
+  if(priorityEvidence.value.urgency)urgency.value=priorityEvidence.value.urgency;
+}
 const delegationId=ref(''),delegations=ref<DelegationView[]>([]);
 onMounted(async()=>{try{const list=await api<{items:DelegationView[]}>('/delegations');delegations.value=list.items.filter(item=>item.active&&item.delegateId!==item.requesterId);const me=await api<{id:string}>('/auth/me');delegations.value=delegations.value.filter(item=>item.delegateId===me.id);}catch(e){error.value=errorText(e);}});
 watch([serviceCode,subject,description,impact,urgency,fields,delegationId,requestedValidityDays],()=>{ requestKey.value=createRequestKey(); review.value=false; contentSafe.value=false; },{ deep:true });
@@ -76,12 +82,13 @@ async function interpret() {
   if(!voiceSafe.value){voiceError.value='请先确认内容安全声明。';return;}
   voiceBusy.value=true;voiceError.value='';
   try {
-    const result=await api<{id:string;candidate:{serviceCode:string|null;subject:string;description:string;fields:Record<string,string>;fallbackReason?:string}}>('/voice/interpret',{method:'POST',body:{text:transcript.value,contentClass:'GENERAL'}});
+    const result=await api<{id:string;candidate:{serviceCode:string|null;subject:string;description:string;fields:Record<string,string>;fallbackReason?:string;priorityEvidence?:PriorityEvidence}}>('/voice/interpret',{method:'POST',body:{text:transcript.value,contentClass:'GENERAL'}});
     const candidate=result.candidate;
     if(candidate.serviceCode && props.catalog.some(item=>item.code===candidate.serviceCode && item.available))serviceCode.value=candidate.serviceCode;
     else serviceCode.value='';
     await nextTick();
     subject.value=candidate.subject;description.value=candidate.description;fields.value=candidate.fields;draftId.value=result.id;
+    priorityEvidence.value=candidate.priorityEvidence;evidenceText.value=candidate.description;
     draftNotice.value=candidate.fallbackReason==='INTAKE_LOW_CONFIDENCE'?'暂时无法确定服务，请选择服务并核对信息。':candidate.fallbackReason?'已保留问题描述，请核对服务和必填信息。':'';
     voiceOpen.value=false;
   }catch(e){voiceError.value=errorText(e);}finally{voiceBusy.value=false;}
@@ -118,6 +125,7 @@ async function submit() {
       <label>{{isRequest?'申请标题':'问题标题'}} <span class="required">*</span><input v-model="subject" required maxlength="200" :placeholder="isRequest?'例如：申请 WMS 出库查询权限':'例如：WMS 登录后无法打开出库页面'"/></label>
       <label>{{isRequest?'申请说明':'详细情况'}} <span class="required">*</span><textarea v-model="description" required maxlength="10000" rows="5" :placeholder="isRequest?'说明申请用途及所需范围':'遇到了什么问题？从什么时候开始？'"/></label>
       <div class="form-grid"><label>影响范围 <span class="required">*</span><select v-model="impact" required aria-label="影响范围"><option value="" disabled>请选择</option><option value="INDIVIDUAL">仅我一人</option><option value="DEPARTMENT">部门 / 多人</option><option value="COMPANY">全公司 / 核心生产</option></select></label><label>紧急程度 <span class="required">*</span><select v-model="urgency" required aria-label="紧急程度"><option value="" disabled>请选择</option><option value="LOW">可正常工作，部分受影响</option><option value="MEDIUM">工作明显受影响</option><option value="HIGH">工作中断，暂无替代方式</option></select></label></div>
+      <div v-if="priorityEvidence&&description===evidenceText" class="detail-section"><strong>分级待核对</strong><p v-if="priorityEvidence.impactQuote">{{priorityEvidence.impact==='COMPANY'?'全公司 / 核心生产':priorityEvidence.impact==='DEPARTMENT'?'部门 / 多人':'单人'}} · 依据：{{priorityEvidence.impactQuote}}</p><p v-if="priorityEvidence.urgencyQuote">{{priorityEvidence.urgency==='HIGH'?'工作中断':priorityEvidence.urgency==='MEDIUM'?'明显影响':'可计划'}} · 依据：{{priorityEvidence.urgencyQuote}}</p><p v-if="!priorityEvidence.impact||!priorityEvidence.urgency" class="muted">影响范围或中断情况仍需补充。</p><button type="button" class="secondary" :disabled="!priorityEvidence.impact&&!priorityEvidence.urgency" @click="adoptPriorityEvidence"><Check :size="16"/>确认采用建议</button></div>
       <label v-for="field in service?.fields ?? []" :key="field.key">{{field.label}} <span v-if="field.required" class="required">*</span><select v-if="field.options" v-model="fields[field.key]" :required="field.required" :aria-label="field.label"><option value="">请选择</option><option v-for="option in field.options" :key="option">{{option}}</option></select><input v-else v-model="fields[field.key]" :required="field.required" :aria-label="field.label" maxlength="500"/></label>
       <label v-if="isRequest">申请有效天数 <span class="required">*</span><input v-model.number="requestedValidityDays" type="number" min="1" :max="service?.maxValidityDays??1" step="1" required aria-label="申请有效天数"/></label>
       <p v-if="error" role="alert" class="error-banner">{{error}}</p>

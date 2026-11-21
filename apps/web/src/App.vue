@@ -11,6 +11,7 @@ import ReportsPanel from './components/ReportsPanel.vue';
 import RolesPanel from './components/RolesPanel.vue';
 import RoutingAlertsPanel from './components/RoutingAlertsPanel.vue';
 import RoutingConfigPanel from './components/RoutingConfigPanel.vue';
+import PriorityConfigPanel from './components/PriorityConfigPanel.vue';
 import ServiceStructurePanel from './components/ServiceStructurePanel.vue';
 import SupportStructurePanel from './components/SupportStructurePanel.vue';
 import WorkQueueTabs from './components/WorkQueueTabs.vue';
@@ -19,7 +20,7 @@ import DirectoryPanel from './components/DirectoryPanel.vue';
 import { api,ApiError,devUser,errorText,setUser,useDevelopment } from './api';
 import { formatDate,statuses } from './labels';
 
-type View='mine'|'catalog'|'queue'|'notifications'|'delegations'|'knowledge'|'reports'|'roles'|'routing'|'routing-config'|'service-structure'|'support-structure'|'fulfillments'|'directory';
+type View='mine'|'catalog'|'queue'|'notifications'|'delegations'|'knowledge'|'reports'|'roles'|'routing'|'routing-config'|'priority-config'|'service-structure'|'support-structure'|'fulfillments'|'directory';
 type Delivery={id:string;state:string;attempts:number;lastError:string|null;updatedAt:string;number:string;canRetry:boolean};
 const user=ref<SessionUser>(),booting=ref(true),error=ref(''),loading=ref(false),development=ref(false),identity=ref(devUser());
 const view=ref<View>('mine'),catalog=ref<CatalogItem[]>([]),tickets=ref<TicketView[]>([]),counts=ref<Record<string,number>>({}),total=ref(0),page=ref(1),filter=ref('');
@@ -34,7 +35,7 @@ const unavailableCatalog=computed(()=>catalog.value.filter(item=>!item.available
 const openCount=computed(()=>Object.entries(counts.value).filter(([status])=>!['CLOSED','CANCELLED','REJECTED'].includes(status)).reduce((sum,[,count])=>sum+count,0));
 const noticeLabels:Record<string,string>={PENDING:'待发送',DISPATCHING:'正在提交',SENDING:'平台受理，待确认',DELIVERED:'平台确认发送成功',SIMULATED:'开发模拟',DEAD:'失败待处理',SKIPPED:'已跳过',REVIEW_REQUIRED:'发送结果待核查'};
 const needsNoticeAttention=(item:Delivery)=>['DEAD','REVIEW_REQUIRED'].includes(item.state);
-const title=computed(()=>({mine:'我的工单',catalog:'服务目录',queue:'IT 工作台',notifications:'消息通知',delegations:'代报授权',knowledge:'知识库',reports:'服务报表',roles:'角色授权',routing:'路由告警','routing-config':'派单配置','service-structure':'服务组织','support-structure':'支持组',fulfillments:'交付与回收',directory:'人员同步'})[view.value]);
+const title=computed(()=>({mine:'我的工单',catalog:'服务目录',queue:'IT 工作台',notifications:'消息通知',delegations:'代报授权',knowledge:'知识库',reports:'服务报表',roles:'角色授权',routing:'路由告警','routing-config':'派单配置','priority-config':'分级与时限','service-structure':'服务组织','support-structure':'支持组',fulfillments:'交付与回收',directory:'人员同步'})[view.value]);
 let refreshTimer:ReturnType<typeof setInterval>|undefined;
 let generation=0;
 let bootGeneration=0;
@@ -73,7 +74,7 @@ async function load(quiet=false){
     if(view.value==='notifications'){
       const result=await api<{items:Delivery[];mode:string}>('/notifications');if(current!==generation)return;
       notices.value=result.items;notificationMode.value=result.mode;
-    }else if(!['catalog','delegations','knowledge','reports','roles','routing','routing-config','service-structure','support-structure','fulfillments','directory'].includes(view.value)){
+    }else if(!['catalog','delegations','knowledge','reports','roles','routing','routing-config','priority-config','service-structure','support-structure','fulfillments','directory'].includes(view.value)){
       const result=await api<TicketListResponse>(`/tickets?mine=${view.value!=='queue'}&page=${page.value}&size=20${view.value==='queue'?`&queue=${workQueue.value}`:''}${filter.value?`&status=${filter.value}`:''}`);
       if(current!==generation)return;tickets.value=result.items;total.value=result.total;counts.value=result.counts;
       workQueues.value=result.workQueues??emptyWorkQueues();
@@ -105,6 +106,7 @@ onBeforeUnmount(()=>{window.removeEventListener('hashchange',syncHash);if(refres
     <aside class="sidebar"><a class="brand" href="#" @click.prevent="navigate('mine')"><span class="brand-icon"><Headphones :size="23"/></span><span>IT 服务台<small>祥承科技</small></span></a><p class="nav-caption">员工服务</p><nav aria-label="主要导航"><button :class="{active:view==='mine'}" @click="navigate('mine')"><ClipboardList :size="19"/>我的工单</button><button :class="{active:view==='catalog'}" @click="navigate('catalog')"><LayoutGrid :size="19"/>服务目录</button><button :class="{active:view==='knowledge'}" @click="navigate('knowledge')"><BookOpen :size="19"/>知识库</button><button :class="{active:view==='delegations'}" @click="navigate('delegations')"><UserRound :size="19"/>代报授权</button><template v-if="user.groups.length"><p class="nav-caption">支持中心</p><button :class="{active:view==='queue'}" @click="navigate('queue')"><Activity :size="19"/>IT 工作台</button><button :class="{active:view==='reports'}" @click="navigate('reports')"><BarChart3 :size="19"/>服务报表</button><button :class="{active:view==='notifications'}" @click="navigate('notifications')"><Bell :size="19"/>消息通知</button></template><template v-if="user.canManageRoles"><button :class="{active:view==='routing'}" @click="navigate('routing')"><TriangleAlert :size="19"/>路由告警</button><button :class="{active:view==='roles'}" @click="navigate('roles')"><ShieldCheck :size="19"/>角色授权</button></template>
       <button v-if="user.canManageRoles" :class="{active:view==='support-structure'}" @click="navigate('support-structure')"><Users :size="19"/>支持组</button>
       <button v-if="user.canManageRouting" :class="{active:view==='directory'}" @click="navigate('directory')"><Users :size="19"/>人员同步</button>
+      <button v-if="user.canManageRouting" :class="{active:view==='priority-config'}" @click="navigate('priority-config')"><ShieldCheck :size="19"/>分级与时限</button>
       <button v-if="user.groups.length" :class="{active:view==='fulfillments'}" @click="navigate('fulfillments')"><ClipboardList :size="19"/>交付与回收</button>
       <template v-if="user.canManageRouting"><button :class="{active:view==='service-structure'}" @click="navigate('service-structure')"><LayoutGrid :size="19"/>服务组织</button><button :class="{active:view==='routing-config'}" @click="navigate('routing-config')"><Network :size="19"/>派单配置</button></template>
       </nav><div class="sidebar-bottom"><span class="avatar"><UserRound :size="18"/></span><div><strong>{{user.name}}</strong><small>{{user.groups.length?'IT 支持人员':'员工'}}</small></div><button v-if="!development" class="icon-button" title="退出登录" aria-label="退出登录" @click="logout"><LogOut :size="17"/></button></div></aside>
@@ -113,7 +115,7 @@ onBeforeUnmount(()=>{window.removeEventListener('hashchange',syncHash);if(refres
         <EmployeeForm v-if="creating" :catalog="catalog" :initial-code="initialCode" @close="back" @created="openTicket"/>
         <TicketDetail v-else-if="selected" :key="`${user.id}:${selected}`" :id="selected" :user="user" @back="back" @changed="load(true)"/>
         <template v-else>
-          <div class="page-title"><div><p class="eyebrow">{{['queue','reports','routing','routing-config','service-structure','support-structure','fulfillments','directory'].includes(view)?'SUPPORT OPERATIONS':'IT SERVICE DESK'}}</p><h1>{{title}}</h1></div><button v-if="view==='mine'||view==='catalog'" class="primary" @click="create()"><Plus :size="18"/>提交报障</button><button v-else-if="!['delegations','knowledge','reports','roles','routing','routing-config','service-structure','support-structure','fulfillments','directory'].includes(view)" class="icon-button" title="刷新" aria-label="刷新列表" :disabled="loading" @click="load()"><RefreshCw :size="19" :class="{spin:loading}"/></button></div>
+          <div class="page-title"><div><p class="eyebrow">{{['queue','reports','routing','routing-config','priority-config','service-structure','support-structure','fulfillments','directory'].includes(view)?'SUPPORT OPERATIONS':'IT SERVICE DESK'}}</p><h1>{{title}}</h1></div><button v-if="view==='mine'||view==='catalog'" class="primary" @click="create()"><Plus :size="18"/>提交报障</button><button v-else-if="!['delegations','knowledge','reports','roles','routing','routing-config','priority-config','service-structure','support-structure','fulfillments','directory'].includes(view)" class="icon-button" title="刷新" aria-label="刷新列表" :disabled="loading" @click="load()"><RefreshCw :size="19" :class="{spin:loading}"/></button></div>
           <template v-if="view==='catalog'">
             <section class="catalog-section" aria-labelledby="support-catalog-title">
               <div class="section-heading"><h2 id="support-catalog-title">故障与支持</h2><span class="muted">{{supportCatalog.length}} 项服务</span></div>
@@ -131,6 +133,7 @@ onBeforeUnmount(()=>{window.removeEventListener('hashchange',syncHash);if(refres
           <ReportsPanel v-else-if="view==='reports'" :key="user.id" :user="user" @open="openTicket"/>
           <RolesPanel v-else-if="view==='roles'" :key="user.id" :user="user"/>
           <DirectoryPanel v-else-if="view==='directory'&&user.canManageRouting" :key="user.id"/>
+          <PriorityConfigPanel v-else-if="view==='priority-config'&&user.canManageRouting" :key="user.id" :user="user"/>
           <RoutingAlertsPanel v-else-if="view==='routing'" :key="user.id"/>
           <RoutingConfigPanel v-else-if="view==='routing-config'" :key="user.id" :user="user"/>
           <ServiceStructurePanel v-else-if="view==='service-structure'&&user.canManageRouting" :key="user.id" :user="user"/>

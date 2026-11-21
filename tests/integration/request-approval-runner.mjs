@@ -76,7 +76,14 @@ const provider={
 };
 async function processApproval(id,adapter=provider) {
   await db.query("UPDATE request_approvals SET next_at=now()-interval '1 day' WHERE id=$1",[id]);
-  assert.equal(await processNextRequestApproval(db,adapter),true);
+  const dispatched=await processNextRequestApproval(db,adapter);
+  if(!dispatched){
+    const target=await row(id);
+    const locks=(await db.query(`SELECT application_name,wait_event_type,wait_event,state
+      FROM pg_stat_activity WHERE datname=current_database() AND pid<>pg_backend_pid()`)).rows;
+    assert.fail(`OA_TARGET_NOT_DISPATCHED:${JSON.stringify({id,state:target?.state,nextAt:target?.next_at,
+      leaseUntil:target?.lease_until,lastError:target?.last_error,locks})}`);
+  }
   const processed=await row(id);
   assert.ok(processed.next_at > new Date(Date.now()-60_000) || ['BLOCKED','EXPIRED'].includes(processed.state),
     'the targeted approval must have been processed');
@@ -105,6 +112,17 @@ try {
   await db.query('INSERT INTO identity_links(corp_id,ding_user_id,employee_id) VALUES ($1,$2,$3)',[corp,'CI-DING-owner',employee('owner')]);
   await db.query('UPDATE request_manager_mappings SET manager_id=$2 WHERE employee_id=$1',[employee('requester'),employee('requester')]).then(
     ()=>assert.fail('self manager accepted'),()=>{});
+
+  const locked=await fresh(),holder=await db.connect();
+  try {
+    await holder.query('BEGIN');
+    await holder.query('SELECT id FROM request_approvals WHERE id=$1 FOR UPDATE',[locked.id]);
+    assert.equal(await processNextRequestApproval(db,provider),false,'a maintenance row lock makes SKIP LOCKED temporarily return no work');
+    assert.equal((await row(locked.id)).state,'QUEUED','a skipped row must remain eligible');
+  } finally {await holder.query('ROLLBACK');holder.release();}
+  assert.equal((await processApproval(locked.id)).state,'PENDING','the same intent dispatches after the maintenance lock is released');
+  await retire(locked.id);
+  console.log('OA queue lock regression verified: locked intent skipped without mutation and processed after release');
 
   const beforeTickets=Number((await db.query('SELECT count(*) FROM tickets')).rows[0].count);
   const beforeApprovals=Number((await db.query('SELECT count(*) FROM request_approvals')).rows[0].count);

@@ -57,6 +57,8 @@ jobs:
         run: |
           echo "postgres=$(docker image inspect postgres:16-alpine --format '{{index .RepoDigests 0}}')" >> "$GITHUB_OUTPUT"
           echo "redis=$(docker image inspect redis:7.4-alpine --format '{{index .RepoDigests 0}}')" >> "$GITHUB_OUTPUT"
+      - name: Verify proxy connection reuse and API address replacement
+        run: node tests/integration/proxy-keepalive.mjs
       - name: Verify running container images and deployment isolation
         run: node tests/integration/runtime-images.mjs
       - name: Check web and API routes
@@ -119,6 +121,8 @@ jobs:
         run: node tests/integration/knowledge.mjs
       - name: Verify immediate P1 alerts and scoped supervisor confirmation
         run: node tests/integration/priority-review.mjs
+      - name: Verify configurable priority governance and preserved SLA obligations
+        run: node tests/integration/priority-governance.mjs
       - name: Verify GEN intake, classification and revocable proxy boundaries
         run: node tests/integration/intake-triage.mjs
       - name: Verify appointment withdrawal, supervised continuity and expiring per-ticket exceptions

@@ -33,6 +33,8 @@ const audiences: Readonly<Record<string, Audience>> = {
   ASSIGNMENT_EXPIRED: { owner:true, queue:true, escalation:true },
   CLASSIFICATION_CORRECTED: { requester:true, owner:true, queue:true },
   PRIORITY_REVIEWED: { requester:true, owner:true },
+  PRIORITY_CHANGED: {requester:true,owner:true,escalation:true},
+  PRIORITY_SUGGESTED: {owner:true,queue:true,escalation:true,reviewer:true},
   P1_CANDIDATE: { owner:true, escalation:true, reviewer:true },
   P1_REVIEW_OVERDUE: { owner:true, escalation:true, reviewer:true },
   P1_REVIEW_ROUTED: { owner:true, escalation:true, reviewer:true },
@@ -56,6 +58,12 @@ export function notificationAudience(action: string): Readonly<Audience> {
 export async function notificationRecipients(client: Pick<PoolClient,'query'>, eventId: string, employeeId: string | null = null): Promise<string[]> {
   const event = await client.query<{ action:string }>('SELECT action FROM ticket_events WHERE id=$1',[eventId]);
   if (!event.rowCount) return [];
+  if(event.rows[0]!.action.startsWith('P1_')) {
+    const current=await client.query(`SELECT 1 FROM ticket_events v JOIN tickets t ON t.id=v.ticket_id
+      WHERE v.id=$1 AND t.priority='P1' AND t.priority_review_state='PENDING'
+        AND COALESCE((v.detail->>'generation')::integer,1)=t.priority_review_generation`,[eventId]);
+    if(!current.rowCount)return [];
+  }
   const a = notificationAudience(event.rows[0]!.action);
   if (!Object.keys(a).length) return [];
   if (a.waiting) {
