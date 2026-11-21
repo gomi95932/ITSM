@@ -12,6 +12,7 @@ RUN npm run build -w @itsm/contracts && npm run build -w @itsm/workflow && npm r
 
 FROM node:22-alpine
 RUN apk add --no-cache ffmpeg
+RUN mkdir -p /var/lib/itsm/attachments && chown node:node /var/lib/itsm/attachments && chmod 700 /var/lib/itsm/attachments
 ENV NODE_ENV=production PORT=3000
 WORKDIR /srv
 COPY --from=build /srv/node_modules ./node_modules

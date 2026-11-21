@@ -21,7 +21,26 @@ export async function api<T>(path: string,options: { method?: string; body?: unk
   if (!response.ok) throw new ApiError(response.status,data.code ?? 'REQUEST_FAILED');
   return data as T;
 }
+export async function attachmentRequest(url:string,method:'GET'|'PUT',headers:Record<string,string>,body?:Blob):Promise<Response> {
+  if(!/^\/api\/v1\/tickets\/[a-f0-9-]{36}\/attachments\/[a-f0-9-]{36}\/content$/i.test(url))throw new ApiError(400,'INVALID_ATTACHMENT');
+  const response=await fetch(url,{method,credentials:'same-origin',redirect:'error',headers:{...headers,
+    ...(development?{'X-Dev-User':devUser()}:{}),...(currentUser?.csrfToken?{'X-CSRF-Token':currentUser.csrfToken}:{})},body,signal:AbortSignal.timeout(150_000)});
+  if(!response.ok){const data=await response.json().catch(()=>({}));throw new ApiError(response.status,data.code??'REQUEST_FAILED');}
+  return response;
+}
 export const messages: Record<string,string> = {
+  ATTACHMENTS_UNAVAILABLE:'附件存储或查毒服务暂不可用，请联系服务台。',
+  INVALID_ATTACHMENT:'请选择符合大小限制的 PNG、JPG、PDF、TXT、LOG 或 CSV 文件。',
+  ATTACHMENT_CONTENT_MISMATCH:'文件实际内容、类型或校验值不一致，请重新选择原文件。',
+  ATTACHMENT_KEY_REQUIRED:'上传标识无效，请重新选择文件。',
+  ATTACHMENT_KEY_CONFLICT:'上传标识已用于其他文件，请重新选择文件。',
+  ATTACHMENT_UPLOAD_FINISHED:'此上传已结束或过期，请刷新列表后重新选择文件。',
+  ATTACHMENT_LINK_EXPIRED:'附件访问凭证已失效，请刷新后重试。',
+  ATTACHMENT_NOT_CLEAN:'附件尚未通过安全扫描，暂不可下载。',
+  ATTACHMENT_INTERNAL_DENIED:'当前人员不能添加工程师内部附件。',
+  ATTACHMENT_TICKET_CLOSED:'此工单已结束，不能继续添加附件。',
+  ATTACHMENT_QUOTA_EXCEEDED:'附件数量或容量已达上限，请联系服务台。',
+  ATTACHMENT_BUSY:'附件服务正在处理其他文件，请稍后重试。',
   DIRECTORY_ADMIN_REQUIRED:'仅平台管理员可查看人员同步状态。',
   INVALID_REQUEST_VALIDITY:'请填写服务允许范围内的申请有效天数；报障无需填写此项。',
   APPROVAL_IDENTITY_UNAVAILABLE:'申请人或审批人尚未关联有效的企业钉钉账号，请联系服务台核对。',

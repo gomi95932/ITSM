@@ -299,6 +299,15 @@ export class TicketsService {
     return result.rows[0];
   }
 
+  async attachmentAccess(client:PoolClient,actor:Identity,id:string) {
+    await client.query('SELECT pg_advisory_xact_lock_shared($1)',[ROLE_AUTHORIZATION_LOCK]);
+    await this.requireActive(client,actor);
+    const ticket=await this.accessible(client,actor,id,true);
+    const member=await client.query('SELECT 1 FROM group_memberships WHERE employee_id=$1 AND group_id=$2',[actor.id,ticket.owner_group_id]);
+    // Internal files require current owner-group membership; a pending handover does not grant it.
+    return {internal:!!member.rowCount,writable:!['CLOSED','CANCELLED','REJECTED'].includes(ticket.status)};
+  }
+
   async list(actor: Identity, mine: boolean, status: string | undefined, page: number, size: number, queue?: string): Promise<object> {
     if (!Number.isInteger(page) || page < 1 || !Number.isInteger(size) || size < 1 || size > 100) throw new BadRequestException();
     if (status && !['NEW','QUEUED','IN_PROGRESS','WAITING_APPROVAL','WAITING_USER','WAITING_VENDOR','PENDING_CONFIRMATION','CLOSED','CANCELLED','REJECTED'].includes(status)) throw new BadRequestException();

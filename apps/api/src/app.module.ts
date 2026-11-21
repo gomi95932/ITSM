@@ -27,6 +27,8 @@ import { FulfillmentService } from './fulfillment.service.js';
 import { DirectoryController } from './directory.controller.js';
 import { VoiceAsrService } from './voice-asr.service.js';
 import { IntakeInterpreterService } from './intake-interpreter.service.js';
+import { AttachmentsController } from './attachments.controller.js';
+import { AttachmentsService } from './attachments.service.js';
 
-@Module({ controllers: [HealthController, TicketsController,AuthController,WorkspaceController,DelegationsController,RequestCatalogController,KnowledgeController,ReportsController,RolesController,RoutingConfigController,SupportController,ServiceStructureController,FulfillmentController,DirectoryController], providers: [Database,AuthService,TicketsService,SlaService,IntakePolicyService,RequestCatalogService,KnowledgeService,RolesService,RoutingConfigService,SupportService,ServiceStructureService,FulfillmentService,VoiceAsrService,IntakeInterpreterService] })
+@Module({ controllers: [HealthController, TicketsController,AuthController,WorkspaceController,DelegationsController,RequestCatalogController,KnowledgeController,ReportsController,RolesController,RoutingConfigController,SupportController,ServiceStructureController,FulfillmentController,DirectoryController,AttachmentsController], providers: [Database,AuthService,TicketsService,SlaService,IntakePolicyService,RequestCatalogService,KnowledgeService,RolesService,RoutingConfigService,SupportService,ServiceStructureService,FulfillmentService,VoiceAsrService,IntakeInterpreterService,AttachmentsService] })
 export class AppModule {}

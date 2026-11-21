@@ -1,11 +1,11 @@
 # ITSM
 
-公司内部轻量 ITSM 系统的独立代码仓库。已有员工端、IT 工作台、INC 核心、SLA、身份/通知适配及语音草稿基础；REQ/OA、个人责任、知识等仍需补齐。代码存在不代表真实外部联调或部署验收完成。
+公司内部轻量 ITSM 系统的独立代码仓库。已有员工端、IT 工作台、INC、REQ/OA 适配、工单个人责任、岗位人员维护、SLA、知识及基础报表；人员同步、消息卡片和语音入口按对应功能手册配置。受控附件候选见下文。代码存在不代表真实外部联调或用户验收完成。
 
 ## 工作边界
 
 - 本机：编辑代码、提交 Git、发起 Pull Request。
-- GitHub：私有仓库、代码审阅、CI；合并主分支后发布带提交 SHA 的镜像，部署仍需人工批准与验证。
+- GitHub：代码审阅、CI；合并主分支后发布带提交 SHA 的镜像，部署沿用受控批准与验证流程。公开仓库不得保存凭据、员工资料或内部验收证据。
 - `10.10.81.125`：ITSM 开发测试运行环境。现有服务及宿主机 PostgreSQL/Redis 不属于本项目，不应覆盖或复用。
 - 现有 ELK、监控、本地模型等运行在其他服务器，后续通过受控适配器集成。
 
@@ -39,6 +39,6 @@ docker compose --env-file infra/compose/.env -f infra/compose/compose.yaml ps
 
 这份 Compose **仅适用于隔离开发/CI 环境**。迁移使用账本、文件校验和及事务锁，已执行迁移不可修改；种子默认关闭，必须显式选择。API 使用 `X-Dev-User: employee-1` / `agent-1` 模拟身份，仅在非 production 且 `ENABLE_DEV_AUTH=true` 时启用；不能把测试数据或模拟身份带到正式环境。`/api/v1/health` 检查进程，`/api/v1/health/ready` 进一步检查数据库和必要迁移，但仍不能代替业务验收。服务器现状见 [开发环境记录](docs/development-deployment.md)，实际发布按 [发布与恢复手册](docs/release-runbook.md)。
 
-开发测试 API：`POST /api/v1/tickets` 须带唯一 `Idempotency-Key`（8–128 位）；`GET /api/v1/tickets?mine=true`、`GET /api/v1/tickets/{id}`；`POST /api/v1/tickets/{id}/actions` 同样须带幂等键及 `expectedVersion`。普通员工只看本人，支持人员按组可见；工单、状态事件、审计和 outbox 同事务。worker 已有通知重试和 SLA 扫描基础；钉钉真实免登/通知仍需联调，REQ/OA 和受控附件未交付。CI 覆盖 API、权限、SLA、语音草稿、浏览器旅程及迁移/备份恢复。本机不运行上述测试。
+开发测试 API：`POST /api/v1/tickets` 须带唯一 `Idempotency-Key`（8–128 位）；`GET /api/v1/tickets?mine=true`、`GET /api/v1/tickets/{id}`；`POST /api/v1/tickets/{id}/actions` 同样须带幂等键及 `expectedVersion`。普通员工只看本人，支持人员按组可见；工单、状态事件、审计和 outbox 同事务。worker 具备通知重试、死信处理及 SLA 扫描。REQ 通过明确版本开放，真实 OA、钉钉和模型接入仍须按 [企业联调手册](docs/enterprise-uat-runbook.md) 验证。新增 [受控附件候选](docs/p1-attachments.md) 默认关闭，待当前提交 CI、扫描服务配置及真实验收分别核实。CI 覆盖 API、权限、SLA、语音草稿、浏览器旅程及迁移/备份恢复。本机不运行上述测试。
 
 GitHub 分支、PR、镜像发布和开发机部署规则见 [docs/github-cicd.md](docs/github-cicd.md)。

@@ -59,6 +59,13 @@ export function validateRecoveryProof(metadata,proof) {
     || proof.backupSha256 !== metadata.sha256 || proof.inventorySha256 !== fingerprint
     || proof.tableCount !== metadata.inventory.length || !Number.isFinite(Date.parse(proof.verifiedAt)))
     throw new Error('RESTORE_DATA_EVIDENCE_REQUIRED');
+  if(metadata.attachments && (proof.attachments?.method!=='isolated-attachment-bytes-v1'||proof.attachments.status!=='passed'
+    ||!/^[a-f0-9]{64}$/.test(metadata.attachments.sha256??'')
+    ||proof.attachments.archiveSha256!==metadata.attachments.sha256||!Number.isInteger(proof.attachments.objects)
+    ||proof.attachments.objects<0||!Number.isInteger(proof.attachments.referenced)||proof.attachments.referenced<0
+    ||proof.attachments.referenced>proof.attachments.objects||!/^[a-f0-9]{64}$/.test(proof.attachments.inventorySha256??'')
+    ||!Number.isFinite(Date.parse(proof.attachments.verifiedAt))))
+    throw new Error('RESTORE_ATTACHMENT_EVIDENCE_REQUIRED');
   return fingerprint;
 }
 
@@ -299,8 +306,21 @@ SELECT '{"inventoryCompleted":true}';`;
       const input=await open(path,'r');
       try { await compose(['exec','-T','db','pg_restore','--list'],{input:input.fd}); }
       finally { await input.close(); }
+      let attachments;
+      const archiveTool=resolve(root,'scripts/attachment-archive.mjs');
+      const archiveManifest=await optionalJson(resolve(root,'release.json'));
+      const hasArchiveTool=await lstat(archiveTool).then(stat=>stat.isFile()).catch(error=>{if(error.code==='ENOENT')return false;throw error;});
+      if(hasArchiveTool){
+        if(archiveManifest&&!archiveManifest.files?.some(file=>file.path==='scripts/attachment-archive.mjs'))throw new Error('HASHED_ATTACHMENT_BACKUP_TOOL_REQUIRED');
+        const archive=await open(`${path}.attachments.jsonl`,'wx',0o600);
+        try{
+          await compose(['run','--rm','--no-deps','-T','--entrypoint','node','api','--input-type=module','-e',await readFile(archiveTool,'utf8'),'create'],{output:archive.fd});
+          await archive.sync();
+        }finally{await archive.close();}
+        attachments={file:`${path}.attachments.jsonl`,sha256:await fileHash(`${path}.attachments.jsonl`)};
+      }else if(inventory.some(row=>row.table==='attachments'&&row.rows!=='0'))throw new Error('ATTACHMENT_BACKUP_TOOL_REQUIRED');
       await atomicJson(`${path}.json`,{file:path,sha256:await fileHash(path),createdAt:new Date().toISOString(),release:existing?.sha ?? null,
-        inventoryMethod,inventory,inventorySha256:inventoryFingerprint(inventory)});
+        inventoryMethod,inventory,inventorySha256:inventoryFingerprint(inventory),...(attachments?{attachments}:{})});
       return path;
     };
     const smoke=async () => {
@@ -338,6 +358,11 @@ SELECT '{"inventoryCompleted":true}';`;
         throw new Error('BACKUP_SNAPSHOT_EVIDENCE_REQUIRED');
       const database=`itsm_restore_${Date.now()}_${process.pid}`;
       const sql=(query,db='postgres') => compose(['exec','-T','db','sh','-ec','PGPASSWORD="$POSTGRES_PASSWORD" exec psql -X -v ON_ERROR_STOP=1 -U itsm -d "$1" -Atc "$2"','sh',db,query]);
+      let attachmentProof;
+      if(metadata.attachments){
+        if(metadata.attachments.file!==`${path}.attachments.jsonl`||await fileHash(metadata.attachments.file)!==metadata.attachments.sha256)
+          throw new Error('ATTACHMENT_BACKUP_CHECKSUM_MISMATCH');
+      }else if(metadata.inventory.some(row=>row.table==='attachments'&&row.rows!=='0'))throw new Error('ATTACHMENT_BACKUP_REQUIRED');
       await sql(`CREATE DATABASE ${database}`);
       try {
         const input=await open(path,'r');
@@ -348,9 +373,18 @@ SELECT '{"inventoryCompleted":true}';`;
           'export PGPASSWORD="$POSTGRES_PASSWORD"; exec psql -X -qAt -v ON_ERROR_STOP=1 -U itsm -d "$1" -f /dev/stdin',
           'sh',database],{input:'pipe',textInput:script}));
         if (inventoryFingerprint(restored) !== expectedInventory) throw new Error('RESTORED_TABLE_DATA_MISMATCH');
+        if(metadata.attachments){
+          const input=await open(metadata.attachments.file,'r');
+          try{
+            attachmentProof=JSON.parse(await compose(['run','--rm','--no-deps','-T','--entrypoint','node','api','--input-type=module','-e',
+              await readFile(resolve(root,'scripts/attachment-archive.mjs'),'utf8'),'verify',database],{input:input.fd}));
+          }finally{await input.close();}
+          attachmentProof.archiveSha256=metadata.attachments.sha256;
+        }
       } finally { await sql(`DROP DATABASE ${database}`); }
       const proof={method:recoveryMethod,status:'passed',backupSha256:metadata.sha256,
-        inventorySha256:expectedInventory,tableCount:metadata.inventory.length,verifiedAt:new Date().toISOString()};
+        inventorySha256:expectedInventory,tableCount:metadata.inventory.length,verifiedAt:new Date().toISOString(),
+        ...(attachmentProof?{attachments:attachmentProof}:{})};
       validateRecoveryProof(metadata,proof);
       await atomicJson(`${path}.restore.json`,proof);
       console.log('Backup restored and public table data verified in an isolated temporary database');
