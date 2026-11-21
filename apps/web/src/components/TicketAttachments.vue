@@ -15,13 +15,14 @@ const listing=ref<Listing>(),error=ref(''),busy=ref(false),loading=ref(false),fi
 const visibility=ref<'PUBLIC'|'INTERNAL'>('PUBLIC'),safe=ref(false),notice=ref('');
 const states:Record<string,string>={PENDING:'待上传',UPLOADING:'上传中',SCANNING:'安全扫描中',CLEAN:'已通过扫描',QUARANTINED:'已隔离，禁止下载',FAILED:'校验或扫描未通过'};
 const size=(n:number)=>n>=1048576?`${(n/1048576).toFixed(1)} MB`:`${Math.ceil(n/1024)} KB`;
-watch([file,visibility],()=>{safe.value=false;notice.value='';});
+watch(file,()=>{safe.value=false;});
+watch(visibility,()=>{safe.value=false;notice.value='';});
 async function load(){
   loading.value=true;
   try{listing.value=await api<Listing>(`/tickets/${props.ticketId}/attachments`);if(!listing.value.canInternal)visibility.value='PUBLIC';}
   catch(e){error.value=errorText(e);}finally{loading.value=false;}
 }
-function choose(event:Event){file.value=(event.target as HTMLInputElement).files?.[0];error.value='';}
+function choose(event:Event){file.value=(event.target as HTMLInputElement).files?.[0];error.value='';notice.value='';}
 async function upload(){
   const selected=file.value;if(!selected||!safe.value||busy.value||!listing.value?.canUpload)return;
   if(selected.size<1||selected.size>listing.value.maxBytes){error.value=`文件大小须在 1 字节至 ${size(listing.value.maxBytes)} 之间。`;return;}

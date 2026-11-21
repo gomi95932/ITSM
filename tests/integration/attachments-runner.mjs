@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { createHash,randomUUID } from 'node:crypto';
 import { createServer } from 'node:net';
 import { NestFactory } from '@nestjs/core';
+import { json as jsonBody } from 'express';
 import { AppModule } from '/srv/apps/api/dist/app.module.js';
 import { Database } from '/srv/apps/api/dist/database.service.js';
 
@@ -27,12 +28,15 @@ const scanner=createServer(socket=>{
 await new Promise(resolve=>scanner.listen(0,'127.0.0.1',resolve));
 Object.assign(process.env,{ENABLE_ATTACHMENTS:'true',ATTACHMENT_STORAGE_APPROVAL_REF:'disposable-ci-protocol-fixture',
   ATTACHMENT_SIGNING_KEY:'a'.repeat(64),ATTACHMENT_CLAMD_HOST:'127.0.0.1',ATTACHMENT_CLAMD_PORT:String(scanner.address().port)});
-const app=await NestFactory.create(AppModule,{logger:false});app.setGlobalPrefix('api/v1');await app.listen(0,'127.0.0.1');
+const app=await NestFactory.create(AppModule,{logger:false,bodyParser:false});app.use(jsonBody({limit:'3mb'}));
+app.setGlobalPrefix('api/v1');await app.listen(0,'127.0.0.1');
 const base=`${await app.getUrl()}/api/v1`,db=app.get(Database);
 async function call(path,user='employee-1',method='GET',body,headers={}){
   const binary=Buffer.isBuffer(body);
-  const response=await fetch(base+path,{method,headers:{'x-dev-user':user,
-    ...(body===undefined?{}:{'content-type':binary?'application/octet-stream':'application/json'}),...headers},
+  const requestHeaders=new Headers({'x-dev-user':user});
+  if(body!==undefined)requestHeaders.set('content-type',binary?'application/octet-stream':'application/json');
+  for(const [name,value] of Object.entries(headers))requestHeaders.set(name,value);
+  const response=await fetch(base+path,{method,headers:requestHeaders,
     body:body===undefined?undefined:binary?body:JSON.stringify(body),signal:AbortSignal.timeout(150_000)});
   return {status:response.status,headers:response.headers,bytes:async()=>Buffer.from(await response.arrayBuffer()),json:async()=>response.json()};
 }
