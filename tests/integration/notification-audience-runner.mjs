@@ -72,7 +72,13 @@ try {
   const accepted=await audience('ACCEPT',['requester','owner']);
   await audience('WAIT_VENDOR',['owner']);
   await audience('RESUME_VENDOR',['requester','owner']);
-  await audience('P1_CANDIDATE',['owner','dispatcher','lead','reviewer']);
+  await client.query("UPDATE tickets SET priority='P1',priority_review_state='PENDING',priority_candidate_at=now() WHERE id=$1",[ticket]);
+  const p1=await audience('P1_CANDIDATE',['owner','dispatcher','lead','reviewer']);
+  await client.query('UPDATE tickets SET priority_review_generation=2 WHERE id=$1',[ticket]);
+  assert.deepEqual(await notificationRecipients(client,p1.eventId),[],'previous P1 generation cannot notify a new review cycle');
+  const routedP1=await audience('P1_REVIEW_ROUTED',['owner','dispatcher','lead','reviewer'],{generation:2});
+  await client.query("UPDATE tickets SET priority_review_state='CONFIRMED',priority_reviewed_at=now(),priority_reviewed_by=$2,priority_review_reason='Independent notification fixture review' WHERE id=$1",[ticket,id('reviewer')]);
+  assert.deepEqual(await notificationRecipients(client,routedP1.eventId),[],'completed P1 review suppresses queued candidate reminders');
   await audience('SLA_BREACH',['owner','dispatcher','lead']);
   await audience('INTERNAL_COMMENT',[]);
   await client.query("UPDATE tickets SET pending_group_id=$2,pending_assignee_id=$3,assignment_kind='HANDOVER',assignment_state='PENDING',assignment_offered_at=now() WHERE id=$1",[ticket,id('target'),id('candidate')]);
