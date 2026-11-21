@@ -181,6 +181,10 @@ export async function inspectDevelopment({sha,requestId},{paths=installedPaths,d
   const metadata=JSON.parse(await privateText(`${backup.path}.json`));
   if (metadata.file !== backup.path || metadata.release !== sha || metadata.sha256 !== backup.sha256
     || await backupHash(backup.path) !== backup.sha256) throw new Error('RECORDED_BACKUP_MISMATCH');
+  if (metadata.attachments && (metadata.attachments.file !== `${backup.path}.attachments.jsonl`
+    || !/^[a-f0-9]{64}$/.test(metadata.attachments.sha256 ?? '')
+    || await backupHash(metadata.attachments.file) !== metadata.attachments.sha256))
+    throw new Error('RECORDED_ATTACHMENT_BACKUP_MISMATCH');
   if (receipt.restoreCheck === recoveryMethod) {
     const proof=JSON.parse(await privateText(`${backup.path}.restore.json`));
     const inventorySha256=validateRecoveryProof(metadata,proof);
@@ -212,6 +216,8 @@ export async function inspectDevelopment({sha,requestId},{paths=installedPaths,d
     recordedBusinessAcceptance:enterprise?null:{runId:current.businessAcceptance.runId,completedAt:current.businessAcceptance.completedAt},
     ...(enterprise?{recordedEnterpriseReadiness:current.enterpriseReadiness,userAcceptance:'pending'}:{}),
     backup:{path:backup.path,sha256:backup.sha256,checksumVerifiedNow:true,
+      ...(metadata.attachments ? {attachments:{path:metadata.attachments.file,
+        sha256:metadata.attachments.sha256,checksumVerifiedNow:true}} : {}),
       restoreVerification:`recorded-${receipt.restoreCheck}`,recordedAt:receipt.completedAt,
       ...(receipt.restoreCheck === recoveryMethod ? {dataIntegrity:receipt.recoveryEvidence} : {})},
     limitations:['No new business transaction or backup restore was executed.','GitHub source was not re-queried.',

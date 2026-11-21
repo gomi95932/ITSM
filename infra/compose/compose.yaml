@@ -55,10 +55,18 @@ services:
       INTAKE_AI_ENDPOINT: ${INTAKE_AI_ENDPOINT:-}
       INTAKE_AI_MODEL: ${INTAKE_AI_MODEL:-}
       INTAKE_AI_TOKEN: ${INTAKE_AI_TOKEN:-}
+      ENABLE_ATTACHMENTS: ${ENABLE_ATTACHMENTS:-false}
+      ATTACHMENT_STORAGE_APPROVAL_REF: ${ATTACHMENT_STORAGE_APPROVAL_REF:-}
+      ATTACHMENT_SIGNING_KEY: ${ATTACHMENT_SIGNING_KEY:-}
+      ATTACHMENT_CLAMD_HOST: ${ATTACHMENT_CLAMD_HOST:-}
+      ATTACHMENT_CLAMD_PORT: ${ATTACHMENT_CLAMD_PORT:-3310}
+      ATTACHMENT_MAX_BYTES: ${ATTACHMENT_MAX_BYTES:-20971520}
       DB_HOST: db
       DB_NAME: itsm
       DB_USER: itsm
       DB_PASSWORD: ${ITSM_DB_PASSWORD:?Set ITSM_DB_PASSWORD in the private env file}
+    volumes:
+      - itsm_attachments:/var/lib/itsm/attachments
     depends_on:
       db:
         condition: service_healthy
@@ -182,3 +190,4 @@ networks:
 volumes:
   itsm_pgdata:
   itsm_redisdata:
+  itsm_attachments:

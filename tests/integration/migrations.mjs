@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { copyFile, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -96,6 +97,31 @@ try {
   const proof=JSON.parse(await readFile(`${backup}.restore.json`,'utf8'));
   assert.equal(proof.method,recoveryMethod);
   validateRecoveryProof(metadata,proof);
+  assert.equal(proof.attachments?.method,'isolated-attachment-bytes-v1');
+  assert.ok(proof.attachments.referenced>0,'recovery must verify real attachment bytes from the preceding HTTP fixture');
+  const attachmentArchive=await readFile(metadata.attachments.file,'utf8');
+  const records=attachmentArchive.trimEnd().split('\n').map(line=>JSON.parse(line));
+  for(const kind of ['missing-attachment','changed-attachment','archive-checksum']){
+    await writeFile(`${backup}.json`,JSON.stringify(metadata));
+    await writeFile(metadata.attachments.file,attachmentArchive);
+    await run('node',restoreArgs);
+    const changed=structuredClone(records),changedMetadata=structuredClone(metadata);
+    if(kind==='missing-attachment'){
+      const requiredId=await sql("SELECT id FROM attachments WHERE scan_status='CLEAN' ORDER BY id LIMIT 1");
+      const index=changed.findIndex(item=>item.key===`${requiredId}.blob`);assert.ok(index>0);changed.splice(index,1);
+      const objects=changed.slice(1,-1).map(({key,size,sha256})=>({key,size,sha256})).sort((a,b)=>a.key.localeCompare(b.key));
+      changed[changed.length-1]={complete:true,objects:objects.length,inventorySha256:createHash('sha256').update(JSON.stringify(objects)).digest('hex')};
+    }else changed[1].bytes=Buffer.from('corrupted archive content').toString('base64');
+    const corruptArchive=changed.map(item=>JSON.stringify(item)).join('\n')+'\n';
+    await writeFile(metadata.attachments.file,corruptArchive);
+    if(kind!=='archive-checksum')changedMetadata.attachments.sha256=createHash('sha256').update(corruptArchive).digest('hex');
+    await writeFile(`${backup}.json`,JSON.stringify(changedMetadata));
+    assert.notEqual((await run('node',restoreArgs,{success:false})).code,0,`${kind} must fail recovery`);
+    await assert.rejects(readFile(`${backup}.restore.json`),{code:'ENOENT'});
+    assert.equal(await sql("SELECT count(*) FROM pg_database WHERE datname LIKE 'itsm_restore_%'"),'0');
+  }
+  await writeFile(`${backup}.json`,JSON.stringify(metadata));
+  await writeFile(metadata.attachments.file,attachmentArchive);
   assert.equal(await sql('SELECT count(*) FROM recovery_evidence_probe'),String(4101+writes));
   for (const kind of ['missing-row','changed-content','missing-table']) {
     // Seed a real passed result before each failed recheck; no stale proof may survive.

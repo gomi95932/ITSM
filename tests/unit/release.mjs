@@ -32,6 +32,24 @@ test('recovery evidence binds table contents and counts to the exact archive',()
     assert.throws(()=>inventoryFingerprint(bad),/INVALID_BACKUP_INVENTORY/);
 });
 
+test('attachment recovery evidence binds the private byte archive and rejects incomplete proofs',()=>{
+  const inventory=[{schema:'public',table:'attachments',rows:'2',sha256:'a'.repeat(64)}];
+  const metadata={sha256:'b'.repeat(64),inventoryMethod:'public-table-chunked-sha256-v1',inventory,
+    inventorySha256:inventoryFingerprint(inventory),attachments:{sha256:'c'.repeat(64)}};
+  const proof={method:recoveryMethod,status:'passed',backupSha256:metadata.sha256,
+    inventorySha256:metadata.inventorySha256,tableCount:1,verifiedAt:'2026-11-21T00:00:00Z',
+    attachments:{method:'isolated-attachment-bytes-v1',status:'passed',archiveSha256:metadata.attachments.sha256,
+      objects:2,referenced:1,inventorySha256:'d'.repeat(64),verifiedAt:'2026-11-21T00:00:00Z'}};
+  assert.doesNotThrow(()=>validateRecoveryProof(metadata,proof));
+  for(const change of [p=>{delete p.attachments;},p=>{p.attachments.archiveSha256='e'.repeat(64);},
+    p=>{p.attachments.method='metadata-only';},p=>{p.attachments.status='failed';},
+    p=>{p.attachments.objects=-1;},p=>{p.attachments.objects=0;},p=>{p.attachments.referenced=-1;},
+    p=>{p.attachments.inventorySha256='invalid';},p=>{p.attachments.verifiedAt='invalid';}]){
+    const changed=structuredClone(proof);change(changed);
+    assert.throws(()=>validateRecoveryProof(metadata,changed),/RESTORE_ATTACHMENT_EVIDENCE_REQUIRED/);
+  }
+});
+
 test('release business checks require seeded development identities and fake-only notifications', () => {
   const config=() => ({services:{api:{environment:{NODE_ENV:'development',ENABLE_DEV_AUTH:'true',NOTIFICATION_MODE:'fake'}},
     migrate:{environment:{ITSM_SEED_DEV_DATA:'true'}},worker:{environment:{NOTIFICATION_MODE:'fake',ENABLE_LIVE_NOTIFICATIONS:'false'}}}});
