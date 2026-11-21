@@ -22,7 +22,9 @@ async function submit(){
   <section class="detail-section" aria-label="工单分级">
     <div class="section-heading"><h2>工单分级</h2><strong>{{ticket.priority}} · {{PRIORITY_LABELS[ticket.priority]}}</strong></div>
     <p class="muted">初始 {{ticket.initialPriority??ticket.priority}} · 规则版本 {{ticket.priorityPolicyVersion??1}}</p>
-    <form v-if="ticket.canChangePriority||ticket.canSuggestPriority" @submit.prevent="submit" class="action-form">
+    <details v-if="ticket.canChangePriority||ticket.canSuggestPriority">
+    <summary>调整或建议分级</summary>
+    <form @submit.prevent="submit" class="action-form">
       <label>处理方式<select v-model="mode" aria-label="分级处理方式"><option value="SUGGEST">提交调级建议</option><option v-if="ticket.priorityReviewState!=='PENDING'" value="APPLY">调整优先级</option></select></label>
       <label>目标优先级<select v-model="priority" aria-label="目标优先级"><option v-for="p in PRIORITIES" :key="p" :value="p">{{p}} · {{PRIORITY_LABELS[p]}}</option></select></label>
       <label>核实影响范围<select v-model="impact"><option value="COMPANY">全公司 / 核心生产</option><option value="DEPARTMENT">部门 / 多人</option><option value="INDIVIDUAL">仅一人</option></select></label>
@@ -33,5 +35,6 @@ async function submit(){
       <ContentBoundary v-model="safe"/><p v-if="error" role="alert" class="error-banner">{{error}}</p>
       <button type="submit" class="primary" :disabled="busy||!safe||!reason.trim()"><LoaderCircle v-if="busy" :size="16" class="spin"/><Check v-else :size="16"/>{{mode==='SUGGEST'?'提交建议':'确认调级'}}</button>
     </form>
+    </details>
   </section>
 </template>

@@ -149,7 +149,9 @@ export class ReportsController {
         JOIN support_groups g ON g.id=m.group_id WHERE e.id=$1 AND e.active AND g.enabled AND m.group_id=$2`, [actor.id, groupId]);
       if (!membership.rowCount) throw new NotFoundException();
       const tickets = await client.query(`SELECT t.id,t.number,t.status,t.priority,t.initial_priority,t.created_at,f.rating,
-        (SELECT count(*)::integer FROM ticket_events e WHERE e.ticket_id=t.id AND e.action IN ('PRIORITY_CHANGED','PRIORITY_REVIEWED')) AS priority_change_count,
+        (SELECT count(*)::integer FROM ticket_events e WHERE e.ticket_id=t.id
+          AND e.action IN ('PRIORITY_CHANGED','PRIORITY_REVIEWED')
+          AND e.detail->>'oldPriority' <> e.detail->>'priority') AS priority_change_count,
         t.service_code,c.name AS service_name,t.waiting_reason_code,t.waiting_since,t.waiting_due_at,
         t.assignee_id,a.display_name AS assignee_name,a.active AS assignee_active,
         t.pending_assignee_id,p.display_name AS pending_assignee_name,t.assignment_kind,

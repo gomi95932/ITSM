@@ -10,6 +10,8 @@ test('dispatcher adjusts priority with evidence; administrator sees configuratio
   await page.goto(`/#/tickets/${ticket.id}`);
   const panel=page.getByRole('region',{name:'工单分级',exact:true});
   await expect(panel).toContainText('初始 P3');
+  await expect(panel.getByRole('combobox',{name:'分级处理方式'})).toBeHidden();
+  await panel.getByText('调整或建议分级',{exact:true}).click();
   await panel.getByRole('combobox',{name:'分级处理方式'}).selectOption('APPLY');
   await panel.getByRole('combobox',{name:'目标优先级'}).selectOption('P2');
   await panel.getByRole('textbox',{name:'分级依据'}).fill('已核实工作受阻，需要提高处理顺序');

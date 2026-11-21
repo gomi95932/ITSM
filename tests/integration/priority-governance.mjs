@@ -43,6 +43,12 @@ assert.equal(await sql(`SELECT count(*) FROM priority_review_signals WHERE ticke
 assert.equal((await change(before,reviewer,'P2','SUGGEST')).status,409);
 assert.equal(await sql(`SELECT count(*) FROM ticket_events e WHERE e.ticket_id=${q(t.id)} AND e.action IN ('PRIORITY_CHANGED','PRIORITY_SUGGESTED')
   AND NOT EXISTS(SELECT 1 FROM audit_logs a JOIN outbox_events o ON o.event_id=a.event_id WHERE a.event_id=e.id)`),'0');
+t=ok(await request(`/tickets/${t.id}/priority-review`,peer,{expectedVersion:t.version,priority:'P1',reason:'Independent confirmation keeps the verified P1 level'}));
+const reportDay=await sql("SELECT to_char(now() AT TIME ZONE 'Asia/Shanghai','YYYY-MM-DD')");
+const report=()=>request(`/reports/summary?groupId=service-desk&from=${reportDay}&to=${reportDay}`,engineer);
+assert.equal(ok(await report()).items.find(item=>item.id===t.id).priorityChangeCount,4,'suggestions and same-level confirmation are not changes');
+t=ok(await request(`/tickets/${t.id}/priority`,reviewer,{...body(t,'P1','APPLY'),impact:'COMPANY'}));
+assert.equal(ok(await report()).items.find(item=>item.id===t.id).priorityChangeCount,4,'fact updates at the same priority are not changes');
 
 assert.equal((await request('/admin/priority-policy','employee-1')).status,403);
 const current=ok(await request('/admin/priority-policy','demo-admin-1')).current;
