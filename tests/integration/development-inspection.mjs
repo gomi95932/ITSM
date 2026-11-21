@@ -205,6 +205,33 @@ test('rejects unsafe private records, tools, bundle files and backup links',asyn
   }
 });
 
+test('rechecks private attachment archive bytes and rejects missing, changed or redirected backups',async t => {
+  for (const kind of ['valid','missing','bytes','path','checksum','symlink','hardlink']) {
+    const f=await fixture(t),archive=`${f.backup}.attachments.jsonl`,content='private-attachment-fixture\n';
+    await writeFile(archive,content,{mode:0o600});
+    const metadata=JSON.parse(await readFile(`${f.backup}.json`,'utf8'));
+    metadata.attachments={file:archive,sha256:digest(content)};
+    if (kind === 'missing') await rm(archive);
+    if (kind === 'bytes') await writeFile(archive,'changed-attachment-bytes');
+    if (kind === 'path') metadata.attachments.file=join(f.root,'other-archive.jsonl');
+    if (kind === 'checksum') metadata.attachments.sha256='invalid';
+    if (kind === 'symlink') {
+      const target=join(f.root,'saved-archive');
+      await copyFile(archive,target); await chmod(target,0o600);
+      await rm(archive); await symlink(target,archive);
+    }
+    if (kind === 'hardlink') await link(archive,join(f.root,'linked-archive'));
+    await writeFile(`${f.backup}.json`,JSON.stringify(metadata));
+    if (kind === 'valid') {
+      const report=await f.inspect({sha,requestId},f.dependencies);
+      assert.deepEqual(report.backup.attachments,{path:archive,sha256:digest(content),checksumVerifiedNow:true});
+      assert.equal(JSON.stringify(report).includes(content.trim()),false);
+    } else await assert.rejects(f.inspect({sha,requestId},f.dependencies),
+      ['bytes','path','checksum'].includes(kind) ? /RECORDED_ATTACHMENT_BACKUP_MISMATCH/
+        : ['symlink','hardlink'].includes(kind) ? /TRUSTED_ROOT_PATH_REQUIRED/ : /ENOENT/);
+  }
+});
+
 test('preserves existing release or executor locks without making external calls',async t => {
   for (const directory of ['state','executions']) {
     const f=await fixture(t),lock=join(f.paths[directory],'operation.lock');
