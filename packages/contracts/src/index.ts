@@ -1,4 +1,6 @@
 export const API_PREFIX = 'api/v1';
+export * from './priority.js';
+export * from './priority-sla.js';
 export * from './service-structure.js';
 export * from './service-structure-template.js';
 export * from './waiting.js';
@@ -105,6 +107,8 @@ export interface SessionUser { id: string; name: string; groups: string[]; prior
 export interface TicketView extends TicketReceipt {
   serviceCode: string; serviceType: TicketType; subject: string; description: string;
   priority: Priority; impact: Impact; urgency: Urgency; fields: Record<string, unknown>;
+  initialPriority?: Priority; priorityPolicyVersion?: number;
+  canChangePriority?: boolean; canSuggestPriority?: boolean;
   createdAt: string; updatedAt: string; requesterId: string;
   submittedById: string; originalServiceCode: string;
   canCorrectClassification?: boolean; canAddInfo?: boolean;
@@ -126,8 +130,9 @@ export interface TicketView extends TicketReceipt {
   waiting?: import('./waiting.js').TicketWaiting | null;
   feedback?: TicketFeedback | null;
   priorityAlert?: { reviewersAvailable: boolean; overdue: boolean; notificationMode: string; deliveries: Record<string, number> };
-  events?: { action: string; fromStatus: string | null; toStatus: string; detail: Record<string, string>; createdAt: string }[];
-  sla?: { cycle: number; priority: Priority; responseTarget: number; resolutionTarget: number; responseMinutes: number; resolutionMinutes: number; responded: boolean; completed: boolean; paused: boolean; pauseReason?:'USER'|'APPROVAL'|null; breached: boolean }[];
+  events?: { action: string; actorId?:string; actorName?:string; fromStatus: string | null; toStatus: string; detail: Record<string, string>; createdAt: string }[];
+  sla?: { cycle: number; priority: Priority; responseTarget: number; resolutionTarget: number; responseMinutes: number; resolutionMinutes: number; responded: boolean; completed: boolean; paused: boolean; pauseReason?:'USER'|'APPROVAL'|null; breached: boolean;
+    obligations?: {id:string;priority:string;responseTarget:number;resolutionTarget:number;responseMinutes:number;resolutionMinutes:number;breached:boolean}[] }[];
   requestProgress?: {
     cancellation?: 'NOT_SENT' | 'OA_CONFIRMATION_REQUIRED' | 'OA_CREATION_UNCERTAIN' | 'OA_CLOSED';
     approval: { state: string; updatedAt: string } | null;

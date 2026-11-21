@@ -109,7 +109,7 @@ export class WorkspaceController {
     const current=await this.catalog(h);
     // The model call can outlive a catalog publication or identity change.
     if(candidate.interpreter==='internal-model') {
-      try {candidate=applyIntakeSuggestion({serviceCode:candidate.serviceCode,subject:candidate.subject,fields:candidate.fields,confidence:candidate.confidence!},text,current.items);}
+      try {candidate=applyIntakeSuggestion({serviceCode:candidate.serviceCode,subject:candidate.subject,fields:candidate.fields,confidence:candidate.confidence!,...(candidate.priorityEvidence?{priorityEvidence:candidate.priorityEvidence}:{})},text,current.items);}
       catch {candidate={...voiceCandidate(text,current.items),fallbackReason:'INTAKE_UNAVAILABLE'};}
     } else candidate={...voiceCandidate(text,current.items),...(candidate.fallbackReason?{fallbackReason:candidate.fallbackReason}:{}),
       ...(candidate.fallbackReason==='INTAKE_LOW_CONFIDENCE'?{serviceCode:null,fields:{},missingFields:['impact','urgency','serviceCode']}: {})};

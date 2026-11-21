@@ -1,16 +1,26 @@
 import { Injectable } from '@nestjs/common';
 import type { PoolClient } from 'pg';
-import { DEFAULT_CALENDAR, SLA_TARGETS, serviceMinutes, type ServiceCalendar } from '@itsm/contracts';
+import { DEFAULT_CALENDAR, SLA_TARGETS, serviceMinutes, prioritySlaMeasurements, type PriorityPolicy } from '@itsm/contracts';
+import { randomUUID } from 'node:crypto';
 
 @Injectable()
 export class SlaService {
   async start(client: PoolClient, ticketId: string, priority: string, reopen = false) {
     const calendar = await client.query('SELECT version,config,approved FROM sla_calendars ORDER BY version DESC LIMIT 1');
     const snapshot = { ...(calendar.rows[0]?.config ?? DEFAULT_CALENDAR), version: calendar.rows[0]?.version ?? 1, approved: calendar.rows[0]?.approved ?? false };
-    const target = SLA_TARGETS[priority];
+    const policy=await client.query(reopen?'SELECT config FROM priority_policy_versions ORDER BY version DESC LIMIT 1'
+      :"SELECT priority_policy_snapshot->'config' AS config FROM tickets WHERE id=$1",reopen?[]:[ticketId]);
+    const target = policy.rows[0]?.config.targets[priority] ?? SLA_TARGETS[priority];
     await client.query(`INSERT INTO sla_cycles(ticket_id,cycle,priority,calendar_snapshot,started_at,response_target,resolution_target,responded_at)
       SELECT $1,COALESCE(max(cycle),0)+1,$2,$3,now(),$4,$5,CASE WHEN $6 THEN now() ELSE NULL END FROM sla_cycles WHERE ticket_id=$1`,
       [ticketId, priority, JSON.stringify(snapshot), target.response, target.resolution, reopen]);
+  }
+  async upgrade(client:PoolClient,ticketId:string,priority:string,policy:PriorityPolicy) {
+    const row=(await client.query('SELECT *,now() AS clock FROM sla_cycles WHERE ticket_id=$1 ORDER BY cycle DESC LIMIT 1 FOR UPDATE',[ticketId])).rows[0];
+    if(!row||row.completed_at)return;
+    const target=policy.targets[priority as keyof typeof policy.targets];
+    await client.query(`UPDATE sla_cycles SET priority_obligations=priority_obligations||$3::jsonb WHERE ticket_id=$1 AND cycle=$2`,
+      [ticketId,row.cycle,JSON.stringify([{id:randomUUID(),priority,startedAt:row.clock.toISOString(),responseTarget:target.response,resolutionTarget:target.resolution}])]);
   }
   async action(client: PoolClient, ticketId: string, action: string, priority: string) {
     if (action === 'REOPEN') return this.start(client, ticketId, priority, true);
@@ -26,14 +36,11 @@ export class SlaService {
   async view(client: PoolClient, ticketId: string) {
     const result = await client.query('SELECT *,now() AS clock FROM sla_cycles WHERE ticket_id=$1 ORDER BY cycle', [ticketId]);
     return result.rows.map(row => {
-      const calendar = row.calendar_snapshot as ServiceCalendar;
-      const end: Date = row.completed_at ?? row.clock;
-      const responseMinutes = serviceMinutes(row.started_at, row.responded_at ?? end, calendar, row.priority === 'P1');
-      const resolutionMinutes = Math.max(0, serviceMinutes(row.started_at, end, calendar, row.priority === 'P1') - row.paused_minutes
-        - (row.paused_at ? serviceMinutes(row.paused_at,end,calendar,row.priority === 'P1') : 0));
+      const [base,...obligations]=prioritySlaMeasurements(row,row.clock);
+      const {responseMinutes,resolutionMinutes}=base;
       return { cycle: row.cycle, priority: row.priority, responseTarget: row.response_target, resolutionTarget: row.resolution_target,
         responseMinutes, resolutionMinutes, responded: !!row.responded_at, completed: !!row.completed_at,
-        paused: !!row.paused_at && !row.completed_at,pauseReason:row.pause_reason, breached: responseMinutes > row.response_target || resolutionMinutes > row.resolution_target,
+        paused: !!row.paused_at && !row.completed_at,pauseReason:row.pause_reason, obligations,breached: base.breached||obligations.some(o=>o.breached),
         calendarApproved: row.calendar_snapshot.approved, calendarVersion: row.calendar_snapshot.version };
     });
   }

@@ -119,6 +119,8 @@ jobs:
         run: node tests/integration/knowledge.mjs
       - name: Verify immediate P1 alerts and scoped supervisor confirmation
         run: node tests/integration/priority-review.mjs
+      - name: Verify configurable priority governance and preserved SLA obligations
+        run: node tests/integration/priority-governance.mjs
       - name: Verify GEN intake, classification and revocable proxy boundaries
         run: node tests/integration/intake-triage.mjs
       - name: Verify appointment withdrawal, supervised continuity and expiring per-ticket exceptions

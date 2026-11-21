@@ -29,6 +29,14 @@ export async function attachmentRequest(url:string,method:'GET'|'PUT',headers:Re
   return response;
 }
 export const messages: Record<string,string> = {
+  INVALID_PRIORITY_POLICY:'分级配置无效，请核对矩阵、时限和关键服务；高优先级时限不能宽于低优先级。',
+  PRIORITY_PROPOSER_UNAVAILABLE:'提案人的管理员权限已失效，请拒绝提案并由有效管理员重新发起。',
+  PRIORITY_CHANGE_FORBIDDEN:'仅服务台、授权主管或当前符合处理资格的负责人可调整；负责人只能直接升级。',
+  PRIORITY_CHANGE_NOT_ALLOWED:'当前工单已进入收尾或结束状态，无法调整优先级。',
+  PRIORITY_INDEPENDENT_REVIEW_REQUIRED:'请由另一位有权限的人员独立复核。',
+  PRIORITY_REVIEW_REQUIRED:'当前 P1 候选须先完成独立确认或调整。',
+  PRIORITY_UNCHANGED:'优先级和影响情况均未变化，无需重复调整。',
+  PRIORITY_UPGRADE_ONLY:'当前负责人可直接升级，降级请提交建议。',
   ATTACHMENTS_UNAVAILABLE:'附件存储或查毒服务暂不可用，请联系服务台。',
   INVALID_ATTACHMENT:'请选择符合大小限制的 PNG、JPG、PDF、TXT、LOG 或 CSV 文件。',
   ATTACHMENT_CONTENT_MISMATCH:'文件实际内容、类型或校验值不一致，请重新选择原文件。',

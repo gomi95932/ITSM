@@ -28,7 +28,8 @@ const serviceType = ref<'INC'|'REQ'>('INC');
 const selectedOwner = ref('ALL');
 const selectedService = ref('');
 const groups = ref<{id:string;name:string}[]>([]), loading = ref(false), error = ref('');
-type Item = { id:string;number:string;createdAt:string;status:string;priority:string;reopenCount:number;rating:number|null;
+type Item = { id:string;number:string;createdAt:string;status:string;priority:string;initialPriority:string;priorityChangeCount:number;reopenCount:number;rating:number|null;
+  cycles:{cycle:number;obligations:{id:string;priority:string;breached:boolean}[]}[];
   serviceCode:string;serviceName:string;acceptedHandoverCount:number;
   waiting:TicketWaiting|null;
   assigneeId:string|null;assigneeName:string|null;assigneeActive:boolean|null;
@@ -141,7 +142,7 @@ const completion = (item:Item, type:Report['serviceType']) => item.resolution?.c
         <div class="table-wrap report-table"><table aria-label="等待原因统计"><thead><tr><th>等待状态</th><th>原因</th><th>工单数</th><th>跟进已到期</th></tr></thead><tbody><tr v-for="item in report.waiting" :key="`${item.status}:${item.reason}`"><td>{{statuses[item.status]}}</td><td>{{waitingReasons[item.reason]}}</td><td>{{item.tickets}}</td><td :class="{'danger-text':item.followUpOverdue}">{{item.reason==='UNRECORDED'?'未记录':item.followUpOverdue}}</td></tr></tbody></table></div>
       </section>
       <div class="table-wrap report-table"><table aria-label="工单指标明细"><thead><tr><th>工单</th><th>服务</th><th>创建时间</th><th>状态</th><th>当前责任</th><th>等待跟进</th><th>首响 / 目标</th><th>{{report.serviceType === 'REQ' ? '交付 / 目标' : '解决 / 目标'}}</th><th>本组已接收交接</th><th>重开</th><th>评价</th></tr></thead>
-        <tbody><tr v-for="item in report.items" :key="item.id"><td><button class="ticket-link" @click="emit('open',item.id)">{{item.number}}</button></td>
+        <tbody><tr v-for="item in report.items" :key="item.id"><td><button class="ticket-link" @click="emit('open',item.id)">{{item.number}}</button><small class="pending-owner">{{item.initialPriority}} → {{item.priority}} · 调级 {{item.priorityChangeCount}} 次</small><template v-for="cycle in item.cycles" :key="cycle.cycle"><small v-for="o in cycle.obligations.filter(o=>o.id!=='original'&&o.breached)" :key="o.id" class="danger-text">第 {{cycle.cycle}} 轮 {{o.priority}} 升级时限超时</small></template></td>
           <td class="service-name">{{item.serviceName}}<small>{{item.serviceCode}}</small></td>
           <td>{{formatDate(item.createdAt)}}</td><td>{{statuses[item.status as keyof typeof statuses] ?? item.status}}</td>
           <td>{{item.assigneeName??'尚未接单'}}<span v-if="item.assigneeActive===false" class="owner-warning">已停用</span>

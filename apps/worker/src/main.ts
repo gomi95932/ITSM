@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { writeFile } from 'node:fs/promises';
 import { Pool, type PoolClient } from 'pg';
-import { P1_REVIEW_REMINDER_MINUTES, serviceMinutes } from '@itsm/contracts';
+import { P1_REVIEW_REMINDER_MINUTES, prioritySlaMeasurements } from '@itsm/contracts';
 import { maintainRequestApprovals,processNextRequestApproval } from './request-approval.js';
 import { dingtalkRequestApproval } from './dingtalk-request-approval.js';
 import { maintainRequestFulfillments,processNextRequestDelivery } from './request-fulfillment.js';
@@ -110,16 +110,17 @@ async function priorityReviewTimers() {
   await transaction(async client=>{
     const rows=await client.query(`SELECT t.*,now() AS clock FROM tickets t WHERE priority_review_state='PENDING'
       AND status NOT IN ('CLOSED','CANCELLED','REJECTED') AND (NOT EXISTS
-        (SELECT 1 FROM priority_review_signals WHERE ticket_id=t.id AND kind='CANDIDATE') OR
-        (priority_candidate_at<=now()-($1 * interval '1 minute') AND NOT EXISTS
-          (SELECT 1 FROM priority_review_signals WHERE ticket_id=t.id AND kind='OVERDUE')))
+        (SELECT 1 FROM priority_review_signals WHERE ticket_id=t.id AND kind='CANDIDATE' AND generation=t.priority_review_generation) OR
+        (priority_candidate_at<=now()-(COALESCE((priority_policy_snapshot->'config'->>'reviewMinutes')::integer,$1) * interval '1 minute') AND NOT EXISTS
+          (SELECT 1 FROM priority_review_signals WHERE ticket_id=t.id AND kind='OVERDUE' AND generation=t.priority_review_generation)))
       ORDER BY priority_candidate_at,t.id LIMIT 100 FOR UPDATE OF t SKIP LOCKED`,[P1_REVIEW_REMINDER_MINUTES]);
     for (const row of rows.rows) {
-      const candidate=await client.query("INSERT INTO priority_review_signals(ticket_id,kind) VALUES ($1,'CANDIDATE') ON CONFLICT DO NOTHING RETURNING kind",[row.id]);
-      if (candidate.rowCount) await record(client,row,'P1_CANDIDATE',{ priority:'P1',reviewState:'PENDING',responseStarted:true },row.status,row.status);
-      if (row.clock.getTime()-row.priority_candidate_at.getTime()>=P1_REVIEW_REMINDER_MINUTES*60000) {
-        const overdue=await client.query("INSERT INTO priority_review_signals(ticket_id,kind) VALUES ($1,'OVERDUE') ON CONFLICT DO NOTHING RETURNING kind",[row.id]);
-        if (overdue.rowCount) await record(client,row,'P1_REVIEW_OVERDUE',{ reason:'PRIORITY_CONFIRMATION_OVERDUE',minutes:P1_REVIEW_REMINDER_MINUTES },row.status,row.status);
+      const minutes=row.priority_policy_snapshot?.config.reviewMinutes??P1_REVIEW_REMINDER_MINUTES;
+      const candidate=await client.query("INSERT INTO priority_review_signals(ticket_id,kind,generation) VALUES ($1,'CANDIDATE',$2) ON CONFLICT DO NOTHING RETURNING kind",[row.id,row.priority_review_generation]);
+      if (candidate.rowCount) await record(client,row,'P1_CANDIDATE',{ priority:'P1',reviewState:'PENDING',responseStarted:true,generation:row.priority_review_generation },row.status,row.status);
+      if (row.clock.getTime()-row.priority_candidate_at.getTime()>=minutes*60000) {
+        const overdue=await client.query("INSERT INTO priority_review_signals(ticket_id,kind,generation) VALUES ($1,'OVERDUE',$2) ON CONFLICT DO NOTHING RETURNING kind",[row.id,row.priority_review_generation]);
+        if (overdue.rowCount) await record(client,row,'P1_REVIEW_OVERDUE',{ reason:'PRIORITY_CONFIRMATION_OVERDUE',minutes,generation:row.priority_review_generation },row.status,row.status);
       }
     }
   });
@@ -244,7 +245,7 @@ async function timers() {
     await client.query('SELECT pg_advisory_xact_lock_shared(71820512)');
     await client.query('SELECT id FROM request_approvals WHERE ticket_id=$1 FOR UPDATE',[candidate.id]);
     await client.query('SELECT id FROM request_fulfillments WHERE ticket_id=$1 FOR UPDATE',[candidate.id]);
-    const result = await client.query(`SELECT t.*,s.cycle,s.priority AS sla_priority,s.calendar_snapshot,s.started_at,s.responded_at,s.completed_at,s.paused_at,s.paused_minutes,s.response_target,s.resolution_target,clock_timestamp() AS clock
+    const result = await client.query(`SELECT t.*,s.cycle,s.priority AS sla_priority,s.calendar_snapshot,s.started_at,s.responded_at,s.completed_at,s.paused_at,s.paused_minutes,s.response_target,s.resolution_target,s.priority_obligations,s.pause_history,clock_timestamp() AS clock
       FROM tickets t JOIN sla_cycles s ON s.ticket_id=t.id AND s.cycle=(SELECT max(cycle) FROM sla_cycles WHERE ticket_id=t.id)
       WHERE t.id=$1 AND t.status NOT IN ('CLOSED','CANCELLED','REJECTED') FOR UPDATE OF t SKIP LOCKED`,[candidate.id]);
     for (const row of result.rows) {
@@ -256,13 +257,11 @@ async function timers() {
         await record(client,updated.rows[0],'AUTO_CLOSE',{ reason:`待确认超过 ${closeHours} 小时自动关闭` },row.status,'CLOSED',row);
         continue;
       }
-      const end = row.completed_at ?? row.clock;
-      const response = serviceMinutes(row.started_at,row.responded_at ?? end,row.calendar_snapshot,row.sla_priority === 'P1');
-      const resolution = serviceMinutes(row.started_at,end,row.calendar_snapshot,row.sla_priority === 'P1')-row.paused_minutes
-        -(row.paused_at ? serviceMinutes(row.paused_at,end,row.calendar_snapshot,row.sla_priority === 'P1') : 0);
-      for (const kind of [response > row.response_target ? 'RESPONSE_BREACH' : '',resolution > row.resolution_target ? 'RESOLUTION_BREACH' : ''].filter(Boolean)) {
+      for(const measurement of prioritySlaMeasurements({...row,priority:row.sla_priority},row.clock))
+      for (const base of [measurement.responseMinutes > measurement.responseTarget ? 'RESPONSE_BREACH' : '',measurement.resolutionMinutes > measurement.resolutionTarget ? 'RESOLUTION_BREACH' : ''].filter(Boolean)) {
+        const kind=measurement.id==='original'?base:`${base}:${measurement.id}`;
         const signal = await client.query('INSERT INTO sla_signals(ticket_id,cycle,kind) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING RETURNING kind',[row.id,row.cycle,kind]);
-        if (signal.rowCount) await record(client,row,'SLA_BREACH',{ cycle:row.cycle,kind },row.status,row.status);
+        if (signal.rowCount) await record(client,row,'SLA_BREACH',{ cycle:row.cycle,kind,priority:measurement.priority },row.status,row.status);
       }
     }
   });

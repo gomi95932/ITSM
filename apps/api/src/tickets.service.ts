@@ -12,6 +12,7 @@ import { canDispatch, canManageContinuity, ROLE_AUTHORIZATION_LOCK } from './rol
 import { blockRequestApprovalOnCancellation, enqueueRequestApproval } from '@itsm/workflow';
 import { requestIntakePolicy } from './request-intake-policy.js';
 import { ticketWaiting, type WaitingRow } from './ticket-waiting.js';
+import { evaluatePriority,prioritySlaMeasurements,type SlaClock,type PriorityPolicy,type Impact,type Urgency } from '@itsm/contracts';
 
 export function canViewRequestProgress(actorId: string, requesterId: string, serviceType: string): boolean {
   return actorId === requesterId && serviceType === 'REQ';
@@ -32,6 +33,8 @@ type TicketRow = WaitingRow & {
   service_routing_snapshot: Record<string,unknown>;
   responsibility_epoch: number;
   waiting_clock: Date;
+  initial_priority:string;priority_policy_snapshot:{version:number;approved:boolean;config:PriorityPolicy}|null;
+  priority_review_generation:number;priority_changed_by:string|null;
 };
 type TicketResponseRow = Omit<TicketRow, 'assignment_due_at'> & { assignment_due_at: Date | string | null };
 
@@ -91,15 +94,6 @@ function validateAction(body: unknown): asserts body is TicketActionInput {
     || !Number.isInteger(b.expectedVersion) || Number(b.expectedVersion) < 1
     || Object.entries(b).some(([k, v]) => k !== 'action' && k !== 'expectedVersion' && (typeof v !== 'string' || v.length > 2000)))
     throw new BadRequestException({ code: 'INVALID_ACTION' });
-}
-
-function priority(impact: string, urgency: string): string {
-  const matrix: Record<string, Record<string, string>> = {
-    COMPANY: { HIGH: 'P1', MEDIUM: 'P1', LOW: 'P2' },
-    DEPARTMENT: { HIGH: 'P1', MEDIUM: 'P2', LOW: 'P3' },
-    INDIVIDUAL: { HIGH: 'P2', MEDIUM: 'P3', LOW: 'P4' },
-  };
-  return matrix[impact][urgency];
 }
 
 @Injectable()
@@ -196,22 +190,21 @@ export class TicketsService {
     }
     const {id,receive_minutes,calendar_snapshot,clock}=policy.rows[0];
     let deadline=assignmentDeadline(clock,receive_minutes,calendar_snapshot,ticket.priority==='P1');
-    const cycle=await client.query<{started_at:Date;responded_at:Date|null;completed_at:Date|null;paused_at:Date|null;paused_minutes:number;
-      calendar_snapshot:ServiceCalendar;priority:string;response_target:number;resolution_target:number}>(
+    const cycle=await client.query<SlaClock>(
       'SELECT * FROM sla_cycles WHERE ticket_id=$1 ORDER BY cycle DESC LIMIT 1', [ticket.id]);
     if (cycle.rowCount) {
-      const s=cycle.rows[0], elapsed=serviceMinutes(s.started_at,clock,s.calendar_snapshot,s.priority==='P1');
-      const budgets:number[]=[];
-      if (!s.responded_at) budgets.push(s.response_target-elapsed);
-      if (!s.completed_at) budgets.push(s.resolution_target-elapsed+Number(s.paused_minutes)
-        +(s.paused_at ? serviceMinutes(s.paused_at,clock,s.calendar_snapshot,s.priority==='P1') : 0));
-      if (budgets.length) {
+      const s=cycle.rows[0];
+      for(const measurement of prioritySlaMeasurements(s,clock)) {
+        const budgets:number[]=[];
+        if(!s.responded_at)budgets.push(measurement.responseTarget-measurement.responseMinutes);
+        if(!s.completed_at)budgets.push(measurement.resolutionTarget-measurement.resolutionMinutes);
+        if(!budgets.length)continue;
         const remaining=Math.min(...budgets);
         if (remaining<=0) {
           if (required) throw new ConflictException({code:'ASSIGNMENT_BUDGET_EXHAUSTED'});
           return {id,deadline,offeredAt:clock};
         }
-        const slaDeadline=assignmentDeadline(clock,remaining,s.calendar_snapshot,s.priority==='P1');
+        const slaDeadline=assignmentDeadline(clock,remaining,s.calendar_snapshot,measurement.priority==='P1');
         if (slaDeadline<deadline) deadline=slaDeadline;
       }
     }
@@ -228,9 +221,11 @@ export class TicketsService {
       const requester=body.delegationId ? (await this.delegation(client,actor.id,body.delegationId))! : actor.id;
       const previous = await this.claim(client, actor.id, 'create', key, body);
       if (previous) return previous as TicketReceipt;
+      let draftEvidence:unknown=null;
       if (body.draftId) {
-        const draft = await client.query('SELECT id FROM voice_drafts WHERE id=$1 AND employee_id=$2 AND expires_at>now() AND ticket_id IS NULL FOR UPDATE',[body.draftId,actor.id]);
+        const draft = await client.query('SELECT id,candidate FROM voice_drafts WHERE id=$1 AND employee_id=$2 AND expires_at>now() AND ticket_id IS NULL FOR UPDATE',[body.draftId,actor.id]);
         if (!draft.rowCount) throw new ConflictException({ code:'DRAFT_EXPIRED' });
+        draftEvidence=draft.rows[0].candidate?.priorityEvidence??null;
       }
       const service=await this.catalogFor(client,actor.id,requester,body.serviceCode,body.formVersion,body.fields,true);
       const request=service.type==='REQ';
@@ -238,10 +233,13 @@ export class TicketsService {
         : body.requestedValidityDays!==undefined)throw new BadRequestException({code:'INVALID_REQUEST_VALIDITY'});
       const numberResult = await client.query<{ n: string }>("SELECT nextval('ticket_number_seq')::text AS n");
       const number = `ITSM-${numberResult.rows[0].n.padStart(8, '0')}`;
+      const policy=(await client.query('SELECT version,approved,config FROM priority_policy_versions ORDER BY version DESC LIMIT 1')).rows[0];
+      const computedPriority=evaluatePriority(policy.config,body.impact,body.urgency,body.serviceCode);
       const created = await client.query<TicketRow>(`INSERT INTO tickets(number,requester_id,owner_group_id,service_code,service_type,form_version,subject,description,fields,impact,urgency,priority,status,priority_review_state,priority_candidate_at,submitted_by_id,delegation_id)
         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$15,CASE WHEN $12='P1' THEN 'PENDING' ELSE 'NOT_REQUIRED' END,CASE WHEN $12='P1' THEN now() ELSE NULL END,$13,$14) RETURNING *`,
-        [number, requester, service.group_id, body.serviceCode, service.type, body.formVersion, body.subject.trim(), body.description.trim(), JSON.stringify(body.fields), body.impact, body.urgency, priority(body.impact, body.urgency),actor.id,body.delegationId??null,request?'WAITING_APPROVAL':'QUEUED']);
+        [number, requester, service.group_id, body.serviceCode, service.type, body.formVersion, body.subject.trim(), body.description.trim(), JSON.stringify(body.fields), body.impact, body.urgency, computedPriority,actor.id,body.delegationId??null,request?'WAITING_APPROVAL':'QUEUED']);
       const ticket = created.rows[0];
+      await client.query('UPDATE tickets SET priority_policy_snapshot=$2 WHERE id=$1',[ticket.id,JSON.stringify(policy)]);
       if (body.draftId) await client.query('UPDATE voice_drafts SET ticket_id=$2 WHERE id=$1',[body.draftId,ticket.id]);
       await client.query('UPDATE tickets SET catalog_snapshot=$2,original_catalog_snapshot=$2,original_fields=fields,service_routing_snapshot=$3 WHERE id=$1', [ticket.id,JSON.stringify(service.catalogSnapshot??{ code: body.serviceCode, name: service.name, formVersion: service.form_version, fields: service.field_schema }),JSON.stringify(service.routingSnapshot)]);
       await this.sla.start(client,ticket.id,ticket.priority);
@@ -256,7 +254,8 @@ export class TicketsService {
           throw error;
         }
       }
-      await this.record(client, ticket, actor.id, 'SUBMIT_AND_ROUTE', null, { groupId: ticket.owner_group_id,requesterId:requester,submittedById:actor.id,delegationId:body.delegationId??null,serviceCode:body.serviceCode,routing:service.routingSnapshot }, requestId);
+      await this.record(client, ticket, actor.id, 'SUBMIT_AND_ROUTE', null, { groupId: ticket.owner_group_id,requesterId:requester,submittedById:actor.id,delegationId:body.delegationId??null,serviceCode:body.serviceCode,routing:service.routingSnapshot,
+        initialPriority:ticket.priority,priorityPolicyVersion:policy.version,impact:body.impact,urgency:body.urgency,aiEvidence:draftEvidence }, requestId);
       if (ticket.priority_review_state === 'PENDING') {
         await client.query("INSERT INTO priority_review_signals(ticket_id,kind) VALUES ($1,'CANDIDATE')",[ticket.id]);
         await this.record(client,ticket,actor.id,'P1_CANDIDATE',ticket.status,{ priority:'P1',reviewState:'PENDING',responseStarted:true },requestId,ticket);
@@ -342,6 +341,7 @@ export class TicketsService {
     return { ...this.receipt(row), requesterId: row.requester_id, serviceCode: row.service_code, serviceType: row.service_type, formVersion: row.form_version,
       submittedById:row.submitted_by_id,originalServiceCode:row.original_catalog_snapshot?.code??row.service_code,
       subject: row.subject, description: row.description, fields: row.fields, impact: row.impact, urgency: row.urgency,
+      initialPriority:row.initial_priority,priorityPolicyVersion:row.priority_policy_snapshot?.version,
       priority: row.priority, priorityReviewState:row.priority_review_state,priorityCandidateAt:row.priority_candidate_at,
       priorityReviewedAt:row.priority_reviewed_at,priorityReviewedBy:row.priority_reviewed_by,priorityReviewReason:row.priority_review_reason,
       createdAt: row.created_at, updatedAt: row.updated_at };
@@ -351,14 +351,16 @@ export class TicketsService {
     const client = await this.pool.connect();
     try {
       const ticket = await this.accessible(client, actor, id);
-      const events = await client.query('SELECT action, from_status AS "fromStatus", to_status AS "toStatus", detail, created_at AS "createdAt" FROM ticket_events WHERE ticket_id=$1 ORDER BY created_at,id', [id]);
+      const events = await client.query(`SELECT v.action,v.actor_id AS "actorId",e.display_name AS "actorName",v.from_status AS "fromStatus",v.to_status AS "toStatus",v.detail,v.created_at AS "createdAt"
+        FROM ticket_events v LEFT JOIN employees e ON e.id=v.actor_id WHERE v.ticket_id=$1 ORDER BY v.created_at,v.id`, [id]);
       const membership = await client.query('SELECT 1 FROM group_memberships WHERE employee_id=$1 AND group_id=$2', [actor.id, ticket.owner_group_id]);
       const reviewer = await client.query('SELECT 1 FROM priority_reviewers WHERE employee_id=$1 AND group_id=$2',[actor.id,ticket.owner_group_id]);
       const groupMember = !!membership.rowCount || ticket.pending_assignee_id === actor.id || !!reviewer.rowCount;
       const alerts = groupMember && ticket.priority_candidate_at ? await client.query(`SELECT d.state,count(*)::integer AS count
         FROM notification_deliveries d JOIN outbox_events o ON o.id=d.outbox_id WHERE o.ticket_id=$1 AND o.kind='P1_ALERT' GROUP BY d.state`,[id]) : null;
       const available = groupMember && ticket.priority_candidate_at ? await client.query(`SELECT 1 FROM priority_reviewers r
-        JOIN employees e ON e.id=r.employee_id WHERE r.group_id=$1 AND e.active AND e.id<>$2 AND e.id<>$3 LIMIT 1`,[ticket.owner_group_id,ticket.requester_id,ticket.submitted_by_id]) : null;
+        JOIN employees e ON e.id=r.employee_id WHERE r.group_id=$1 AND e.active AND e.id<>$2 AND e.id<>$3
+          AND e.id IS DISTINCT FROM $4 LIMIT 1`,[ticket.owner_group_id,ticket.requester_id,ticket.submitted_by_id,ticket.priority_changed_by]) : null;
       const delegated=!!ticket.delegation_id && await this.delegation(client,actor.id,ticket.delegation_id,false)===ticket.requester_id;
       const feedbackVisible=actor.id===ticket.requester_id || !!membership.rowCount;
       const feedback=feedbackVisible ? await client.query<{rating:number;comment:string|null;createdAt:Date}>(
@@ -422,10 +424,13 @@ export class TicketsService {
         feedback:feedback?.rows[0] ?? null,
         canCorrectClassification:ticket.service_type!=='REQ' && !!membership.rowCount && ['QUEUED','IN_PROGRESS','WAITING_USER','WAITING_VENDOR'].includes(ticket.status)
           && !ticket.pending_assignee_id && (ticket.assignee_id===actor.id&&processing||(!ticket.assignee_id&&ticket.status==='QUEUED'&&dispatcher)),
+        canChangePriority:(dispatcher||!!reviewer.rowCount)&&!['CLOSED','CANCELLED','REJECTED','PENDING_CONFIRMATION'].includes(ticket.status),
+        canSuggestPriority:!!membership.rowCount&&ticket.assignee_id===actor.id&&processing&&!['CLOSED','CANCELLED','REJECTED','PENDING_CONFIRMATION'].includes(ticket.status),
         canReviewPriority:!!reviewer.rowCount && actor.id!==ticket.requester_id && actor.id!==ticket.submitted_by_id
+          && actor.id!==ticket.priority_changed_by
           && ticket.priority_review_state==='PENDING' && !['CLOSED','CANCELLED','REJECTED'].includes(ticket.status),
         ...(alerts ? { priorityAlert:{ reviewersAvailable:!!available?.rowCount,
-          overdue:ticket.priority_review_state==='PENDING' && !!ticket.priority_candidate_at && Date.now()-ticket.priority_candidate_at.getTime()>=P1_REVIEW_REMINDER_MINUTES*60000,
+          overdue:ticket.priority_review_state==='PENDING' && !!ticket.priority_candidate_at && Date.now()-ticket.priority_candidate_at.getTime()>=(ticket.priority_policy_snapshot?.config.reviewMinutes??P1_REVIEW_REMINDER_MINUTES)*60000,
           notificationMode:process.env.NOTIFICATION_MODE ?? 'disabled',deliveries:Object.fromEntries(alerts.rows.map(r=>[r.state,r.count])) } } : {}),
         sla: await this.sla.view(client,id), events: groupMember ? events.rows : events.rows.map(event => ({
         action: event.action, fromStatus: event.fromStatus, toStatus: event.toStatus,
@@ -471,10 +476,11 @@ export class TicketsService {
       throw new BadRequestException({ code:'INVALID_PRIORITY_REVIEW' });
     await this.intake.requireGeneral(actor.id,input as unknown as Record<string,unknown>,'priority-review');
     return this.transaction(async client=>{
+      await client.query('SELECT pg_advisory_xact_lock_shared($1)',[ROLE_AUTHORIZATION_LOCK]);
       await this.requireActive(client,actor);
       const ticket=await this.accessible(client,actor,id,true);
       const reviewer=await client.query('SELECT 1 FROM priority_reviewers WHERE employee_id=$1 AND group_id=$2 FOR SHARE',[actor.id,ticket.owner_group_id]);
-      if (!reviewer.rowCount || actor.id===ticket.requester_id || actor.id===ticket.submitted_by_id) throw new ForbiddenException({ code:'PRIORITY_REVIEWER_REQUIRED' });
+      if (!reviewer.rowCount || actor.id===ticket.requester_id || actor.id===ticket.submitted_by_id || actor.id===ticket.priority_changed_by) throw new ForbiddenException({ code:'PRIORITY_REVIEWER_REQUIRED' });
       const previous=await this.claim(client,actor.id,`priority-review:${id}`,key,input);
       if (previous) return previous as TicketReceipt;
       if (ticket.version!==input.expectedVersion) throw new ConflictException({ code:'VERSION_CONFLICT' });
@@ -488,6 +494,62 @@ export class TicketsService {
         { reason:input.reason.trim(),oldPriority:ticket.priority,priority:input.priority,activeSlaPolicy:'PRESERVE_SNAPSHOT' },requestId,ticket);
       const response=this.receipt(updated.rows[0]);
       await client.query('UPDATE api_idempotency SET response=$4 WHERE actor_id=$1 AND scope=$2 AND key=$3',[actor.id,`priority-review:${id}`,key,JSON.stringify(response)]);
+      return response;
+    });
+  }
+
+  async changePriority(actor:Identity,id:string,body:unknown,key:string,requestId:string):Promise<TicketReceipt> {
+    const b=body as {contentClass:'GENERAL';expectedVersion:number;priority:string;reason:string;mode:'APPLY'|'SUGGEST';impact:Impact;urgency:Urgency};
+    if(!b||typeof b!=='object'||Array.isArray(b)||Object.keys(b).some(k=>!['contentClass','expectedVersion','priority','reason','mode','impact','urgency'].includes(k))
+      ||!Number.isInteger(b.expectedVersion)||b.expectedVersion<1||!['P1','P2','P3','P4'].includes(b.priority)
+      ||!['APPLY','SUGGEST'].includes(b.mode)||!['COMPANY','DEPARTMENT','INDIVIDUAL'].includes(b.impact)||!['HIGH','MEDIUM','LOW'].includes(b.urgency)
+      ||typeof b.reason!=='string'||!b.reason.trim()||b.reason.length>2000)throw new BadRequestException({code:'INVALID_PRIORITY_REVIEW'});
+    await this.intake.requireGeneral(actor.id,b as unknown as Record<string,unknown>,'priority-review');
+    return this.transaction(async client=>{
+      await client.query('SELECT pg_advisory_xact_lock_shared($1)',[ROLE_AUTHORIZATION_LOCK]);
+      await this.requireActive(client,actor);
+      const ticket=await this.accessible(client,actor,id,true);
+      const dispatch=await canDispatch(client,actor.id,ticket.owner_group_id);
+      const reviewer=!!(await client.query('SELECT 1 FROM priority_reviewers WHERE employee_id=$1 AND group_id=$2',[actor.id,ticket.owner_group_id])).rowCount;
+      const engineer=ticket.assignee_id===actor.id&&(await client.query('SELECT ticket_processing_eligible($1,$2) AS eligible',[id,actor.id])).rows[0].eligible;
+      if(!dispatch&&!reviewer&&!engineer)throw new ForbiddenException({code:'PRIORITY_CHANGE_FORBIDDEN'});
+      const previous=await this.claim(client,actor.id,`priority-change:${id}`,key,b);
+      if(previous)return previous as TicketReceipt;
+      if(ticket.version!==b.expectedVersion)throw new ConflictException({code:'VERSION_CONFLICT'});
+      if(['CLOSED','CANCELLED','REJECTED','PENDING_CONFIRMATION'].includes(ticket.status))throw new ConflictException({code:'PRIORITY_CHANGE_NOT_ALLOWED'});
+      const upgrade=Number(b.priority.slice(1))<Number(ticket.priority.slice(1));
+      if(b.mode==='APPLY'){
+        if(ticket.priority_review_state==='PENDING')throw new ConflictException({code:'PRIORITY_REVIEW_REQUIRED'});
+        if(!dispatch&&!reviewer&&!(engineer&&upgrade))throw new ForbiddenException({code:'PRIORITY_CHANGE_FORBIDDEN'});
+        if(ticket.priority==='P1'&&b.priority!=='P1'&&(!reviewer||actor.id===ticket.requester_id||actor.id===ticket.submitted_by_id||actor.id===ticket.priority_changed_by))
+          throw new ForbiddenException({code:'PRIORITY_REVIEWER_REQUIRED'});
+        if(ticket.priority===b.priority&&ticket.impact===b.impact&&ticket.urgency===b.urgency)throw new BadRequestException({code:'PRIORITY_UNCHANGED'});
+      }
+      const policy=(await client.query('SELECT version,approved,config FROM priority_policy_versions ORDER BY version DESC LIMIT 1')).rows[0];
+      const detail={oldPriority:ticket.priority,priority:b.priority,reason:b.reason.trim(),impact:b.impact,urgency:b.urgency,
+        rulePriority:evaluatePriority(policy.config,b.impact,b.urgency,ticket.service_code),policyVersion:policy.version,
+        activeSlaPolicy:upgrade&&b.mode==='APPLY'?'APPEND_STRICTER_OBLIGATION':'PRESERVE_SNAPSHOT'};
+      let updated:TicketRow;
+      if(b.mode==='SUGGEST'){
+        updated=(await client.query<TicketRow>('UPDATE tickets SET version=version+1,updated_at=now() WHERE id=$1 RETURNING *',[id])).rows[0];
+      }else{
+        updated=(await client.query<TicketRow>(`UPDATE tickets SET priority=$2,impact=$3,urgency=$4,priority_changed_by=$5,
+          priority_review_state=CASE WHEN $2='P1' AND priority<>'P1' THEN 'PENDING' WHEN priority='P1' AND $2<>'P1' THEN 'ADJUSTED' ELSE priority_review_state END,
+          priority_candidate_at=CASE WHEN $2='P1' AND priority<>'P1' THEN now() ELSE priority_candidate_at END,
+          priority_reviewed_by=CASE WHEN $2='P1' AND priority<>'P1' THEN NULL WHEN priority='P1' AND $2<>'P1' THEN $5 ELSE priority_reviewed_by END,
+          priority_reviewed_at=CASE WHEN $2='P1' AND priority<>'P1' THEN NULL WHEN priority='P1' AND $2<>'P1' THEN now() ELSE priority_reviewed_at END,
+          priority_review_reason=CASE WHEN $2='P1' AND priority<>'P1' THEN NULL WHEN priority='P1' AND $2<>'P1' THEN $6 ELSE priority_review_reason END,
+          priority_review_generation=priority_review_generation+CASE WHEN $2='P1' AND priority<>'P1' THEN 1 ELSE 0 END,
+          version=version+1,updated_at=now() WHERE id=$1 RETURNING *`,[id,b.priority,b.impact,b.urgency,actor.id,b.reason.trim()])).rows[0];
+        if(upgrade)await this.sla.upgrade(client,id,b.priority,policy.config);
+      }
+      await this.record(client,updated,actor.id,b.mode==='SUGGEST'?'PRIORITY_SUGGESTED':'PRIORITY_CHANGED',ticket.status,detail,requestId,ticket);
+      if(b.mode==='APPLY'&&b.priority==='P1'&&ticket.priority!=='P1'){
+        await client.query("INSERT INTO priority_review_signals(ticket_id,kind,generation) VALUES($1,'CANDIDATE',$2)",[id,updated.priority_review_generation]);
+        await this.record(client,updated,actor.id,'P1_CANDIDATE',ticket.status,{priority:'P1',generation:updated.priority_review_generation,responseStarted:true},requestId,ticket);
+      }
+      const response=this.receipt(updated);
+      await client.query('UPDATE api_idempotency SET response=$4 WHERE actor_id=$1 AND scope=$2 AND key=$3',[actor.id,`priority-change:${id}`,key,JSON.stringify(response)]);
       return response;
     });
   }
@@ -725,7 +787,7 @@ export class TicketsService {
             assignmentDueAt:assignmentDueAt?.toISOString()??ticket.assignment_due_at?.toISOString(),
             assignmentVersion:['REASSIGN','INITIATE_HANDOVER','ASSIGN_OFFER'].includes(body.action)?updated.rows[0].version:undefined } : {}) },requestId,ticket);
       if (body.action==='ACCEPT_HANDOVER' && group!==ticket.owner_group_id && ticket.priority_review_state==='PENDING')
-        await this.record(client,updated.rows[0],actor.id,'P1_REVIEW_ROUTED',next,{ oldGroupId:ticket.owner_group_id,targetGroupId:group },requestId,ticket);
+        await this.record(client,updated.rows[0],actor.id,'P1_REVIEW_ROUTED',next,{ oldGroupId:ticket.owner_group_id,targetGroupId:group,generation:ticket.priority_review_generation },requestId,ticket);
       const response = this.receipt(updated.rows[0]);
       await client.query('UPDATE api_idempotency SET response=$4 WHERE actor_id=$1 AND scope=$2 AND key=$3', [actor.id, `action:${id}`, key, JSON.stringify(response)]);
       return response;
