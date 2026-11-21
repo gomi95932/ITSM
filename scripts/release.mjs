@@ -225,6 +225,18 @@ function overrides(images) {
   return {ITSM_API_IMAGE:images.api,ITSM_WEB_IMAGE:images.web,ITSM_WORKER_IMAGE:images.worker,ITSM_POSTGRES_IMAGE:images.postgres,ITSM_REDIS_IMAGE:images.redis};
 }
 
+export function recoveryImageOverrides(record,manifest) {
+  if (!/^[a-f0-9]{40}$/.test(record?.sha ?? '') || record.sha !== manifest?.sha)
+    throw new Error('RECOVERY_RELEASE_MISMATCH');
+  for (const name of ['api','web','worker','postgres','redis']) {
+    if (!new RegExp(`^ghcr\\.io/gomi95932/itsm-${name}@sha256:[a-f0-9]{64}$`).test(record.images?.[name] ?? '')
+      || (['api','web','worker'].includes(name) && record.images[name] !== manifest.images?.[name]))
+      throw new Error('RECOVERY_IMAGE_MISMATCH');
+  }
+  // Application rollback deliberately retains the recorded database and Redis images.
+  return overrides(record.images);
+}
+
 export async function main(argv) {
   const [command, ...args] = argv;
   const options = {}, positionals = [];
@@ -271,6 +283,10 @@ export async function main(argv) {
       validateEnterpriseUatConfig(config);
     }
     const existing=await optionalJson(currentPath);
+    if (['backup','restore-check'].includes(command) && existing) {
+      const currentManifest=await validateRelease(existing.bundlePath,existing.sha);
+      pinned=recoveryImageOverrides(existing,currentManifest);
+    }
     if (options['verify-development'] || (options['verify-enterprise-uat'] && command!=='check'))
       await validateRelease(root,command === 'deploy' ? positionals[0] : existing?.sha,
         {requireBusinessAcceptance:!!options['verify-development'],requireEnterpriseReadiness:!!options['verify-enterprise-uat']});

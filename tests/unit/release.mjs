@@ -4,8 +4,25 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { createHash } from 'node:crypto';
-import { inventoryFingerprint, main, recoveryMethod, requiredReleaseFiles, schemaFingerprint,
+import { inventoryFingerprint, main, recoveryImageOverrides, recoveryMethod, requiredReleaseFiles, schemaFingerprint,
   validateBusinessAcceptanceConfig, validateConfig, validateRecoveryProof, validateRelease, validateRuntimeContainer } from '../../scripts/release.mjs';
+
+test('standalone recovery binds application images and retains approved rollback data images',() => {
+  const images=Object.fromEntries(['api','web','worker','postgres','redis'].map(name=>[name,
+    `ghcr.io/gomi95932/itsm-${name}@sha256:${'b'.repeat(64)}`]));
+  const manifest={sha:'a'.repeat(40),images};
+  const record={sha:manifest.sha,images:{...images,postgres:`ghcr.io/gomi95932/itsm-postgres@sha256:${'c'.repeat(64)}`}};
+  const result=recoveryImageOverrides(record,manifest);
+  assert.equal(result.ITSM_API_IMAGE,images.api);
+  assert.equal(result.ITSM_POSTGRES_IMAGE,record.images.postgres);
+  assert.equal(Object.keys(result).length,5);
+  for (const change of [r=>{r.sha='d'.repeat(40);},r=>{delete r.images.api;},
+    r=>{r.images.api='local/itsm-api:dev';},r=>{r.images.api=`ghcr.io/gomi95932/itsm-api@sha256:${'e'.repeat(64)}`;},
+    r=>{r.images.redis='redis:latest';}]) {
+    const changed=structuredClone(record);change(changed);
+    assert.throws(()=>recoveryImageOverrides(changed,manifest),/RECOVERY_(RELEASE|IMAGE)_MISMATCH/);
+  }
+});
 
 test('recovery evidence binds table contents and counts to the exact archive',() => {
   const inventory=[{schema:'public',table:'tickets',rows:'2',sha256:'a'.repeat(64)},
