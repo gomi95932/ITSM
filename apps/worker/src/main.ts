@@ -12,6 +12,7 @@ import { deliverNotification, NotificationBeforeSendError, parseNotificationResp
 import { expandNotification, refreshFulfillmentNotificationAudiences, refreshWaitingNotificationAudiences } from './notification-audience.js';
 import { dingtalkDirectory } from './directory-provider.js';
 import { directorySettings,synchronizeDirectory } from './directory-sync.js';
+import { dingtalkPilotUsers } from './dingtalk-pilot.js';
 
 const db = new Pool({ host:process.env.DB_HOST ?? 'db',database:process.env.DB_NAME ?? 'itsm',user:process.env.DB_USER ?? 'itsm',password:process.env.DB_PASSWORD,
   connectionTimeoutMillis:5000,statement_timeout:30000 });
@@ -19,6 +20,7 @@ let stopped = false;
 let timer: ReturnType<typeof setTimeout> | undefined;
 let access: { token:string; expires:number } | undefined;
 const mode = process.env.NOTIFICATION_MODE ?? 'disabled';
+const pilotUserIds=dingtalkPilotUsers(process.env);
 const liveApproval=process.env.ENABLE_LIVE_OA_APPROVAL==='true';
 if(liveApproval&&(!process.env.DINGTALK_CORP_ID||!process.env.DINGTALK_APP_KEY||!process.env.DINGTALK_APP_SECRET))
   throw new Error('OA_APPROVAL_NOT_CONFIGURED');
@@ -93,7 +95,7 @@ async function expand() {
 
 const notificationOptions = {
   transaction, mode, production:process.env.NODE_ENV==='production', live:process.env.ENABLE_LIVE_NOTIFICATIONS==='true',
-  corpId:process.env.DINGTALK_CORP_ID ?? '', agentId:process.env.DINGTALK_AGENT_ID ?? '', publicUrl:process.env.ITSM_PUBLIC_URL ?? '', provider,
+  corpId:process.env.DINGTALK_CORP_ID ?? '', agentId:process.env.DINGTALK_AGENT_ID ?? '', publicUrl:process.env.ITSM_PUBLIC_URL ?? '', provider,pilotUserIds,
 };
 
 async function record(client:PoolClient,row:any,action:string,detail:object,from:string,to:string,previous?:any) {

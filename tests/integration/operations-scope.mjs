@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {randomUUID} from 'node:crypto';
+import {createHash,randomUUID} from 'node:crypto';
 import {spawn} from 'node:child_process';
 import {validOperationsConfig} from '../../packages/contracts/dist/index.js';
 
@@ -43,7 +43,8 @@ async function publishOperations(config){const p=await proposeOperations(config)
   assert.deepEqual(await ok(request(`${operations}/${p.id}/review`,'demo-admin-2',body)),result,'review retry is idempotent');
   return (await readOperations()).current;
 }
-const person={requesterA:'ops-requester-a',requesterB:'ops-requester-b',engineerA:'ops-engineer-a',engineerB:'ops-engineer-b',
+const directoryEngineer=`ding:${createHash('sha256').update(JSON.stringify(['ci-corp','ops-engineer-a'])).digest('hex')}`;
+const person={requesterA:'ops-requester-a',requesterB:'ops-requester-b',engineerA:directoryEngineer,engineerB:'ops-engineer-b',
   backup:'ops-backup-a',lead:'ops-lead',cross:'ops-cross',unknown:'ops-no-site'};
 const siteA='ops-site-a',siteB='ops-site-b',domain='ops-domain',posA='ops-position-a',posB='ops-position-b',posCross='ops-position-cross';
 await sql(`INSERT INTO employees(id,display_name) VALUES ${Object.values(person).map(id=>`(${quote(id)},${quote(id)})`).join(',')};

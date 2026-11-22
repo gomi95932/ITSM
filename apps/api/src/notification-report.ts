@@ -4,7 +4,7 @@ export type NotificationState = typeof notificationStates[number];
 export type NotificationFilter = NotificationState | 'ALL' | 'ATTENTION';
 const reasons = new Set(['LIVE_DELIVERY_DISABLED', 'RECIPIENT_NOT_LINKED', 'TOKEN_FAILED',
   'HTTPS_DEEP_LINK_REQUIRED', 'DINGTALK_NOT_CONFIGURED', 'PROVIDER_UNAVAILABLE', 'DELIVERY_NOT_CONFIRMED',
-  'RECIPIENT_NO_LONGER_AUTHORIZED', 'DINGTALK_SEND_UNCONFIRMED', 'PROVIDER_RECIPIENT_CHANGED', 'LEGACY_DELIVERY_UNVERIFIED']);
+  'RECIPIENT_NO_LONGER_AUTHORIZED', 'RECIPIENT_OUTSIDE_PILOT', 'DINGTALK_SEND_UNCONFIRMED', 'PROVIDER_RECIPIENT_CHANGED', 'LEGACY_DELIVERY_UNVERIFIED']);
 
 export function notificationFilter(value: unknown): NotificationFilter | null {
   if (value === undefined) return 'ALL';

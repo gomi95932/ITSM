@@ -1,4 +1,5 @@
 import { DEFAULT_PRIORITY_POLICY, validPriorityPolicy, type PriorityPolicy } from './priority.js';
+import { validEmployeeId } from './employee-id.js';
 
 export interface OperationsConfig {
   siteEnforced: boolean;
@@ -33,7 +34,7 @@ export function validOperationsConfig(value:unknown):value is OperationsConfig {
   for(const key of ['employeeSites','groupSites','positionSites','serviceSites'] as const){
     const field={employeeSites:'employeeId',groupSites:'groupId',positionSites:'positionId',serviceSites:'serviceCode'}[key];
     const rows=c[key] as unknown as Record<string,unknown>[];
-    if(!unique(rows.map(r=>String(r[field])))||!rows.every(r=>(field==='serviceCode'?code(r[field]):id(r[field]))
+    if(!unique(rows.map(r=>String(r[field])))||!rows.every(r=>(field==='serviceCode'?code(r[field]):field==='employeeId'?validEmployeeId(r[field]):id(r[field]))
       &&Array.isArray(r.siteIds)&&r.siteIds.length>0&&r.siteIds.length<=200&&r.siteIds.every(s=>typeof s==='string'&&enabledSites.has(s))
       &&unique(r.siteIds as string[])))return false;
   }

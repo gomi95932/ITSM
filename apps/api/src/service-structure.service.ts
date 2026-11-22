@@ -1,5 +1,6 @@
 import { BadRequestException,ConflictException,ForbiddenException,Injectable,NotFoundException,UnauthorizedException } from '@nestjs/common';
 import { createHash } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import type { PoolClient } from 'pg';
 import type { ServiceCatalogChange,ServiceStructure,ServiceStructureChange,ServiceStructureOptions,ServiceStructurePreview } from '@itsm/contracts';
 import type { Identity } from './auth.service.js';
@@ -36,14 +37,14 @@ export class ServiceStructureService {
   private async proposer(client:Client,actor:string,previous:ServiceStructure,next:ServiceStructure,catalogChange?:ServiceCatalogChange){
     if((await client.query(`SELECT 1 FROM role_bindings r WHERE r.employee_id=$1 AND r.role_code='PLATFORM_ADMIN'
       AND ${ROLE_EFFECTIVE_SQL}`,[actor])).rowCount)return;
-    if(catalogChange||(['domains','systems','positions','mappings'] as const).some(k=>JSON.stringify(previous[k])!==JSON.stringify(next[k])))
+    if(catalogChange||(['domains','systems','positions','mappings'] as const).some(k=>!isDeepStrictEqual(previous[k],next[k])))
       throw new ForbiddenException({code:'APPOINTMENT_SCOPE_REQUIRED'});
     const groups=(await client.query(`SELECT r.group_id FROM role_bindings r WHERE r.employee_id=$1 AND r.role_code='GROUP_LEAD'
       AND ${ROLE_EFFECTIVE_SQL}`,[actor])).rows.map(r=>r.group_id);
     if(!groups.length)throw new ForbiddenException({code:'APPOINTMENT_SCOPE_REQUIRED'});
     for(const a of [...previous.appointments,...next.appointments]){
       const old=previous.appointments.find(r=>r.id===a.id),updated=next.appointments.find(r=>r.id===a.id);
-      if(JSON.stringify(old)===JSON.stringify(updated))continue;
+      if(isDeepStrictEqual(old,updated))continue;
       if(!groups.includes(previous.positions.find(p=>p.id===a.positionId)?.groupId))throw new ForbiddenException({code:'APPOINTMENT_SCOPE_REQUIRED'});
       if(updated?.enabled&&updated.employeeId===actor)throw new ForbiddenException({code:'SELF_APPOINTMENT_NOT_ALLOWED'});
     }
@@ -233,16 +234,16 @@ export class ServiceStructureService {
 
   private affected(previous:ServiceStructure,next:ServiceStructure):Set<string>{
     const changedPositions=new Set<string>(),people=new Set<string>();
-    for(const p of next.positions)if(JSON.stringify(p)!==JSON.stringify(previous.positions.find(row=>row.id===p.id)))changedPositions.add(p.id);
+    for(const p of next.positions)if(!isDeepStrictEqual(p,previous.positions.find(row=>row.id===p.id)))changedPositions.add(p.id);
     for(const mapping of next.mappings){
       const old=previous.mappings.find(row=>row.serviceCode===mapping.serviceCode);
-      if(JSON.stringify(mapping)!==JSON.stringify(old))for(const m of [mapping,old])if(m){
+      if(!isDeepStrictEqual(mapping,old))for(const m of [mapping,old])if(m){
         changedPositions.add(m.primaryPositionId);m.collaboratingPositionIds.forEach(id=>changedPositions.add(id));
       }
     }
     for(const a of [...previous.appointments,...next.appointments]){
       const old=previous.appointments.find(row=>row.id===a.id),newer=next.appointments.find(row=>row.id===a.id);
-      if(changedPositions.has(a.positionId)||JSON.stringify(old)!==JSON.stringify(newer))people.add(a.employeeId);
+      if(changedPositions.has(a.positionId)||!isDeepStrictEqual(old,newer))people.add(a.employeeId);
     }
     return people;
   }

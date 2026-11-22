@@ -1,5 +1,6 @@
 import { BadRequestException } from '@nestjs/common';
 import type { SupportChangeInput,SupportChangeDecision } from '@itsm/contracts';
+import { validEmployeeId } from '@itsm/contracts';
 
 export const supportUuid=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 export const supportId=(value:unknown):value is string=>typeof value==='string'&&value.length<=100&&/^[a-zA-Z0-9_-]+$/.test(value);
@@ -23,7 +24,7 @@ export function supportProposal(body:unknown):SupportChangeInput {
       ||!text(body.config.description,1000,true))throw invalid();
   }else if(lifecycle){
     if(body.employeeId!==undefined||Object.keys(body.config).length)throw invalid();
-  }else if(!supportId(body.employeeId)||Object.keys(body.config).length)throw invalid();
+  }else if(!validEmployeeId(body.employeeId)||Object.keys(body.config).length)throw invalid();
   return {id:body.id.toLowerCase(),kind:body.kind as SupportChangeInput['kind'],groupId:body.groupId,
     ...(group||lifecycle?{}:{employeeId:body.employeeId as string}),
     config:group?{name:(body.config.name as string).trim(),description:(body.config.description as string).trim()}:{},

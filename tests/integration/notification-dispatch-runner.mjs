@@ -69,6 +69,31 @@ try {
   assert.equal(serializeNotificationRequest({agent_id:agentId,task_id:taskId}),`{"agent_id":123,"task_id":${taskId}}`);
   assert.throws(() => serializeNotificationRequest({task_id:'9223372036854775808'}),/INVALID_DINGTALK_ID/);
   await setup();
+  const outsidePilot=await delivery();
+  await deliver({pilotUserIds:['another-person']});
+  assert.deepEqual(calls,[],'historical queued messages outside the pilot never reach the provider');
+  assert.equal((await row(outsidePilot)).state,'SKIPPED');
+  assert.equal((await row(outsidePilot)).last_error,'RECIPIENT_OUTSIDE_PILOT');
+  const pilot=await delivery();
+  answer=async operation=>operation==='asyncsend_v2'?taskResponse:{send_result:{unread_user_id_list:[userId]}};
+  await deliver({pilotUserIds:[userId]});
+  assert.equal((await row(pilot)).state,'SENDING','included pilot identity can be sent');
+  await due(pilot);await deliver({pilotUserIds:[userId]});
+  assert.equal((await row(pilot)).state,'DELIVERED');
+  const removedPilot=await delivery();
+  await deliver({pilotUserIds:[userId]});
+  const callsBeforeRemoval=calls.length;
+  await due(removedPilot);await deliver({pilotUserIds:['another-person']});
+  assert.equal(calls.length,callsBeforeRemoval,'removed pilot identity is not polled or resent');
+  assert.equal((await row(removedPilot)).last_error,'RECIPIENT_OUTSIDE_PILOT');
+  const beforeSendRemoval=await delivery();
+  const mutablePilot=[userId];let pilotTransactions=0;
+  await deliver({pilotUserIds:mutablePilot,transaction:async fn=>{
+    const result=await transaction(fn);if(++pilotTransactions===1)mutablePilot.length=0;return result;
+  }});
+  assert.equal(calls.length,callsBeforeRemoval,'pilot scope is checked again after committing the dispatch checkpoint');
+  assert.equal((await row(beforeSendRemoval)).last_error,'RECIPIENT_OUTSIDE_PILOT');
+  calls=[];
   const ambiguous = await delivery();
   let checkpoint;
   answer = async () => {

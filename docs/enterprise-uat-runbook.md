@@ -20,6 +20,7 @@
 | `ITSM_PUBLIC_URL` | 可信 HTTPS 根地址，不含用户信息、路径参数或令牌 |
 | `ENABLE_DIRECTORY_SYNC` / `DINGTALK_DIRECTORY_ROOTS` | 显式开关和批准的部门根 ID；首次接入保持 `DIRECTORY_RETIRE_MISSING=false` |
 | `ENABLE_LIVE_NOTIFICATIONS` / `DINGTALK_AGENT_ID` | 指定试点人员后再开启；启用时必须有应用 AgentId |
+| `DINGTALK_PILOT_USER_IDS` | 小范围联调配置确切 userId 名单，同时限制同步入库和通知；另行核对应用可见范围与存量队列 |
 | `ENABLE_LIVE_OA_APPROVAL` / `ENABLE_MANUAL_REQUEST_DELIVERY` | 显式开关，API 与 worker 一致；先核实一个低风险申请模板 |
 | `ENABLE_REQUEST_INTAKE` / `REQUEST_INTAKE_CATALOG_VERSIONS` | 仅在 OA 通过后开放经过验证的确切目录版本 |
 | `ENABLE_VOICE_ASR` / `ENABLE_INTAKE_AI` | 默认关闭；钉钉识别文字为首选语音路线，内部 ASR 仅为另行批准的可选能力，不能阻塞 S1 核心验收 |

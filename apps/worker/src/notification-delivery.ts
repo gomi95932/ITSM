@@ -18,6 +18,7 @@ type ProviderResult = {
 type Options = {
   transaction: <T>(fn: (client: PoolClient) => Promise<T>) => Promise<T>;
   mode: string; production: boolean; live: boolean; corpId: string; agentId: string; publicUrl: string;
+  pilotUserIds?: readonly string[];
   provider: (operation: 'asyncsend_v2' | 'getsendresult', body: object) => Promise<ProviderResult>;
 };
 
@@ -113,6 +114,10 @@ export async function deliverNotification(options: Options): Promise<boolean> {
       await recordState(client,row.id,'SKIPPED','RECIPIENT_NO_LONGER_AUTHORIZED');
       return processed;
     }
+    if (target.userId && options.pilotUserIds && !options.pilotUserIds.includes(target.userId)) {
+      await recordState(client,row.id,'SKIPPED','RECIPIENT_OUTSIDE_PILOT');
+      return processed;
+    }
     if (row.provider_task_id && (!target.userId || row.provider_recipient_hash!==recipientHash(options,target.userId))) {
       await recordState(client,row.id,'REVIEW_REQUIRED','PROVIDER_RECIPIENT_CHANGED');
       return processed;
@@ -157,6 +162,10 @@ export async function deliverNotification(options: Options): Promise<boolean> {
     const target = await recipient(client,row,options.corpId);
     if (!target.authorized || !target.userId || row.provider_recipient_hash!==recipientHash(options,target.userId)) {
       await recordState(client,id,'SKIPPED','RECIPIENT_NO_LONGER_AUTHORIZED');
+      return;
+    }
+    if (options.pilotUserIds && !options.pilotUserIds.includes(target.userId)) {
+      await recordState(client,id,'SKIPPED','RECIPIENT_OUTSIDE_PILOT');
       return;
     }
     let data: ProviderResult;

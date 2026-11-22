@@ -1,10 +1,12 @@
 import { createHash } from 'node:crypto';
 import type { Pool,PoolClient } from 'pg';
 import type { DirectoryProvider,DirectorySnapshot } from './directory-provider.js';
+import { dingtalkPilotUsers } from './dingtalk-pilot.js';
 
-export type DirectorySettings={corpId:string;roots:number[];retireMissing:boolean;maxRemovalPercent:number};
+export type DirectorySettings={corpId:string;roots:number[];retireMissing:boolean;maxRemovalPercent:number;pilotUserIds?:string[]};
 export const directoryScope=(settings:DirectorySettings)=>createHash('sha256')
-  .update(JSON.stringify([settings.corpId,[...settings.roots].sort((a,b)=>a-b)])).digest('hex');
+  .update(JSON.stringify([settings.corpId,[...settings.roots].sort((a,b)=>a-b),
+    ...(settings.pilotUserIds?[[...settings.pilotUserIds].sort()]:[])])).digest('hex');
 export const directoryEmployeeId=(corp:string,user:string)=>`ding:${createHash('sha256').update(JSON.stringify([corp,user])).digest('hex')}`;
 export function directorySettings(env:NodeJS.ProcessEnv):DirectorySettings|undefined {
   if(env.ENABLE_DIRECTORY_SYNC!=='true')return undefined;
@@ -14,10 +16,19 @@ export function directorySettings(env:NodeJS.ProcessEnv):DirectorySettings|undef
   if(!env.DINGTALK_CORP_ID?.trim()||!roots.length||roots.some(value=>!/^\d+$/.test(value)||!Number.isSafeInteger(Number(value))||Number(value)<1)
     ||new Set(roots.map(Number)).size!==roots.length||!rawPercent.trim()||!Number.isFinite(percent)||percent<0||percent>100)
     throw new Error('DIRECTORY_CONFIG_INVALID');
-  return {corpId:env.DINGTALK_CORP_ID.trim(),roots:roots.map(Number),retireMissing:env.DIRECTORY_RETIRE_MISSING==='true',maxRemovalPercent:percent};
+  return {corpId:env.DINGTALK_CORP_ID.trim(),roots:roots.map(Number),retireMissing:env.DIRECTORY_RETIRE_MISSING==='true',maxRemovalPercent:percent,
+    pilotUserIds:dingtalkPilotUsers(env)};
 }
 const safeErrors=new Set(['DIRECTORY_PROVIDER_INVALID','DIRECTORY_PROVIDER_UNAVAILABLE','DIRECTORY_TOKEN_UNAVAILABLE',
-  'DIRECTORY_EMPTY_SNAPSHOT','DIRECTORY_SCOPE_TOO_LARGE','DIRECTORY_SNAPSHOT_CHANGED','DIRECTORY_IDENTITY_CONFLICT','DIRECTORY_REMOVAL_LIMIT']);
+  'DIRECTORY_EMPTY_SNAPSHOT','DIRECTORY_SCOPE_TOO_LARGE','DIRECTORY_SNAPSHOT_CHANGED','DIRECTORY_IDENTITY_CONFLICT','DIRECTORY_REMOVAL_LIMIT',
+  'DIRECTORY_PILOT_PERSON_MISSING']);
+
+export function restrictDirectory(snapshot:DirectorySnapshot,userIds?:readonly string[]):DirectorySnapshot {
+  if(!userIds)return snapshot;
+  const allowed=new Set(userIds),people=snapshot.people.filter(person=>allowed.has(person.userId));
+  if(!allowed.size||[...allowed].some(id=>!people.some(person=>person.userId===id)))throw new Error('DIRECTORY_PILOT_PERSON_MISSING');
+  return {...snapshot,people};
+}
 
 async function applySnapshot(client:PoolClient,runId:string,settings:DirectorySettings,snapshot:DirectorySnapshot){
   const scope=directoryScope(settings),ids=new Set(snapshot.people.map(person=>person.userId));
@@ -80,7 +91,7 @@ export async function synchronizeDirectory(pool:Pool,settings:DirectorySettings,
       WHERE corp_id=$1 AND state='RUNNING'`,[settings.corpId]);
     runId=(await client.query(`INSERT INTO directory_sync_runs(corp_id,scope_hash,state) VALUES($1,$2,'RUNNING') RETURNING id`,
       [settings.corpId,directoryScope(settings)])).rows[0].id;
-    const snapshot=await provider.snapshot(AbortSignal.timeout(120000));
+    const snapshot=restrictDirectory(await provider.snapshot(AbortSignal.timeout(120000)),settings.pilotUserIds);
     await client.query('BEGIN');
     try{
       await client.query('SELECT pg_advisory_xact_lock_shared(71820512)');

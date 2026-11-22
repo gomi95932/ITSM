@@ -15,6 +15,7 @@ test('notification report whitelists states and errors without exposing arbitrar
   assert.equal(notificationState('PROVIDER_PRIVATE_STATE'), 'OTHER');
   assert.equal(notificationReason('Bearer secret'), 'OTHER');
   assert.equal(notificationReason('TOKEN_FAILED'), 'TOKEN_FAILED');
+  assert.equal(notificationReason('RECIPIENT_OUTSIDE_PILOT'), 'RECIPIENT_OUTSIDE_PILOT');
   assert.equal(notificationReason(null), null);
 });
 test('notification metrics distinguish simulation, uncertain outcomes, skips and retries', () => {

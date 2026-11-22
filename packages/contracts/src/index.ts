@@ -1,4 +1,5 @@
 export const API_PREFIX = 'api/v1';
+export { validEmployeeId } from './employee-id.js';
 export * from './priority.js';
 export * from './priority-sla.js';
 export * from './service-structure.js';
