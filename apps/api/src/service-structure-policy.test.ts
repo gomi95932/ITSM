@@ -17,6 +17,16 @@ test('arbitrary domains, systems and positions are data, not fixed business enum
   assert.equal(config.mappings[0].serviceCode,'INC-CUSTOM');
   assert.deepEqual(serviceStructure(config),config);
 });
+test('directory employee identities can hold appointments without widening structure identifiers',()=>{
+  const input=fixture(),employeeId=`ding:${'a'.repeat(64)}`;
+  input.appointments[0].employeeId=employeeId;
+  assert.equal(serviceStructure(input).appointments[0].employeeId,employeeId);
+  for(const invalid of ['ding:abc',`ding:${'A'.repeat(64)}`,`${employeeId}\n`]){
+    input.appointments[0].employeeId=invalid;assert.throws(()=>serviceStructure(input));
+  }
+  input.appointments[0].employeeId=employeeId;input.positions[0].groupId=employeeId;
+  assert.throws(()=>serviceStructure(input));
+});
 test('structure rejects overposting, dangling references and enabled children of disabled parents',()=>{
   for(const mutate of [
     (c:any)=>{c.roles=[];},(c:any)=>{c.domains.push({...c.domains[0]});},

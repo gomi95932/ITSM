@@ -28,6 +28,14 @@ test('new REQ requires explicit initial publisher and controlled approval; exist
   assert.throws(()=>serviceCatalogChange({...value,expectedVersion:2}));
   assert.equal(serviceCatalogChange({...value,expectedVersion:2,initialPublisherId:null}).expectedVersion,2);
 });
+test('a new request catalog can appoint a synchronized directory employee as its publisher',()=>{
+  const initialPublisherId=`ding:${'c'.repeat(64)}`;
+  const value={...fixture(),type:'REQ',code:'REQ-LAB',initialPublisherId,maxValidityDays:30,
+    approval:{templateId:'OA-LAB',steps:[{role:'MANAGER'}]}};
+  assert.equal(serviceCatalogChange(value).initialPublisherId,initialPublisherId);
+  assert.throws(()=>serviceCatalogChange({...value,initialPublisherId:'ding:abc'}));
+  assert.throws(()=>serviceCatalogChange({...value,groupId:initialPublisherId}));
+});
 test('structure proposal preserves validated catalog bundle and rejects unknown top-level data',()=>{
   const body={id:'a8caeb74-5f2c-4a30-bfb2-9ba2fae42e07',expectedVersion:1,config:{domains:[],systems:[],positions:[],appointments:[],mappings:[]},
     reason:'新增目录及岗位映射',contentClass:'GENERAL',catalogChange:fixture()};

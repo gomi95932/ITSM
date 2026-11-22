@@ -17,7 +17,7 @@ const stateLabels: Record<string, string> = { PENDING: '待发送', DISPATCHING:
 const reasonLabels: Record<string, string> = { LIVE_DELIVERY_DISABLED: '真实发送未启用', RECIPIENT_NOT_LINKED: '接收人未绑定钉钉',
   TOKEN_FAILED: '应用令牌获取失败', HTTPS_DEEP_LINK_REQUIRED: '消息链接未满足 HTTPS 要求', DINGTALK_NOT_CONFIGURED: '钉钉应用未配置',
   PROVIDER_UNAVAILABLE: '提供方暂不可用', DELIVERY_NOT_CONFIRMED: '未取得接收人发送确认',
-  RECIPIENT_NO_LONGER_AUTHORIZED: '接收人资格已失效', DINGTALK_SEND_UNCONFIRMED: '发送结果不确定',
+  RECIPIENT_NO_LONGER_AUTHORIZED: '接收人资格已失效', RECIPIENT_OUTSIDE_PILOT: '接收人不在试点范围', DINGTALK_SEND_UNCONFIRMED: '发送结果不确定',
   PROVIDER_RECIPIENT_CHANGED: '接收人绑定已变更', LEGACY_DELIVERY_UNVERIFIED: '历史发送缺少可靠验证', OTHER: '其他原因，需受控核查' };
 type Metrics = { deliveries: number; tickets: number; attention: number; states: Record<string, number>;
   reasons: { code: string; count: number }[] };

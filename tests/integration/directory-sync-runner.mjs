@@ -82,6 +82,17 @@ try{
   assert.equal(await row(employee('new-before-conflict')),undefined,'identity conflict rolls back earlier inserts');
   await db.query(`UPDATE identity_links SET employee_id=$2 WHERE corp_id=$1 AND ding_user_id='a'`,[corp,employee('a')]);
 
+  result=await sync([...all,'pilot-new','outside-pilot'],{pilotUserIds:['pilot-new']});
+  assert.equal(result.state,'SUCCEEDED');assert.equal(result.people,1);
+  assert.ok(await row(employee('pilot-new')));
+  assert.equal(await row(employee('outside-pilot')),undefined,'department peers outside the pilot are never imported');
+  const pilotSnapshot=JSON.stringify(await row(employee('pilot-new')));
+  result=await sync([...all,'pilot-new','new-before-missing'],{pilotUserIds:['pilot-new','missing','new-before-missing']});
+  assert.equal(result.errorCode,'DIRECTORY_PILOT_PERSON_MISSING');
+  assert.equal(await row(employee('new-before-missing')),undefined,'incomplete pilot fails before any insert');
+  assert.equal(JSON.stringify(await row(employee('pilot-new'))),pilotSnapshot);
+  assert.equal(await absence('b'),0,'narrowing the scope never retires prior department peers');
+
   const locker=await db.connect();
   try{
     await locker.query('SELECT pg_advisory_lock(71820535)');
@@ -107,7 +118,7 @@ try{
   }
   console.log('Directory synchronization verified: stable identity, no privilege grant, session preservation/revocation, opt-in retirement, reactivation, failure atomicity, scope changes, removal limit, identity conflicts, worker concurrency and API authorization');
 }finally{
-  const ids=[legacy,manual,other,...['a','b','new-before-conflict'].map(employee)];
+  const ids=[legacy,manual,other,...['a','b','new-before-conflict','pilot-new','outside-pilot','new-before-missing'].map(employee)];
   await db.query('DELETE FROM directory_people WHERE corp_id=$1',[corp]);
   await db.query('DELETE FROM directory_sync_runs WHERE corp_id=$1',[corp]);
   await db.query('DELETE FROM identity_links WHERE corp_id=$1',[corp]);

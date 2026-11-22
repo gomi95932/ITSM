@@ -1,5 +1,6 @@
 import { BadRequestException,ConflictException,ForbiddenException,Injectable,NotFoundException,UnauthorizedException } from '@nestjs/common';
 import { createHash } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import type { PoolClient } from 'pg';
 import type { ServiceCatalogChange,ServiceStructure,ServiceStructureChange,ServiceStructureOptions,ServiceStructurePreview } from '@itsm/contracts';
 import type { Identity } from './auth.service.js';
@@ -24,11 +25,80 @@ export class ServiceStructureService {
       AND ${ROLE_EFFECTIVE_SQL}`,[actor])).rowCount)throw new NotFoundException();
   }
 
-  private async writer(client:PoolClient,actor:string){
+  private async writer(client:PoolClient,actor:string,adminRequired=true){
     await client.query('SELECT pg_advisory_xact_lock($1)',[ROLE_AUTHORIZATION_LOCK]);
     if(!(await client.query('SELECT id FROM employees WHERE id=$1 AND active FOR SHARE',[actor])).rowCount)
       throw new UnauthorizedException({code:'EMPLOYEE_DISABLED'});
-    await this.admin(client,actor);
+    if(adminRequired)await this.admin(client,actor);
+    else if(!(await client.query(`SELECT 1 FROM role_bindings r WHERE r.employee_id=$1
+      AND r.role_code IN ('PLATFORM_ADMIN','GROUP_LEAD') AND ${ROLE_EFFECTIVE_SQL}`,[actor])).rowCount)throw new NotFoundException();
+  }
+
+  private async proposer(client:Client,actor:string,previous:ServiceStructure,next:ServiceStructure,catalogChange?:ServiceCatalogChange){
+    if((await client.query(`SELECT 1 FROM role_bindings r WHERE r.employee_id=$1 AND r.role_code='PLATFORM_ADMIN'
+      AND ${ROLE_EFFECTIVE_SQL}`,[actor])).rowCount)return;
+    if(catalogChange||(['domains','systems','positions','mappings'] as const).some(k=>!isDeepStrictEqual(previous[k],next[k])))
+      throw new ForbiddenException({code:'APPOINTMENT_SCOPE_REQUIRED'});
+    const groups=(await client.query(`SELECT r.group_id FROM role_bindings r WHERE r.employee_id=$1 AND r.role_code='GROUP_LEAD'
+      AND ${ROLE_EFFECTIVE_SQL}`,[actor])).rows.map(r=>r.group_id);
+    if(!groups.length)throw new ForbiddenException({code:'APPOINTMENT_SCOPE_REQUIRED'});
+    for(const a of [...previous.appointments,...next.appointments]){
+      const old=previous.appointments.find(r=>r.id===a.id),updated=next.appointments.find(r=>r.id===a.id);
+      if(isDeepStrictEqual(old,updated))continue;
+      if(!groups.includes(previous.positions.find(p=>p.id===a.positionId)?.groupId))throw new ForbiddenException({code:'APPOINTMENT_SCOPE_REQUIRED'});
+      if(updated?.enabled&&updated.employeeId===actor)throw new ForbiddenException({code:'SELF_APPOINTMENT_NOT_ALLOWED'});
+    }
+  }
+
+  async appointments(actor:Identity){return this.db.transaction(async client=>{
+    await client.query('SELECT pg_advisory_xact_lock_shared($1)',[ROLE_AUTHORIZATION_LOCK]);
+    const isAdmin=!!(await client.query(`SELECT 1 FROM role_bindings r WHERE r.employee_id=$1 AND r.role_code='PLATFORM_ADMIN'
+      AND ${ROLE_EFFECTIVE_SQL}`,[actor.id])).rowCount;
+    const groups=isAdmin?(await client.query('SELECT id AS group_id FROM support_groups WHERE enabled')).rows.map(r=>r.group_id)
+      :(await client.query(`SELECT r.group_id FROM role_bindings r WHERE r.employee_id=$1 AND r.role_code='GROUP_LEAD'
+      AND ${ROLE_EFFECTIVE_SQL}`,[actor.id])).rows.map(r=>r.group_id);
+    if(!groups.length)throw new NotFoundException();
+    const current=await this.current(client),positions=current.config.positions.filter(p=>groups.includes(p.groupId));
+    return {version:current.version,positions,items:current.config.appointments.filter(a=>positions.some(p=>p.id===a.positionId)),
+      people:(await client.query(`SELECT e.id,e.display_name AS name,ARRAY(SELECT group_id FROM group_memberships WHERE employee_id=e.id) AS groups
+        FROM employees e WHERE e.active AND EXISTS(SELECT 1 FROM group_memberships m WHERE m.employee_id=e.id AND m.group_id=ANY($1::text[])) ORDER BY e.display_name,e.id LIMIT 1000`,[groups])).rows,
+      proposals:(await client.query(`SELECT id,status,reason,review_reason AS "reviewReason",created_at AS "createdAt" FROM service_structure_proposals
+        WHERE proposed_by=$1 ORDER BY created_at DESC LIMIT 50`,[actor.id])).rows};});}
+
+  async proposeAppointment(actor:Identity,body:unknown){
+    const b=body as Record<string,unknown>;
+    if(!b||typeof b!=='object'||Array.isArray(b)||Object.keys(b).some(k=>!['id','expectedVersion','appointment','reason','contentClass'].includes(k)))
+      throw new BadRequestException({code:'INVALID_SERVICE_STRUCTURE'});
+    const current=await this.current(this.db.pool),a=b.appointment as ServiceStructure['appointments'][number];
+    if(!a||typeof a!=='object')throw new BadRequestException({code:'INVALID_SERVICE_STRUCTURE'});
+    const config={...current.config,appointments:[...current.config.appointments.filter(row=>row.id!==a.id),a]};
+    const result=await this.propose(actor,{id:b.id,expectedVersion:b.expectedVersion,config,reason:b.reason,contentClass:b.contentClass});
+    return {id:result.id,status:result.status,version:result.version};
+  }
+
+  async revokeAppointment(actor:Identity,body:unknown){
+    const b=body as Record<string,unknown>;
+    if(!b||typeof b!=='object'||Array.isArray(b)||Object.keys(b).some(k=>!['id','expectedVersion','appointmentId','reason','contentClass'].includes(k))
+      ||!structureUuid.test(String(b.id))||!Number.isInteger(b.expectedVersion)||typeof b.appointmentId!=='string'
+      ||typeof b.reason!=='string'||!b.reason.trim()||b.reason.length>500)throw new BadRequestException({code:'INVALID_SERVICE_STRUCTURE'});
+    await this.intake.requireGeneral(actor.id,b,'service-structure');
+    return this.db.transaction(async client=>{
+      await this.writer(client,actor.id,false);
+      const old=(await client.query('SELECT * FROM appointment_emergency_revocations WHERE id=$1',[b.id])).rows[0];
+      if(old){if(old.actor_id!==actor.id||old.appointment_id!==b.appointmentId||old.expected_version!==b.expectedVersion||old.reason!==String(b.reason).trim())
+        throw new ConflictException({code:'IDEMPOTENCY_KEY_REUSED'});return {version:old.published_version};}
+      const current=await this.current(client);if(current.version!==b.expectedVersion)throw new ConflictException({code:'SERVICE_STRUCTURE_VERSION_CONFLICT'});
+      const a=current.config.appointments.find(a=>a.id===b.appointmentId);if(!a||!a.enabled)throw new NotFoundException();
+      const config=serviceStructure({...current.config,appointments:current.config.appointments.map(row=>row.id===a.id?{...row,enabled:false}:row)});
+      await this.proposer(client,actor.id,current.config,config);
+      const version=current.version+1;
+      await client.query('INSERT INTO service_structure_versions(version,config) VALUES($1,$2)',[version,JSON.stringify(config)]);
+      await client.query('INSERT INTO appointment_emergency_revocations(id,appointment_id,actor_id,expected_version,published_version,reason) VALUES($1,$2,$3,$4,$5,$6)',
+        [b.id,a.id,actor.id,b.expectedVersion,version,String(b.reason).trim()]);
+      await client.query('UPDATE service_structure_current SET version=$1 WHERE id=true',[version]);
+      await client.query('INSERT INTO operational_audits(actor_id,action,target_id) VALUES($1,$2,$3)',[actor.id,'APPOINTMENT_EMERGENCY_REVOKED',b.id]);
+      return {version};
+    });
   }
 
   private async current(client:Client):Promise<{version:number;config:ServiceStructure}>{
@@ -142,7 +212,7 @@ export class ServiceStructureService {
     const input=structureProposal(body);
     await this.intake.requireGeneral(actor.id,input as unknown as Record<string,unknown>,'service-structure');
     return this.db.transaction(async client=>{
-      await this.writer(client,actor.id);
+      await this.writer(client,actor.id,false);
       const hash=createHash('sha256').update(JSON.stringify(input)).digest('hex');
       const old=await client.query(`SELECT ${columns},request_hash FROM service_structure_proposals WHERE id=$1`,[input.id]);
       if(old.rowCount){
@@ -151,6 +221,7 @@ export class ServiceStructureService {
       }
       const current=await this.current(client);
       if(current.version!==input.expectedVersion)throw new ConflictException({code:'SERVICE_STRUCTURE_VERSION_CONFLICT'});
+      await this.proposer(client,actor.id,current.config,input.config,input.catalogChange);
       const catalogBase=input.catalogChange?await validateCatalogBundle(client,actor.id,input.catalogChange,input.config):undefined;
       await this.validate(client,input.config,current.config,input.catalogChange);
       const row=await client.query(`INSERT INTO service_structure_proposals(id,expected_version,config,request_hash,proposed_by,reason,catalog_change,catalog_base)
@@ -163,16 +234,16 @@ export class ServiceStructureService {
 
   private affected(previous:ServiceStructure,next:ServiceStructure):Set<string>{
     const changedPositions=new Set<string>(),people=new Set<string>();
-    for(const p of next.positions)if(JSON.stringify(p)!==JSON.stringify(previous.positions.find(row=>row.id===p.id)))changedPositions.add(p.id);
+    for(const p of next.positions)if(!isDeepStrictEqual(p,previous.positions.find(row=>row.id===p.id)))changedPositions.add(p.id);
     for(const mapping of next.mappings){
       const old=previous.mappings.find(row=>row.serviceCode===mapping.serviceCode);
-      if(JSON.stringify(mapping)!==JSON.stringify(old))for(const m of [mapping,old])if(m){
+      if(!isDeepStrictEqual(mapping,old))for(const m of [mapping,old])if(m){
         changedPositions.add(m.primaryPositionId);m.collaboratingPositionIds.forEach(id=>changedPositions.add(id));
       }
     }
     for(const a of [...previous.appointments,...next.appointments]){
       const old=previous.appointments.find(row=>row.id===a.id),newer=next.appointments.find(row=>row.id===a.id);
-      if(changedPositions.has(a.positionId)||JSON.stringify(old)!==JSON.stringify(newer))people.add(a.employeeId);
+      if(changedPositions.has(a.positionId)||!isDeepStrictEqual(old,newer))people.add(a.employeeId);
     }
     return people;
   }
@@ -194,8 +265,10 @@ export class ServiceStructureService {
       if(p.version!==input.expectedVersion)throw new ConflictException({code:'SERVICE_STRUCTURE_VERSION_CONFLICT'});
       let published:number|null=null;
       if(input.decision==='APPROVE'){
-        await this.admin(client,p.proposedBy);
         const current=await this.current(client),config=serviceStructure(p.config);
+        if(!(await client.query('SELECT id FROM employees WHERE id=$1 AND active FOR SHARE',[p.proposedBy])).rowCount)
+          throw new ConflictException({code:'SERVICE_STRUCTURE_PROPOSER_UNAVAILABLE'});
+        await this.proposer(client,p.proposedBy,current.config,config,p.catalogChange??undefined);
         if(current.version!==p.expectedVersion)throw new ConflictException({code:'SERVICE_STRUCTURE_VERSION_CONFLICT'});
         if(this.affected(current.config,config).has(actor.id))throw new ForbiddenException({code:'SERVICE_STRUCTURE_INDEPENDENT_REVIEW_REQUIRED'});
         const catalogChange=p.catalogChange?serviceCatalogChange(p.catalogChange):undefined;

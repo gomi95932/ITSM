@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { dingtalkDirectory } from './directory-provider.js';
-import { directoryEmployeeId,directoryScope,directorySettings } from './directory-sync.js';
+import { directoryEmployeeId,directoryScope,directorySettings,restrictDirectory } from './directory-sync.js';
+import { dingtalkPilotUsers } from './dingtalk-pilot.js';
 const person=(id:string)=>({userid:id,name:`Person ${id}`,dept_id_list:[1,2],title:'Engineer',active:false});
 const result=(value:unknown)=>({errcode:0,result:value});
 const settings={roots:[1],token:async()=> 'fixture-only'};
@@ -47,4 +48,20 @@ test('configuration requires explicit scope and stable opaque IDs never depend o
   assert.notEqual(directoryEmployeeId('first','same'),directoryEmployeeId('second','same'));
   assert.throws(()=>directorySettings({ENABLE_DIRECTORY_SYNC:'true',DINGTALK_CORP_ID:'fixture',DINGTALK_DIRECTORY_ROOTS:'1',DIRECTORY_MAX_REMOVAL_PERCENT:'NaN'}));
   assert.throws(()=>directorySettings({ENABLE_DIRECTORY_SYNC:'true',DINGTALK_CORP_ID:'fixture',DINGTALK_DIRECTORY_ROOTS:'1',DIRECTORY_MAX_REMOVAL_PERCENT:' '}));
+});
+test('pilot scope requires exact unique identities and changes directory scope without changing legacy scope',()=>{
+  assert.equal(dingtalkPilotUsers({}),undefined);assert.equal(dingtalkPilotUsers({DINGTALK_PILOT_USER_IDS:''}),undefined);
+  assert.deepEqual(dingtalkPilotUsers({DINGTALK_PILOT_USER_IDS:'pilot-a, pilot-b'}),['pilot-a','pilot-b']);
+  for(const raw of [' ', 'a,', 'a,a','a\nb',Array.from({length:31},(_,i)=>`person-${i}`).join(',')])
+    assert.throws(()=>dingtalkPilotUsers({DINGTALK_PILOT_USER_IDS:raw}),/DINGTALK_PILOT_CONFIG_INVALID/);
+  const config=directorySettings({ENABLE_DIRECTORY_SYNC:'true',DINGTALK_CORP_ID:'fixture',DINGTALK_DIRECTORY_ROOTS:'1',DINGTALK_PILOT_USER_IDS:'a,b'})!;
+  assert.deepEqual(config.pilotUserIds,['a','b']);
+  assert.equal(directoryScope(config),directoryScope({...config,pilotUserIds:['b','a']}));
+  assert.notEqual(directoryScope(config),directoryScope({...config,pilotUserIds:undefined}));
+  assert.notEqual(directoryScope(config),directoryScope({...config,pilotUserIds:['a']}));
+  const snapshot={people:['a','b','outside'].map(userId=>({userId,name:userId,departmentIds:[1],jobTitle:''})),departmentCount:1};
+  assert.deepEqual(restrictDirectory(snapshot,['a','b']).people.map(p=>p.userId),['a','b']);
+  assert.equal(snapshot.people.length,3,'filter does not mutate the provider snapshot');
+  assert.throws(()=>restrictDirectory(snapshot,['a','missing']),/DIRECTORY_PILOT_PERSON_MISSING/);
+  assert.throws(()=>restrictDirectory(snapshot,[]),/DIRECTORY_PILOT_PERSON_MISSING/);
 });

@@ -24,6 +24,11 @@ export function transition(status: TicketStatus, role: ActorRole, input: Omit<Ti
       };
   const handover = ['INITIATE_HANDOVER','CONTINUATION_PROPOSE','CONTINUATION_APPROVE','CONTINUATION_REJECT','CONTINUATION_REVOKE','ACCEPT_HANDOVER','DECLINE_HANDOVER','CANCEL_HANDOVER','ACCEPT_OFFER','DECLINE_OFFER','CANCEL_OFFER'].includes(action);
   const active = ['QUEUED','IN_PROGRESS','WAITING_USER','WAITING_VENDOR','PENDING_CONFIRMATION'].includes(status);
+  if(action==='FORCE_TAKEOVER'){
+    if(!agent||!active)throw new ConflictException({code:'INVALID_TRANSITION'});
+    if(!input.targetGroupId||!input.targetAssigneeId||!input.reason?.trim())throw new BadRequestException({code:'TAKEOVER_DETAILS_REQUIRED'});
+    return status==='QUEUED'?'IN_PROGRESS':status;
+  }
   const next = agent && handover && active ? ['ACCEPT_HANDOVER','ACCEPT_OFFER'].includes(action) && status === 'QUEUED' ? 'IN_PROGRESS' : status : allowed[status]?.[action];
   if (!next) throw new ConflictException({ code: 'INVALID_TRANSITION' });
   if (action === 'ACCEPT' && !input.comment?.trim()) throw new BadRequestException({ code: 'HUMAN_RESPONSE_REQUIRED' });

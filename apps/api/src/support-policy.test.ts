@@ -4,6 +4,12 @@ import { supportDecision,supportIndependentReview,supportProposal } from './supp
 
 const proposal={id:'a8caeb74-5f2c-4a30-bfb2-9ba2fae42e07',kind:'MEMBER_ADD',groupId:'service-desk',employeeId:'agent-1',
   config:{},expectedGroupVersion:1,reason:' Reviewed roster ',contentClass:'GENERAL'};
+test('directory employees can join support groups while group identifiers remain strict',()=>{
+  const employeeId=`ding:${'b'.repeat(64)}`;
+  assert.equal(supportProposal({...proposal,employeeId}).employeeId,employeeId);
+  assert.throws(()=>supportProposal({...proposal,employeeId,groupId:employeeId}));
+  for(const invalid of ['ding:abc',`${employeeId}\n`])assert.throws(()=>supportProposal({...proposal,employeeId:invalid}));
+});
 test('support proposals are strict, canonical and versioned',()=>{
   assert.equal(supportProposal(proposal).reason,'Reviewed roster');
   for(const patch of [{canReview:true},{kind:'UNKNOWN'},{expectedGroupVersion:null},{config:{active:true}},

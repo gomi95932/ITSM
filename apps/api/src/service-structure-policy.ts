@@ -1,5 +1,6 @@
 import { BadRequestException } from '@nestjs/common';
 import type { ServiceStructure,ServiceStructureProposal } from '@itsm/contracts';
+import { validEmployeeId } from '@itsm/contracts';
 import { serviceCatalogChange } from './service-catalog-policy.js';
 
 const object=(value:unknown):value is Record<string,unknown>=>!!value&&typeof value==='object'&&!Array.isArray(value);
@@ -30,7 +31,7 @@ export function serviceStructure(value:unknown):ServiceStructure {
     return {id:row.id,name:row.name.trim(),domainId:row.domainId,groupId:row.groupId,enabled:row.enabled};
   });
   const appointments=rows(value.appointments,['id','positionId','employeeId','duty','validFrom','validTo','enabled'],3000).map(row=>{
-    if(!id(row.id)||!id(row.positionId)||!id(row.employeeId)||!['PRIMARY','BACKUP'].includes(String(row.duty))
+    if(!id(row.id)||!id(row.positionId)||!validEmployeeId(row.employeeId)||!['PRIMARY','BACKUP'].includes(String(row.duty))
       ||!timestamp(row.validFrom)||!timestamp(row.validTo)||Date.parse(row.validTo)<=Date.parse(row.validFrom)
       ||Date.parse(row.validTo)-Date.parse(row.validFrom)>366*86400000||typeof row.enabled!=='boolean')return invalid();
     return {id:row.id,positionId:row.positionId,employeeId:row.employeeId,duty:row.duty as 'PRIMARY'|'BACKUP',

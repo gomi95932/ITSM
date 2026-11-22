@@ -17,6 +17,41 @@ jobs:
   security:
     uses: ./.github/workflows/security.yml
 
+  authorization-performance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: itsm
+          POSTGRES_PASSWORD: disposable-ci-only
+          POSTGRES_DB: itsm
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd="pg_isready -U itsm -d itsm"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+    env:
+      DB_HOST: 127.0.0.1
+      DB_PORT: '5432'
+      DB_NAME: itsm
+      DB_USER: itsm
+      DB_PASSWORD: disposable-ci-only
+      ITSM_SEED_DEV_DATA: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: node scripts/migrate.mjs
+      - run: npm run build -w @itsm/contracts && npm run build -w @itsm/workflow && npm run build -w @itsm/worker
+      - name: Verify bounded ownership scans, fair rotation and concurrent authorization revocation
+        run: node tests/integration/authorization-performance.mjs
+      - name: Verify notification authorization fairness, immediate revocation and concurrent deduplication
+        run: node tests/integration/notification-authorization-performance.mjs
+
   build-test:
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -83,6 +118,8 @@ jobs:
         run: node tests/integration/attachments.mjs
       - name: Verify immediate session revocation after employee or identity changes
         run: node tests/integration/identity-revocation.mjs
+      - name: Verify independent OIDC identity, callback replay and session revocation with protocol fixtures
+        run: node tests/integration/oidc-login.mjs
       - name: Verify directory synchronization, safe retirement and administrator permissions
         run: node tests/integration/directory-sync.mjs
       - name: Verify ordinary intake blocks sensitive payloads without persistence
@@ -123,6 +160,8 @@ jobs:
         run: node tests/integration/priority-review.mjs
       - name: Verify configurable priority governance and preserved SLA obligations
         run: node tests/integration/priority-governance.mjs
+      - name: Verify independently approved service calendars and immutable SLA snapshots
+        run: node tests/integration/service-calendar.mjs
       - name: Verify GEN intake, classification and revocable proxy boundaries
         run: node tests/integration/intake-triage.mjs
       - name: Verify appointment withdrawal, supervised continuity and expiring per-ticket exceptions
@@ -130,7 +169,21 @@ jobs:
       - name: Install CI browser
         run: npx playwright install --with-deps chromium
       - name: Exercise desktop and mobile employee and agent flows
-        run: npx playwright test --output test-results/workspace
+        run: |
+          mkdir -p test-results
+          # Keep only wait metadata, never SQL text, credentials or business payloads.
+          (
+            for sample in $(seq 1 180); do
+              timeout 5s docker compose --env-file "$ITSM_CI_ENV" -f infra/compose/compose.yaml exec -T db sh -ec '
+                export PGPASSWORD="$POSTGRES_PASSWORD"
+                exec psql -X -v ON_ERROR_STOP=1 -U itsm -d itsm -At
+              ' < tests/support/database-waits.sql || true
+              sleep 2
+            done
+          ) > test-results/database-waits.jsonl 2>/dev/null &
+          monitor_pid=$!
+          trap 'kill "$monitor_pid" 2>/dev/null || true; wait "$monitor_pid" 2>/dev/null || true' EXIT
+          npx playwright test --output test-results/workspace
       - name: Verify REQ policy versions, publisher scope and fail-closed OA boundary
         run: node tests/integration/request-catalog.mjs
       - name: Verify durable OA and controlled manual fulfillment without enabling live service requests
@@ -214,10 +267,12 @@ jobs:
           "${compose[@]}" up -d --no-deps --force-recreate --wait --wait-timeout 90 web
           node tests/integration/request-intake.mjs
           ITSM_REQUEST_INTAKE_CI_ENABLED=true npx playwright test tests/e2e/request-intake.spec.ts --output test-results/request-intake
+      - name: Verify trusted sites, service SLA snapshots and emergency ownership in final disposable phase
+        run: node tests/integration/operations-scope.mjs
       - name: Verify browser evidence survived all isolated test phases
         run: |
           for viewport in desktop mobile; do
-            for scene in attachments directory voice notification-deeplink request-lifecycle-feedback reports-requests reports-personal reports-history reports-notifications waiting-detail waiting-reports request-delivery-completed request-intake-progress; do
+            for scene in attachments directory voice notification-deeplink request-lifecycle-feedback reports-requests reports-personal reports-history reports-notifications waiting-detail waiting-reports request-delivery-completed request-intake-progress operations appointments; do
               test -s "test-results/${scene}-${viewport}.png"
             done
           done
@@ -234,7 +289,7 @@ jobs:
   publish:
     name: publish-${{ matrix.app }}
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [build-test, security]
+    needs: [build-test, security, authorization-performance]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -262,7 +317,7 @@ jobs:
   publish-data-images:
     name: publish-${{ matrix.app }}
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [build-test, security]
+    needs: [build-test, security, authorization-performance]
     runs-on: ubuntu-latest
     permissions:
       contents: read

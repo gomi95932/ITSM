@@ -30,6 +30,10 @@ import { IntakeInterpreterService } from './intake-interpreter.service.js';
 import { AttachmentsController } from './attachments.controller.js';
 import { AttachmentsService } from './attachments.service.js';
 import { PriorityPolicyController } from './priority-policy.controller.js';
+import { SlaCalendarController } from './sla-calendar.controller.js';
+import { OidcController } from './oidc.controller.js';
+import { OidcService } from './oidc.service.js';
+import { OperationsController } from './operations.controller.js';
 
-@Module({ controllers: [PriorityPolicyController,HealthController, TicketsController,AuthController,WorkspaceController,DelegationsController,RequestCatalogController,KnowledgeController,ReportsController,RolesController,RoutingConfigController,SupportController,ServiceStructureController,FulfillmentController,DirectoryController,AttachmentsController], providers: [Database,AuthService,TicketsService,SlaService,IntakePolicyService,RequestCatalogService,KnowledgeService,RolesService,RoutingConfigService,SupportService,ServiceStructureService,FulfillmentService,VoiceAsrService,IntakeInterpreterService,AttachmentsService] })
+@Module({ controllers: [OperationsController,OidcController,SlaCalendarController,PriorityPolicyController,HealthController, TicketsController,AuthController,WorkspaceController,DelegationsController,RequestCatalogController,KnowledgeController,ReportsController,RolesController,RoutingConfigController,SupportController,ServiceStructureController,FulfillmentController,DirectoryController,AttachmentsController], providers: [Database,AuthService,OidcService,TicketsService,SlaService,IntakePolicyService,RequestCatalogService,KnowledgeService,RolesService,RoutingConfigService,SupportService,ServiceStructureService,FulfillmentService,VoiceAsrService,IntakeInterpreterService,AttachmentsService] })
 export class AppModule {}

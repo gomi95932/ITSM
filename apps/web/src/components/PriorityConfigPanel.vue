@@ -5,6 +5,7 @@ import {DEFAULT_PRIORITY_POLICY,PRIORITIES,PRIORITY_LABELS,type PriorityPolicy,t
 import {api,errorText} from '../api';
 import {createRequestKey} from '../request-key';
 import ContentBoundary from './ContentBoundary.vue';
+import SlaCalendarPanel from './SlaCalendarPanel.vue';
 type Proposal={id:string;config:PriorityPolicy;reason:string;proposed_by:string;status:string;review_reason:string|null;version:number;expected_version:number};
 const props=defineProps<{user:SessionUser}>();
 const config=ref<PriorityPolicy>(structuredClone(DEFAULT_PRIORITY_POLICY)),version=ref(1),approved=ref(false),proposals=ref<Proposal[]>([]),services=ref<CatalogItem[]>([]);
@@ -46,6 +47,7 @@ onMounted(load);
         <div v-if="p.status==='PENDING'&&p.proposed_by!==user.id" class="form-footer"><button class="secondary" :disabled="busy||!reviewSafe||!reviewReason.trim()" @click="review(p,'REJECT')"><X :size="16"/>拒绝</button><button class="primary" :disabled="busy||!reviewSafe||!reviewReason.trim()" @click="review(p,'APPROVE')"><Check :size="16"/>批准</button></div>
       </div><p v-if="!proposals.length" class="muted">暂无配置变更</p>
     </section>
+    <SlaCalendarPanel :user="user"/>
   </section>
 </template>
 <style scoped>

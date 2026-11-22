@@ -1,5 +1,6 @@
 import { BadRequestException } from '@nestjs/common';
 import type { ServiceCatalogChange } from '@itsm/contracts';
+import { validEmployeeId } from '@itsm/contracts';
 import { validateRequestCatalogPublish } from './request-catalog.service.js';
 
 const plain=(value:unknown):value is Record<string,unknown>=>!!value&&typeof value==='object'&&!Array.isArray(value);
@@ -19,7 +20,7 @@ export function serviceCatalogChange(value:unknown):ServiceCatalogChange {
     ||(value.sortOrder as number)<0||(value.sortOrder as number)>100000)invalid();
   const req=value.type==='REQ';
   if(!req&&(value.approval!==null||value.maxValidityDays!==null||value.initialPublisherId!==null))invalid();
-  if(req&&((value.expectedVersion===0&&!id(value.initialPublisherId))||(value.expectedVersion!==0&&value.initialPublisherId!==null)))invalid();
+  if(req&&((value.expectedVersion===0&&!validEmployeeId(value.initialPublisherId))||(value.expectedVersion!==0&&value.initialPublisherId!==null)))invalid();
   // Both entry types use the same controlled field schema; REQ retains its existing approval validator.
   const checked=validateRequestCatalogPublish({contentClass:'GENERAL',expectedVersion:Math.max(1,value.expectedVersion as number),
     name:value.name,description:value.description,groupId:value.groupId,visibleGroups:value.visibleGroups,fields:value.fields,

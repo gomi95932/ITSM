@@ -25,6 +25,7 @@ export function notificationLink(publicUrl: string, ticket: {
       : routingAlert ? `工单 ${ticket.number} 所属支持组无人可接，且无可用备用组，请检查路由告警。`
       : ticket.action === 'ASSIGN_OFFER' ? `工单 ${ticket.number} 待您确认接收，请在截止时间前处理。`
       : ticket.action === 'ASSIGNMENT_EXPIRED' ? `工单 ${ticket.number} 候选接收已超时，请调度员跟进。`
+      : ticket.action === 'FORCE_TAKEOVER' ? `工单 ${ticket.number} 已由主管紧急调整负责人，请查看交接记录。`
       : ticket.action === 'REQUEST_APPROVED' ? `工单 ${ticket.number} 审批已通过，等待工程师接单交付。`
       : ticket.action === 'REQUEST_REJECTED' ? `工单 ${ticket.number} 审批未通过，请查看申请记录。`
       : ticket.action === 'RESUME_VENDOR' ? `工单 ${ticket.number} 已恢复处理，请查看最新进度。`
