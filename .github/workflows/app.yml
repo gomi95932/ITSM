@@ -17,6 +17,38 @@ jobs:
   security:
     uses: ./.github/workflows/security.yml
 
+  authorization-performance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: itsm
+          POSTGRES_PASSWORD: disposable-ci-only
+          POSTGRES_DB: itsm
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd 'pg_isready -U itsm -d itsm'
+          --health-interval 5s --health-timeout 5s --health-retries 12
+    env:
+      DB_HOST: 127.0.0.1
+      DB_PORT: '5432'
+      DB_NAME: itsm
+      DB_USER: itsm
+      DB_PASSWORD: disposable-ci-only
+      ITSM_SEED_DEV_DATA: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: node scripts/migrate.mjs
+      - name: Measure current authorization plans in an isolated database
+        run: node tests/integration/authorization-performance.mjs
+
   build-test:
     runs-on: ubuntu-latest
     timeout-minutes: 25
