@@ -47,7 +47,7 @@ jobs:
       - run: npm ci
       - run: node scripts/migrate.mjs
       - run: npm run build -w @itsm/contracts && npm run build -w @itsm/workflow && npm run build -w @itsm/worker
-      - name: Measure current authorization plans in an isolated database
+      - name: Verify bounded ownership scans, fair rotation and concurrent authorization revocation
         run: node tests/integration/authorization-performance.mjs
 
   build-test:
@@ -287,7 +287,7 @@ jobs:
   publish:
     name: publish-${{ matrix.app }}
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [build-test, security]
+    needs: [build-test, security, authorization-performance]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -315,7 +315,7 @@ jobs:
   publish-data-images:
     name: publish-${{ matrix.app }}
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [build-test, security]
+    needs: [build-test, security, authorization-performance]
     runs-on: ubuntu-latest
     permissions:
       contents: read
