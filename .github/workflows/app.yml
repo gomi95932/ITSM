@@ -134,7 +134,21 @@ jobs:
       - name: Install CI browser
         run: npx playwright install --with-deps chromium
       - name: Exercise desktop and mobile employee and agent flows
-        run: npx playwright test --output test-results/workspace
+        run: |
+          mkdir -p test-results
+          # Keep only wait metadata, never SQL text, credentials or business payloads.
+          (
+            for sample in $(seq 1 180); do
+              timeout 5s docker compose --env-file "$ITSM_CI_ENV" -f infra/compose/compose.yaml exec -T db sh -ec '
+                export PGPASSWORD="$POSTGRES_PASSWORD"
+                exec psql -X -v ON_ERROR_STOP=1 -U itsm -d itsm -At
+              ' < tests/support/database-waits.sql || true
+              sleep 2
+            done
+          ) > test-results/database-waits.jsonl 2>/dev/null &
+          monitor_pid=$!
+          trap 'kill "$monitor_pid" 2>/dev/null || true; wait "$monitor_pid" 2>/dev/null || true' EXIT
+          npx playwright test --output test-results/workspace
       - name: Verify REQ policy versions, publisher scope and fail-closed OA boundary
         run: node tests/integration/request-catalog.mjs
       - name: Verify durable OA and controlled manual fulfillment without enabling live service requests
