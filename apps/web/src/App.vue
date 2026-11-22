@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed,onBeforeUnmount,onMounted,ref,watch } from 'vue';
 import * as dd from 'dingtalk-jsapi';
-import { Activity,ArrowRight,BarChart3,Bell,BookOpen,ChevronLeft,ChevronRight,ClipboardList,Headphones,LayoutGrid,LoaderCircle,LogOut,Monitor,Network,Plus,RefreshCw,Send,ShieldCheck,TriangleAlert,UserRound,Users } from 'lucide-vue-next';
+import { Activity,ArrowRight,BarChart3,Bell,BookOpen,ChevronLeft,ChevronRight,ClipboardList,Headphones,LayoutGrid,LoaderCircle,LogOut,Monitor,Network,Plus,QrCode,RefreshCw,Send,ShieldCheck,TriangleAlert,UserRound,Users } from 'lucide-vue-next';
 import type { CatalogItem,SessionUser,TicketListResponse,TicketView,WorkQueue,WorkQueueCounts } from '@itsm/contracts';
 import EmployeeForm from './components/EmployeeForm.vue';
 import TicketDetail from './components/TicketDetail.vue';
@@ -25,7 +25,7 @@ import { formatDate,statuses } from './labels';
 type View='mine'|'catalog'|'queue'|'notifications'|'delegations'|'knowledge'|'reports'|'roles'|'routing'|'routing-config'|'priority-config'|'service-structure'|'support-structure'|'fulfillments'|'directory'|'operations'|'appointments';
 type Delivery={id:string;state:string;attempts:number;lastError:string|null;updatedAt:string;number:string;canRetry:boolean};
 const user=ref<SessionUser>(),booting=ref(true),error=ref(''),loading=ref(false),development=ref(false),identity=ref(devUser());
-const enterpriseLogin=ref(false);
+const enterpriseLogin=ref(false),dingtalkWebLogin=ref(false);
 const view=ref<View>('mine'),catalog=ref<CatalogItem[]>([]),tickets=ref<TicketView[]>([]),counts=ref<Record<string,number>>({}),total=ref(0),page=ref(1),filter=ref('');
 const workQueue=ref<WorkQueue>('all');
 const emptyWorkQueues=():WorkQueueCounts=>({all:0,assigned:0,incoming:0,outgoing:0,unassigned:0});
@@ -45,16 +45,17 @@ let bootGeneration=0;
 async function boot(){
   const generationId=++bootGeneration;++generation;booting.value=true;error.value='';user.value=undefined;setUser(null);
   try{
-    const config=await api<{mode:string;corpId:string;configured:boolean;oidcConfigured?:boolean}>('/auth/config');
+    const config=await api<{mode:string;corpId:string;configured:boolean;oidcConfigured?:boolean;dingtalkWebConfigured?:boolean}>('/auth/config');
     enterpriseLogin.value=!!config.oidcConfigured;
+    dingtalkWebLogin.value=!!config.dingtalkWebConfigured;
     development.value=config.mode==='development';useDevelopment(development.value);
     if(!development.value){
       try{user.value=await api<SessionUser>('/auth/me');}
       catch(e){
         if(!(e instanceof ApiError)||e.status!==401)throw e;
         if(dd.env.platform==='notInDingTalk'||!config.configured){
-          if(enterpriseLogin.value){
-            error.value=new URLSearchParams(location.search).get('login')==='failed'?'企业登录未完成，请重试或联系管理员核对身份关联。':'请使用企业账号登录。';
+          if(enterpriseLogin.value||dingtalkWebLogin.value){
+            error.value=new URLSearchParams(location.search).get('login')==='failed'?'企业登录未完成，请重试或联系管理员核对身份关联。':'请使用公司钉钉账号或企业账号登录。';
             return;
           }
           throw new Error(config.configured?'请从钉钉工作台进入 IT 服务台。':'企业登录尚未配置，请联系管理员。');
@@ -110,7 +111,7 @@ onBeforeUnmount(()=>{window.removeEventListener('hashchange',syncHash);if(refres
 
 <template>
   <div v-if="booting" class="boot-state"><Headphones :size="32"/><LoaderCircle class="spin" :size="20"/><p>正在打开 IT 服务台</p></div>
-  <div v-else-if="!user" class="boot-state"><Headphones :size="36"/><h1>IT 服务台</h1><p role="alert">{{error}}</p><a v-if="enterpriseLogin" class="primary enterprise-login" href="/api/v1/auth/oidc/start"><ShieldCheck :size="17"/>企业账号登录</a><button class="primary" @click="boot"><RefreshCw :size="17"/>重新进入</button></div>
+  <div v-else-if="!user" class="boot-state"><Headphones :size="36"/><h1>IT 服务台</h1><p role="alert">{{error}}</p><a v-if="dingtalkWebLogin" class="primary enterprise-login" href="/api/v1/auth/dingtalk-web/start"><QrCode :size="18"/>钉钉扫码登录</a><a v-if="enterpriseLogin" class="primary enterprise-login" href="/api/v1/auth/oidc/start"><ShieldCheck :size="17"/>企业账号登录</a><button :class="dingtalkWebLogin||enterpriseLogin?'text-button':'primary'" @click="boot"><RefreshCw :size="17"/>重新进入</button></div>
   <div v-else class="app-shell">
     <aside class="sidebar"><a class="brand" href="#" @click.prevent="navigate('mine')"><span class="brand-icon"><Headphones :size="23"/></span><span>IT 服务台<small>祥承科技</small></span></a><p class="nav-caption">员工服务</p><nav aria-label="主要导航"><button :class="{active:view==='mine'}" @click="navigate('mine')"><ClipboardList :size="19"/>我的工单</button><button :class="{active:view==='catalog'}" @click="navigate('catalog')"><LayoutGrid :size="19"/>服务目录</button><button :class="{active:view==='knowledge'}" @click="navigate('knowledge')"><BookOpen :size="19"/>知识库</button><button :class="{active:view==='delegations'}" @click="navigate('delegations')"><UserRound :size="19"/>代报授权</button><template v-if="user.groups.length"><p class="nav-caption">支持中心</p><button :class="{active:view==='queue'}" @click="navigate('queue')"><Activity :size="19"/>IT 工作台</button><button :class="{active:view==='reports'}" @click="navigate('reports')"><BarChart3 :size="19"/>服务报表</button><button :class="{active:view==='notifications'}" @click="navigate('notifications')"><Bell :size="19"/>消息通知</button></template><template v-if="user.canManageRoles"><button :class="{active:view==='routing'}" @click="navigate('routing')"><TriangleAlert :size="19"/>路由告警</button><button :class="{active:view==='roles'}" @click="navigate('roles')"><ShieldCheck :size="19"/>角色授权</button></template>
       <button v-if="user.canManageRoles" :class="{active:view==='support-structure'}" @click="navigate('support-structure')"><Users :size="19"/>支持组</button>

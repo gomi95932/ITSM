@@ -34,6 +34,8 @@ import { SlaCalendarController } from './sla-calendar.controller.js';
 import { OidcController } from './oidc.controller.js';
 import { OidcService } from './oidc.service.js';
 import { OperationsController } from './operations.controller.js';
+import { DingtalkWebController } from './dingtalk-web.controller.js';
+import { DingtalkWebService } from './dingtalk-web.service.js';
 
-@Module({ controllers: [OperationsController,OidcController,SlaCalendarController,PriorityPolicyController,HealthController, TicketsController,AuthController,WorkspaceController,DelegationsController,RequestCatalogController,KnowledgeController,ReportsController,RolesController,RoutingConfigController,SupportController,ServiceStructureController,FulfillmentController,DirectoryController,AttachmentsController], providers: [Database,AuthService,OidcService,TicketsService,SlaService,IntakePolicyService,RequestCatalogService,KnowledgeService,RolesService,RoutingConfigService,SupportService,ServiceStructureService,FulfillmentService,VoiceAsrService,IntakeInterpreterService,AttachmentsService] })
+@Module({ controllers: [DingtalkWebController,OperationsController,OidcController,SlaCalendarController,PriorityPolicyController,HealthController, TicketsController,AuthController,WorkspaceController,DelegationsController,RequestCatalogController,KnowledgeController,ReportsController,RolesController,RoutingConfigController,SupportController,ServiceStructureController,FulfillmentController,DirectoryController,AttachmentsController], providers: [Database,AuthService,DingtalkWebService,OidcService,TicketsService,SlaService,IntakePolicyService,RequestCatalogService,KnowledgeService,RolesService,RoutingConfigService,SupportService,ServiceStructureService,FulfillmentService,VoiceAsrService,IntakeInterpreterService,AttachmentsService] })
 export class AppModule {}
