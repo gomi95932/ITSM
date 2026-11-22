@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {spawn} from 'node:child_process';
+import {mkdir,readFile,writeFile} from 'node:fs/promises';
 
 if(process.env.GITHUB_ACTIONS!=='true'||!process.env.ITSM_CI_ENV)throw new Error('DISPOSABLE_GITHUB_CI_ONLY');
 const base='http://127.0.0.1:8088/api/v1',path='/admin/support-structure';
@@ -32,6 +33,23 @@ const dependencies=()=>ok(request(`${path}/groups/${group}/dependencies`));
 const proposal=async(kind,extra={})=>request(path,'demo-admin-1',{id:randomUUID(),kind,groupId:group,config:{},
   expectedGroupVersion:(await groupView()).version,reason:'CI lifecycle configuration',...extra});
 const review=(item,decision='APPROVE',user='demo-admin-2')=>request(`${path}/${item.id}/review`,user,{expectedVersion:item.version,decision,reason:'Independent lifecycle review'});
+async function observedReview(item){
+  const diagnostic=await readFile('tests/support/database-waits.sql','utf8');
+  const samples=[];
+  let done=false;
+  const monitor=(async()=>{
+    while(!done){
+      try{samples.push(JSON.parse(await sql(diagnostic)));}catch{samples.push({diagnosticUnavailable:true});}
+      if(!done)await new Promise(resolve=>setTimeout(resolve,250));
+    }
+  })();
+  let result;
+  try{result=await review(item);return result;}finally{
+    done=true;await monitor;
+    await mkdir('test-results',{recursive:true});
+    await writeFile('test-results/support-retirement-waits.json',JSON.stringify({result,samples},null,2));
+  }
+}
 await sql(`INSERT INTO support_groups(id,name) VALUES(${q(group)},'Lifecycle fixture'),(${q(peer)},'Lifecycle peer');
   INSERT INTO employees(id,display_name) VALUES(${q(member)},'Lifecycle engineer');
   INSERT INTO group_memberships(employee_id,group_id) VALUES(${q(member)},${q(group)});
@@ -53,7 +71,9 @@ const retiring=await ok(proposal('GROUP_DISABLE'));
 assert.equal((await review(retiring,'APPROVE','demo-admin-1')).status,403);
 await sql(`UPDATE service_catalog SET published=true WHERE code=${q(code)}`);
 assert.ok((await dependencies()).items.some(item=>item.kind==='CATALOG'));
-assert.equal((await review(retiring)).data.code,'SUPPORT_GROUP_DEPENDENCIES');
+const blockedRetirement=await observedReview(retiring);
+assert.equal(blockedRetirement.status,409,JSON.stringify(blockedRetirement));
+assert.equal(blockedRetirement.data.code,'SUPPORT_GROUP_DEPENDENCIES');
 assert.equal((await groupView()).enabled,true);
 assert.equal(await sql(`SELECT status FROM role_bindings WHERE id=${q(binding)}`),'ACTIVE','failed retirement is atomic');
 await sql(`UPDATE service_catalog SET published=false WHERE code=${q(code)};
