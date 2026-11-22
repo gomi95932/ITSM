@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {spawn} from 'node:child_process';
+import {validOperationsConfig} from '../../packages/contracts/dist/index.js';
 
 // This final CI phase deliberately enables irreversible isolation in a disposable database.
 if(process.env.GITHUB_ACTIONS!=='true'||!process.env.ITSM_CI_ENV)throw new Error('DISPOSABLE_GITHUB_CI_ONLY');
@@ -53,7 +54,8 @@ await sql(`INSERT INTO employees(id,display_name) VALUES ${Object.values(person)
   INSERT INTO role_bindings(id,employee_id,role_code,group_id,valid_from,valid_to,status,source,requested_by,reviewed_by,reason,reviewed_at)
     VALUES(${quote(randomUUID())},${quote(person.engineerB)},'GROUP_LEAD','service-desk',now()-interval '1 day',now()+interval '1 day',
       'ACTIVE','REVIEW','demo-admin-1','demo-admin-2','Disposable site B lead',now());
-  UPDATE service_catalog SET published=false WHERE group_id IN (SELECT id FROM support_groups WHERE NOT enabled);
+  UPDATE service_catalog SET published=false WHERE group_id IN (SELECT id FROM support_groups WHERE NOT enabled)
+    OR code !~ '^[A-Z0-9-]{3,40}$';
   UPDATE service_catalog SET published=true,group_id='service-desk',required_fields='[]',field_schema='[]',visible_groups='[]' WHERE code IN ('INC-PC','INC-BIZ');`);
 const config=structuredClone((await readStructure()).config);
 // Retain every historical identifier, retiring prior test routes before this isolated final phase.
@@ -71,6 +73,7 @@ const businessMapping={...mapping,serviceCode:'INC-BIZ'};
 const previousBusinessMapping=config.mappings.findIndex(m=>m.serviceCode==='INC-BIZ');
 if(previousBusinessMapping<0)config.mappings.push(businessMapping);else config.mappings[previousBusinessMapping]=businessMapping;
 const services=JSON.parse(await sql(`SELECT json_agg(json_build_object('code',code,'groupId',group_id)) FROM service_catalog WHERE published`));
+assert.ok(services.some(s=>s.code==='INC-PC')&&services.some(s=>s.code==='INC-BIZ'));
 const groups=[...new Set(services.map(s=>s.groupId))],routePositions=new Map([['service-desk',posA]]);
 for(const [index,group] of groups.entries())if(group!=='service-desk'){
   const id=`ops-position-group-${index}`;routePositions.set(group,id);config.positions.push({id,name:id,domainId:domain,groupId:group,enabled:true});
@@ -94,6 +97,7 @@ const ops={siteEnforced:true,sites:[{id:siteA,name:'Site A',enabled:true},{id:si
   slaTemplates:[{id:'ops-standard',name:'Operations SLA',enabled:true,targets},
     {id:'ops-business',name:'Business SLA',enabled:true,targets:alternateTargets}],
   serviceSlas:[{serviceCode:'INC-PC',templateId:'ops-standard'},{serviceCode:'INC-BIZ',templateId:'ops-business'}]};
+assert.ok(validOperationsConfig(ops),'the final isolated fixture must satisfy the production configuration contract');
 assert.equal((await request(operations,person.engineerA)).status,403);
 let current=(await readOperations()).current;
 assert.equal((await request(operations,'demo-admin-1',{id:randomUUID(),expectedVersion:current.version,config:ops,reason:'Unsafe migration'})).data.code,
