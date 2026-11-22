@@ -122,6 +122,8 @@ jobs:
         run: node tests/integration/identity-revocation.mjs
       - name: Verify independent OIDC identity, callback replay and session revocation with protocol fixtures
         run: node tests/integration/oidc-login.mjs
+      - name: Verify browser DingTalk identity, concurrent callbacks and session revocation with protocol fixtures
+        run: node tests/integration/dingtalk-web-login.mjs
       - name: Verify directory synchronization, safe retirement and administrator permissions
         run: node tests/integration/directory-sync.mjs
       - name: Verify ordinary intake blocks sensitive payloads without persistence

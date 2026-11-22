@@ -4,6 +4,7 @@ import { Database } from './database.service.js';
 import { ROLE_EFFECTIVE_SQL } from './role-policy.js';
 import type { PoolClient } from 'pg';
 import { oidcSettings } from './oidc-config.js';
+import { dingtalkWebSettings } from './dingtalk-web-config.js';
 
 export type Identity = { id: string; name: string; groups: string[]; priorityReviewGroups?: string[]; csrfToken?: string; canManageRoles?:boolean; canManageRouting?:boolean };
 export type AuthHeaders = { devUser?: string; cookie?: string; csrf?: string };
@@ -43,7 +44,7 @@ export class AuthService {
   config() {
     return { mode: devEnabled() ? 'development' : 'dingtalk', corpId: process.env.DINGTALK_CORP_ID ?? '',
       configured: !!(process.env.DINGTALK_APP_KEY && process.env.DINGTALK_APP_SECRET && process.env.DINGTALK_CORP_ID),
-      oidcConfigured: !!oidcSettings() };
+      oidcConfigured: !!oidcSettings(), dingtalkWebConfigured: !!dingtalkWebSettings() };
   }
 
   async issueSession(client: PoolClient, employeeId: string) {
