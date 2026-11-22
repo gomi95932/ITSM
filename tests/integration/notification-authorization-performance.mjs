@@ -27,7 +27,7 @@ try{
           CASE WHEN $5 THEN now()-interval '2 hours' END,CASE WHEN $5 THEN now()-interval '1 hour' END)`,
       [ticket,group,engineer,kind==='waiting'?'WAITING_VENDOR':'IN_PROGRESS',kind==='waiting']);
       await pool.query(`INSERT INTO ticket_events(id,ticket_id,actor_id,action,to_status,request_id)
-        VALUES($1,$2,'system:scheduler',$3,'IN_PROGRESS',$1::text)`,[event,ticket,action]);
+        VALUES($1::uuid,$2,'system:scheduler',$3,'IN_PROGRESS',$1::uuid::text)`,[event,ticket,action]);
       if(kind==='waiting')await pool.query(`INSERT INTO ticket_waiting_signals(ticket_id,group_id,waiting_status,
         waiting_reason_code,waiting_since,waiting_due_at,event_id)
         SELECT id,owner_group_id,status,waiting_reason_code,waiting_since,waiting_due_at,$2 FROM tickets WHERE id=$1`,[ticket,event]);
