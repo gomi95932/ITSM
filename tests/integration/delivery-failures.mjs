@@ -14,6 +14,11 @@ async function ok(promise,status=200){const result=await promise;assert.equal(re
 const body=reference=>({outcome:'NOT_GRANTED',reference,actualVerificationConfirmed:true,contentClass:'GENERAL'});
 const resolve=(id,user='agent-2',input=body(`VERIFY-${id}`),key=randomUUID())=>request(`${root}/${id}/resolve`,user,input,key);
 const list=(f,user='agent-2',extra='')=>ok(request(`${root}?group=${f.groupId}${extra}`,user));
+// Worker scan timestamps may change independently of the investigation's business effects.
+const ticketAndSla=async ticketId=>JSON.parse(await sql(`SELECT jsonb_build_object(
+  'ticket',to_jsonb(t)-ARRAY['ownership_checked_at','sla_checked_at'],
+  'sla',(SELECT jsonb_agg(to_jsonb(s) ORDER BY s.cycle) FROM sla_cycles s WHERE s.ticket_id=t.id))::text
+  FROM tickets t WHERE t.id=${q(ticketId)}`));
 async function syntheticFailure(f,{old=false,operation='DELIVER'}={}){
   const id=randomUUID();
   await sql(`INSERT INTO request_delivery_commands(id,approval_id,actor_id,request_key,operation,expected_version,evidence_reference,request_hash,
@@ -30,6 +35,9 @@ async function leader(f){
 }
 
 const f=await createFulfillmentFixture({state:'READY',appointed:true,includeApplicant:true});
+await sql(`INSERT INTO sla_cycles(ticket_id,cycle,priority,calendar_snapshot,started_at,response_target,resolution_target)
+  SELECT ${q(f.ticketId)},1,'P3',config||jsonb_build_object('version',version,'approved',approved),
+    now(),1000000,1000000 FROM sla_calendars ORDER BY version DESC LIMIT 1`);
 const delivery={expectedVersion:1,reference:`DELIVER-${f.id}`,contentClass:'GENERAL',actualDeliveryConfirmed:true},deliveryKey=randomUUID();
 const pending=await ok(request(`/fulfillments/intake/${f.approvalId}/deliver`,'agent-1',delivery,deliveryKey),202);
 await processDeliveryCommands('FAIL');
@@ -53,7 +61,9 @@ await sql(`INSERT INTO group_memberships(employee_id,group_id) VALUES('agent-2',
 await sql("UPDATE employees SET active=false WHERE id='agent-2'");
 try{assert.ok([401,403].includes((await resolve(pending.id)).status));}
 finally{await sql("UPDATE employees SET active=true WHERE id='agent-2'");}
-const before=await sql(`SELECT row_to_json(t)::text FROM tickets t WHERE id=${q(f.ticketId)}`);
+const before=await ticketAndSla(f.ticketId);
+assert.equal(before.sla.length,1,'the invariant must include a real SLA cycle');
+await sql(`UPDATE tickets SET ownership_checked_at=clock_timestamp(),sla_checked_at=clock_timestamp() WHERE id=${q(f.ticketId)}`);
 const original=await sql(`SELECT row_to_json(c)::text FROM request_delivery_commands c WHERE id=${q(pending.id)}`);
 const key=randomUUID(),input=body(`VERIFY-${pending.id}`);
 const same=await Promise.all([ok(resolve(pending.id,'agent-2',input,key)),ok(resolve(pending.id,'agent-2',input,key))]);
@@ -64,7 +74,7 @@ assert.equal(history.items[0].resolution.reference,input.reference);assert.equal
 assert.equal((await resolve(pending.id,'agent-2',{...input,outcome:'REVOKED'},key)).data.code,'DELIVERY_RESOLUTION_KEY_CONFLICT');
 assert.equal((await resolve(pending.id)).data.code,'DELIVERY_FAILURE_ALREADY_RESOLVED');
 assert.equal(await sql(`SELECT row_to_json(c)::text FROM request_delivery_commands c WHERE id=${q(pending.id)}`),original);
-assert.equal(await sql(`SELECT row_to_json(t)::text FROM tickets t WHERE id=${q(f.ticketId)}`),before,'investigation must not alter ticket or SLA');
+assert.deepEqual(await ticketAndSla(f.ticketId),before,'investigation must not alter business ticket fields or any SLA cycle');
 assert.equal(await sql(`SELECT count(*) FROM ticket_events v JOIN audit_logs a ON a.event_id=v.id JOIN outbox_events o ON o.event_id=v.id
   WHERE v.ticket_id=${q(f.ticketId)} AND v.action='DELIVERY_FAILURE_RESOLVED'`),'1');
 for(const query of [`DELETE FROM request_delivery_resolutions WHERE command_id=${q(pending.id)}`,
