@@ -21,7 +21,7 @@ const userWait = () => ({ comment: 'Please confirm the affected location', waiti
 const vendorWait = () => ({ comment: 'Waiting for an external part', waitingReason: 'VENDOR_PARTS', dueAt: future(),
   vendorReference: 'PRIVATE-VENDOR-REFERENCE', vendorOwner: 'Internal follow-up engineer' });
 async function effects(f) {
-  return sql(`SELECT jsonb_build_object('ticket',to_jsonb(t),
+  return sql(`SELECT jsonb_build_object('ticket',to_jsonb(t)-ARRAY['ownership_checked_at','sla_checked_at'],
     'cycles',(SELECT jsonb_agg(to_jsonb(s) ORDER BY cycle) FROM sla_cycles s WHERE s.ticket_id=t.id),
     'events',(SELECT count(*) FROM ticket_events e WHERE e.ticket_id=t.id),
     'audits',(SELECT count(*) FROM audit_logs a WHERE a.ticket_id=t.id),
@@ -52,6 +52,8 @@ for (const [name, type, body, code] of [
     evidence: 'Synthetic resolution evidence', waitingReason: 'USER_INFORMATION' }, 'INVALID_WAITING_REASON'],
 ]) {
   const before = await effects(f), key = randomUUID();
+  if (name === 'missing reason') await sql(`UPDATE tickets SET ownership_checked_at=clock_timestamp(),
+    sla_checked_at=clock_timestamp() WHERE id=${q(f.ticketId)}`);
   const rejected = await action(f, ticket.version, type, body, 'agent-1', key);
   assert.equal(rejected.status, 400, `${name}: ${JSON.stringify(rejected)}`);
   assert.equal(rejected.data.code, code, name);
