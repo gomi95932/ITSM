@@ -2,6 +2,7 @@ import { Pool } from 'pg';
 import { directorySettings,synchronizeDirectory,restrictDirectory } from './directory-sync.js';
 import { dingtalkDirectory } from './directory-provider.js';
 
+async function main(){
 const db=new Pool({host:process.env.DB_HOST??'db',port:Number(process.env.DB_PORT??5432),database:process.env.DB_NAME??'itsm',
   user:process.env.DB_USER??'itsm',password:process.env.DB_PASSWORD,connectionTimeoutMillis:5000,statement_timeout:30000});
 try {
@@ -31,3 +32,5 @@ try {
 } catch(error) {
   console.error(error instanceof Error&&/^DIRECTORY_[A-Z_]+$/.test(error.message)?error.message:'DIRECTORY_PREFLIGHT_FAILED');process.exitCode=1;
 } finally {await db.end();}
+}
+void main();

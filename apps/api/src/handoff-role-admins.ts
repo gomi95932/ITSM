@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { Database } from './database.service.js';
 import { handoffAdministrators } from './admin-handoff.js';
 
+async function main(){
 const db=new Database();
 try {
   const args=process.argv.slice(2),apply=args.length===1&&args[0]==='--apply';
@@ -16,3 +17,5 @@ try {
   const code=error instanceof Error&&/^HANDOFF_[A-Z_]+$/.test(error.message)?error.message:'HANDOFF_FAILED';
   console.error(code);process.exitCode=1;
 } finally {await db.onModuleDestroy();}
+}
+void main();
