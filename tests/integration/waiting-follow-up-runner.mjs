@@ -266,11 +266,11 @@ try{
   const deliveryCount=async()=>(await client.query('SELECT count(*) FROM notification_deliveries WHERE outbox_id=ANY($1::uuid[])',
     [waitingIds])).rows[0].count;
   await assert.rejects(refreshWaitingNotificationAudiences(isolatedPool(client,{audienceIds:waitingIds,failDeliveryAt:2})),/CI_DELIVERY_FAILURE/);
-  assert.equal(await deliveryCount(),'0','failed recipient batch rolls back all earlier deliveries');
+  assert.equal(await deliveryCount(),'1','a failed event preserves the previous committed event');
   assert.equal((await client.query('SELECT count(*) FROM outbox_events WHERE id=ANY($1::uuid[]) AND audience_checked_at IS NOT NULL',
-    [waitingIds])).rows[0].count,'0','failed recipient batch rolls back freshness timestamps');
+    [waitingIds])).rows[0].count,'1','only the successful event commits its freshness timestamp');
   const recoveryPool=isolatedPool(client,{audienceIds:waitingIds});
-  await refreshWaitingNotificationAudiences(recoveryPool);assert.equal(await deliveryCount(),'20');
+  await refreshWaitingNotificationAudiences(recoveryPool);assert.equal(await deliveryCount(),'21','the retry reaches all remaining events');
   await refreshWaitingNotificationAudiences(recoveryPool);assert.equal(await deliveryCount(),'21','bounded polls do not starve older events');
   await client.query("UPDATE notification_deliveries SET state='DEAD' WHERE outbox_id=ANY($1::uuid[])",[waitingIds]);
   await client.query('UPDATE outbox_events SET audience_checked_at=NULL WHERE id=ANY($1::uuid[])',[waitingIds]);

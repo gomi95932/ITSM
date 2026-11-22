@@ -137,34 +137,41 @@ export async function expandNotification(client: PoolClient, outboxId: string, e
   await client.query("UPDATE outbox_events SET expanded_at=COALESCE(expanded_at,clock_timestamp()),audience_checked_at=clock_timestamp(),state='EXPANDED' WHERE id=$1",[outboxId]);
 }
 
+async function maintainNotificationAudiences(db: Pick<Pool,'connect'>, query:string, application:string): Promise<void> {
+  // Release the authorization lock between events so configuration writers do not wait for a whole batch.
+  for(let i=0;i<20;i++){
+    const client=await db.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query("SELECT set_config('application_name',$1,true)",[application]);
+      await client.query('SELECT pg_advisory_xact_lock_shared(71820512)');
+      const pending=await client.query<{id:string;event_id:string}>(query);
+      const event=pending.rows[0];
+      if(event)await expandNotification(client,event.id,event.event_id);
+      await client.query('COMMIT');
+      if(!event)break;
+    } catch (error) { await client.query('ROLLBACK'); throw error; }
+    finally { client.release(); }
+  }
+}
+
+export async function expandPendingNotifications(db: Pick<Pool,'connect'>): Promise<void> {
+  await maintainNotificationAudiences(db,`SELECT o.id,o.event_id FROM outbox_events o WHERE o.expanded_at IS NULL
+    ORDER BY (o.kind='P1_ALERT') DESC,o.created_at,o.id LIMIT 1 FOR UPDATE OF o SKIP LOCKED`,'itsm-worker-notification-expand');
+}
+
 export async function refreshFulfillmentNotificationAudiences(db: Pick<Pool,'connect'>): Promise<void> {
-  const client=await db.connect();
-  try {
-    await client.query('BEGIN');
-    await client.query('SELECT pg_advisory_xact_lock_shared(71820512)');
-    const pending=await client.query<{id:string;event_id:string}>(`SELECT o.id,o.event_id FROM outbox_events o
+  await maintainNotificationAudiences(db,`SELECT o.id,o.event_id FROM outbox_events o
       JOIN request_fulfillment_active_signals s ON s.event_id=o.event_id AND s.ticket_id=o.ticket_id
       WHERE o.expanded_at IS NOT NULL
         AND (o.audience_checked_at IS NULL OR o.audience_checked_at<=clock_timestamp()-interval '60 seconds')
-      ORDER BY o.audience_checked_at NULLS FIRST,o.created_at,o.id LIMIT 20 FOR UPDATE OF o SKIP LOCKED`);
-    for (const event of pending.rows) await expandNotification(client,event.id,event.event_id);
-    await client.query('COMMIT');
-  } catch (error) { await client.query('ROLLBACK'); throw error; }
-  finally { client.release(); }
+      ORDER BY o.audience_checked_at NULLS FIRST,o.created_at,o.id LIMIT 1 FOR UPDATE OF o SKIP LOCKED`,'itsm-worker-notification-fulfillment');
 }
 
 export async function refreshWaitingNotificationAudiences(db: Pick<Pool,'connect'>): Promise<void> {
-  const client = await db.connect();
-  try {
-    await client.query('BEGIN');
-    await client.query('SELECT pg_advisory_xact_lock_shared(71820512)');
-    const pending = await client.query<{id:string;event_id:string}>(`SELECT o.id,o.event_id FROM outbox_events o
+  await maintainNotificationAudiences(db,`SELECT o.id,o.event_id FROM outbox_events o
       JOIN ticket_waiting_active_signals s ON s.event_id=o.event_id AND s.ticket_id=o.ticket_id
       WHERE o.expanded_at IS NOT NULL
         AND (o.audience_checked_at IS NULL OR o.audience_checked_at<=clock_timestamp()-interval '60 seconds')
-      ORDER BY o.audience_checked_at NULLS FIRST,o.created_at,o.id LIMIT 20 FOR UPDATE OF o SKIP LOCKED`);
-    for (const event of pending.rows) await expandNotification(client,event.id,event.event_id);
-    await client.query('COMMIT');
-  } catch (error) { await client.query('ROLLBACK'); throw error; }
-  finally { client.release(); }
+      ORDER BY o.audience_checked_at NULLS FIRST,o.created_at,o.id LIMIT 1 FOR UPDATE OF o SKIP LOCKED`,'itsm-worker-notification-waiting');
 }

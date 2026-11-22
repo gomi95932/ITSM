@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {createHash,randomUUID} from 'node:crypto';
 import {spawn} from 'node:child_process';
+import {mkdir,readFile,writeFile} from 'node:fs/promises';
 import {validOperationsConfig} from '../../packages/contracts/dist/index.js';
 
 // This final CI phase deliberately enables irreversible isolation in a disposable database.
@@ -12,6 +13,20 @@ async function request(path,user='demo-admin-1',body,key=randomUUID()){
   return {status:response.status,data:await response.json()};
 }
 const ok=async promise=>{const r=await promise;assert.ok([200,201].includes(r.status),JSON.stringify(r));return r.data;};
+async function observedRequest(label,...args){
+  const diagnostic=await readFile('tests/support/database-waits.sql','utf8'),samples=[];
+  let done=false,result;
+  const monitor=(async()=>{
+    while(!done){
+      try{samples.push(JSON.parse(await sql(diagnostic)));}catch{samples.push({diagnosticUnavailable:true});}
+      if(!done)await new Promise(resolve=>setTimeout(resolve,250));
+    }
+  })();
+  try{result=await request(...args);return result;}finally{
+    done=true;await monitor;await mkdir('test-results',{recursive:true});
+    await writeFile(`test-results/operations-${label}-waits.json`,JSON.stringify({result,samples},null,2));
+  }
+}
 const quote=v=>`'${String(v).replaceAll("'","''")}'`;
 async function sql(query,success=true){return new Promise((resolve,reject)=>{
   const child=spawn('docker',['compose','--project-name','itsm-dev','--env-file',process.env.ITSM_CI_ENV,'-f','infra/compose/compose.yaml',
@@ -172,8 +187,10 @@ const waitingCycle=await sql(`SELECT row_to_json(s)::text FROM sla_cycles s WHER
 const appointments=await ok(request(`${structure}/appointments`,person.lead));
 assert.ok(appointments.positions.every(p=>p.groupId==='service-desk'));
 assert.equal((await request(`${structure}/appointments`,person.engineerA)).status,404);
-assert.equal((await request(`${structure}/appointments`,person.lead,{id:randomUUID(),expectedVersion:appointments.version,
-  appointment:appointment(person.lead,posA),reason:'Self appointment'})).data.code,'SELF_APPOINTMENT_NOT_ALLOWED');
+const selfAppointment=await observedRequest('self-appointment',`${structure}/appointments`,person.lead,{id:randomUUID(),expectedVersion:appointments.version,
+  appointment:appointment(person.lead,posA),reason:'Self appointment'});
+assert.equal(selfAppointment.status,403,JSON.stringify(selfAppointment));
+assert.equal(selfAppointment.data.code,'SELF_APPOINTMENT_NOT_ALLOWED',JSON.stringify(selfAppointment));
 const overscope=structuredClone((await readStructure()).config);overscope.domains.at(-1).name='Unapproved structural change';
 assert.equal((await request(structure,person.lead,{id:randomUUID(),expectedVersion:appointments.version,config:overscope,reason:'Over scope'})).data.code,'APPOINTMENT_SCOPE_REQUIRED');
 const proposed=await ok(request(`${structure}/appointments`,person.lead,{id:randomUUID(),expectedVersion:appointments.version,

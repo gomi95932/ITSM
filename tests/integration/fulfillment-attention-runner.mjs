@@ -303,12 +303,12 @@ try{
     WHERE outbox_id=ANY($1::uuid[])`,[waitingIds])).rows[0].count;
   await assert.rejects(refreshFulfillmentNotificationAudiences(isolatedPool(client,
     {audienceIds:waitingIds,failDeliveryAt:2})),/CI_DELIVERY_FAILURE/);
-  assert.equal(await countWaiting(),'0','failed batch rolls back earlier delivery inserts');
+  assert.equal(await countWaiting(),'1','a failed event preserves the previous committed event');
   assert.equal((await client.query(`SELECT count(*) FROM outbox_events WHERE id=ANY($1::uuid[])
-    AND audience_checked_at IS NOT NULL`,[waitingIds])).rows[0].count,'0','failed batch rolls back freshness stamps');
+    AND audience_checked_at IS NOT NULL`,[waitingIds])).rows[0].count,'1','only the successful event commits its freshness stamp');
   const waitingPool=isolatedPool(client,{audienceIds:waitingIds});
   await refreshFulfillmentNotificationAudiences(waitingPool);
-  assert.equal(await countWaiting(),'20','one recovery poll respects its 20-event bound');
+  assert.equal(await countWaiting(),'21','the retry processes the remaining 20 events');
   await refreshFulfillmentNotificationAudiences(waitingPool);
   assert.equal(await countWaiting(),'21','recent events cannot starve the remaining event');
   await refreshFulfillmentNotificationAudiences(waitingPool);

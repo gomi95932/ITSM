@@ -9,7 +9,7 @@ import { fulfillmentReminderMinutes,maintainFulfillmentAttention } from './fulfi
 import { maintainWaitingFollowUps } from './waiting-follow-up.js';
 import { shouldAutoClose } from './auto-close.js';
 import { deliverNotification, NotificationBeforeSendError, parseNotificationResponse, serializeNotificationRequest } from './notification-delivery.js';
-import { expandNotification, refreshFulfillmentNotificationAudiences, refreshWaitingNotificationAudiences } from './notification-audience.js';
+import { expandPendingNotifications, refreshFulfillmentNotificationAudiences, refreshWaitingNotificationAudiences } from './notification-audience.js';
 import { dingtalkDirectory } from './directory-provider.js';
 import { directorySettings,synchronizeDirectory } from './directory-sync.js';
 import { dingtalkPilotUsers } from './dingtalk-pilot.js';
@@ -82,16 +82,6 @@ async function provider(path: 'asyncsend_v2' | 'getsendresult', body: object) {
   const data = parseNotificationResponse(await response.text());
   if (!response.ok || data?.errcode !== 0) { access = undefined; throw new Error('PROVIDER_REJECTED'); }
   return data;
-}
-
-async function expand() {
-  await transaction(async client => {
-    await client.query('SELECT pg_advisory_xact_lock_shared(71820512)');
-    const result = await client.query("SELECT id,event_id FROM outbox_events WHERE expanded_at IS NULL ORDER BY (kind='P1_ALERT') DESC,created_at LIMIT 20 FOR UPDATE SKIP LOCKED");
-    for (const event of result.rows) {
-      await expandNotification(client,event.id,event.event_id);
-    }
-  });
 }
 
 const notificationOptions = {
@@ -192,7 +182,7 @@ async function tick() {
     if(approvalProvider)for(let i=0;i<5&&!stopped;i++)if(!await processNextRequestApproval(db,approvalProvider))break;
     if(approvalProvider&&process.env.ENABLE_MANUAL_REQUEST_DELIVERY==='true')
       for(let i=0;i<5&&!stopped;i++)if(!await processNextRequestDelivery(db,approvalProvider))break;
-    await expand();
+    await expandPendingNotifications(db);
     await refreshFulfillmentNotificationAudiences(db);
     await refreshWaitingNotificationAudiences(db);
     for (let i=0;i<10 && !stopped;i++) if (!await deliverNotification(notificationOptions)) break;

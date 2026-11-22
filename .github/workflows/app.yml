@@ -49,6 +49,8 @@ jobs:
       - run: npm run build -w @itsm/contracts && npm run build -w @itsm/workflow && npm run build -w @itsm/worker
       - name: Verify bounded ownership scans, fair rotation and concurrent authorization revocation
         run: node tests/integration/authorization-performance.mjs
+      - name: Verify notification authorization fairness, immediate revocation and concurrent deduplication
+        run: node tests/integration/notification-authorization-performance.mjs
 
   build-test:
     runs-on: ubuntu-latest
