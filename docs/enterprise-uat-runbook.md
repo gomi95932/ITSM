@@ -22,7 +22,8 @@
 | `ENABLE_LIVE_NOTIFICATIONS` / `DINGTALK_AGENT_ID` | 指定试点人员后再开启；启用时必须有应用 AgentId |
 | `ENABLE_LIVE_OA_APPROVAL` / `ENABLE_MANUAL_REQUEST_DELIVERY` | 显式开关，API 与 worker 一致；先核实一个低风险申请模板 |
 | `ENABLE_REQUEST_INTAKE` / `REQUEST_INTAKE_CATALOG_VERSIONS` | 仅在 OA 通过后开放经过验证的确切目录版本 |
-| `ENABLE_VOICE_ASR` / `ENABLE_INTAKE_AI` | 显式开关；启用时配置内部 HTTPS endpoint、model、token、`internal-approved` 数据边界及批准记录 |
+| `ENABLE_VOICE_ASR` / `ENABLE_INTAKE_AI` | 默认关闭；钉钉识别文字为首选语音路线，内部 ASR 仅为另行批准的可选能力，不能阻塞 S1 核心验收 |
+| `ENABLE_OIDC_LOGIN` / `OIDC_ISSUER` / `OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET` | 可选独立企业登录，须按 [OIDC 手册](p1-independent-login.md) 预建受信身份映射并真实联调，默认关闭 |
 
 关闭的模块会在就绪证据中记录为 `false`，不是已完成。配置字符串符合要求并不证明通讯录范围、模型真实路由或供应商权限正确。
 
@@ -68,7 +69,7 @@
 3. 核对通讯录分页、人数、稳定身份和失败恢复，维护“服务目录 → 责任域/支持组 → 岗位 → 具体工程师”。首轮不启用缺失自动停用。
 4. 对指定人员验证实际消息送达和卡片进入。卡片打开不修改工单；接单、转交及解决经本人身份与当前权限复核后回写。验证转发给无关人员无法操作。
 5. 对一个申请版本验证 OA 同意、拒绝、撤销、超时和结果不明对账，再验证交付、复核与到期回收。创建成功不能替代审批结果核实。
-6. 接入已批准的内部 ASR 与模型，分别用 iOS、Android 钉钉验证录音授权、取消、失败、转写和草稿修改；本人确认才建单，重复提交只产生一单。
+6. S2 首选验证钉钉语音识别为文字，再进入受理草稿；识别能力未就绪时保留文字和门户入口。本人确认才建单，重复提交只产生一单。智能体理解、工具编排与完整渠道闭环分别按 S3、S4 验收。内部 ASR 不作为 S1 必选前置，若单独启用则另外验证录音授权、取消、失败及数据边界。
 7. 验证 SLA、P1 确认、等待恢复、员工关闭评价、敏感内容与保留策略。组织 10–20 名员工和工程师试用并签收。
 8. 依据 [受控附件手册](p1-attachments.md) 配置私有卷和真实 ClamAV，验证正常文件与官方无害检测样本、扫描失败/过期拒绝、PUBLIC/INTERNAL 权限撤销、手机体验及带附件的隔离备份恢复。协议夹具成功不计入真实病毒检测或用户验收；没有自动保留清理和历史复扫，启用前须明确处置规则与责任人。
 

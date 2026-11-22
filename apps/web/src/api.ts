@@ -29,6 +29,9 @@ export async function attachmentRequest(url:string,method:'GET'|'PUT',headers:Re
   return response;
 }
 export const messages: Record<string,string> = {
+  INVALID_SERVICE_CALENDAR:'服务日历无效：请检查起止时间、日期是否重复，以及节假日与调休日期是否冲突。',
+  CALENDAR_INDEPENDENT_REVIEW_REQUIRED:'日历提案须由另一名有效平台管理员独立复核。',
+  CALENDAR_PROPOSER_UNAVAILABLE:'日历提案人的管理员权限已失效，请拒绝提案并由有效管理员重新发起。',
   INVALID_PRIORITY_POLICY:'分级配置无效，请核对矩阵、时限和关键服务；高优先级时限不能宽于低优先级。',
   PRIORITY_PROPOSER_UNAVAILABLE:'提案人的管理员权限已失效，请拒绝提案并由有效管理员重新发起。',
   PRIORITY_CHANGE_FORBIDDEN:'仅服务台、授权主管或当前符合处理资格的负责人可调整；负责人只能直接升级。',

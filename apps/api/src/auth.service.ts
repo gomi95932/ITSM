@@ -2,6 +2,8 @@ import { ForbiddenException, Injectable, ServiceUnavailableException, Unauthoriz
 import { createHash, randomBytes } from 'node:crypto';
 import { Database } from './database.service.js';
 import { ROLE_EFFECTIVE_SQL } from './role-policy.js';
+import type { PoolClient } from 'pg';
+import { oidcSettings } from './oidc-config.js';
 
 export type Identity = { id: string; name: string; groups: string[]; priorityReviewGroups?: string[]; csrfToken?: string; canManageRoles?:boolean; canManageRouting?:boolean };
 export type AuthHeaders = { devUser?: string; cookie?: string; csrf?: string };
@@ -40,7 +42,14 @@ export class AuthService {
 
   config() {
     return { mode: devEnabled() ? 'development' : 'dingtalk', corpId: process.env.DINGTALK_CORP_ID ?? '',
-      configured: !!(process.env.DINGTALK_APP_KEY && process.env.DINGTALK_APP_SECRET && process.env.DINGTALK_CORP_ID) };
+      configured: !!(process.env.DINGTALK_APP_KEY && process.env.DINGTALK_APP_SECRET && process.env.DINGTALK_CORP_ID),
+      oidcConfigured: !!oidcSettings() };
+  }
+
+  async issueSession(client: PoolClient, employeeId: string) {
+    const token = randomBytes(32).toString('hex'), csrfToken = randomBytes(24).toString('hex');
+    await client.query("INSERT INTO auth_sessions(token_hash,csrf_token,employee_id,expires_at) VALUES ($1,$2,$3,now()+interval '8 hours')", [digest(token),csrfToken,employeeId]);
+    return { token,csrfToken };
   }
 
   async login(code: unknown) {
@@ -69,9 +78,7 @@ export class AuthService {
         const employee = await client.query(`SELECT e.id FROM employees e JOIN identity_links l ON l.employee_id=e.id
           WHERE l.corp_id=$1 AND l.ding_user_id=$2 AND e.active=true FOR SHARE OF e,l`, [process.env.DINGTALK_CORP_ID, data.result!.userid]);
         if (!employee.rowCount) throw new ForbiddenException({ code: 'EMPLOYEE_NOT_LINKED' });
-        const token = randomBytes(32).toString('hex'), csrfToken = randomBytes(24).toString('hex');
-        await client.query("INSERT INTO auth_sessions(token_hash,csrf_token,employee_id,expires_at) VALUES ($1,$2,$3,now()+interval '8 hours')", [digest(token), csrfToken, employee.rows[0].id]);
-        return { token, csrfToken };
+        return this.issueSession(client, employee.rows[0].id);
       });
     } catch (error) {
       if (error instanceof ForbiddenException) throw error;

@@ -4,7 +4,7 @@ export * from './priority-sla.js';
 export * from './service-structure.js';
 export * from './service-structure-template.js';
 export * from './waiting.js';
-export { DEFAULT_CALENDAR, SLA_TARGETS, serviceMinutes, type ServiceCalendar } from './sla.js';
+export { DEFAULT_CALENDAR, SLA_TARGETS, serviceMinutes, validServiceCalendar, type ServiceCalendar } from './sla.js';
 export { assignmentDeadline } from './assignment.js';
 export type {SupportChangeKind,SupportChangeInput,SupportChangeDecision,SupportGroupView,SupportChangeView,SupportMemberView,SupportStructureView,SupportMembersView,SupportPeopleView,SupportAuditView,SupportDependencyKind,SupportDependenciesView} from './support.js';
 

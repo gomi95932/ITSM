@@ -23,6 +23,7 @@ import { formatDate,statuses } from './labels';
 type View='mine'|'catalog'|'queue'|'notifications'|'delegations'|'knowledge'|'reports'|'roles'|'routing'|'routing-config'|'priority-config'|'service-structure'|'support-structure'|'fulfillments'|'directory';
 type Delivery={id:string;state:string;attempts:number;lastError:string|null;updatedAt:string;number:string;canRetry:boolean};
 const user=ref<SessionUser>(),booting=ref(true),error=ref(''),loading=ref(false),development=ref(false),identity=ref(devUser());
+const enterpriseLogin=ref(false);
 const view=ref<View>('mine'),catalog=ref<CatalogItem[]>([]),tickets=ref<TicketView[]>([]),counts=ref<Record<string,number>>({}),total=ref(0),page=ref(1),filter=ref('');
 const workQueue=ref<WorkQueue>('all');
 const emptyWorkQueues=():WorkQueueCounts=>({all:0,assigned:0,incoming:0,outgoing:0,unassigned:0});
@@ -42,14 +43,20 @@ let bootGeneration=0;
 async function boot(){
   const generationId=++bootGeneration;++generation;booting.value=true;error.value='';user.value=undefined;setUser(null);
   try{
-    const config=await api<{mode:string;corpId:string;configured:boolean}>('/auth/config');
+    const config=await api<{mode:string;corpId:string;configured:boolean;oidcConfigured?:boolean}>('/auth/config');
+    enterpriseLogin.value=!!config.oidcConfigured;
     development.value=config.mode==='development';useDevelopment(development.value);
     if(!development.value){
       try{user.value=await api<SessionUser>('/auth/me');}
       catch(e){
         if(!(e instanceof ApiError)||e.status!==401)throw e;
-        if(!config.configured)throw new Error('钉钉应用尚未配置，请联系管理员。');
-        if(dd.env.platform==='notInDingTalk')throw new Error('请从钉钉工作台进入 IT 服务台。');
+        if(dd.env.platform==='notInDingTalk'||!config.configured){
+          if(enterpriseLogin.value){
+            error.value=new URLSearchParams(location.search).get('login')==='failed'?'企业登录未完成，请重试或联系管理员核对身份关联。':'请使用企业账号登录。';
+            return;
+          }
+          throw new Error(config.configured?'请从钉钉工作台进入 IT 服务台。':'企业登录尚未配置，请联系管理员。');
+        }
         const code=await new Promise<string>((resolve,reject)=>{
           const timeout=setTimeout(()=>reject(new Error('钉钉授权超时，请重新进入应用。')),15000);
           dd.ready(()=>{
@@ -101,7 +108,7 @@ onBeforeUnmount(()=>{window.removeEventListener('hashchange',syncHash);if(refres
 
 <template>
   <div v-if="booting" class="boot-state"><Headphones :size="32"/><LoaderCircle class="spin" :size="20"/><p>正在打开 IT 服务台</p></div>
-  <div v-else-if="!user" class="boot-state"><Headphones :size="36"/><h1>IT 服务台</h1><p role="alert">{{error}}</p><button class="primary" @click="boot"><RefreshCw :size="17"/>重新进入</button></div>
+  <div v-else-if="!user" class="boot-state"><Headphones :size="36"/><h1>IT 服务台</h1><p role="alert">{{error}}</p><a v-if="enterpriseLogin" class="primary enterprise-login" href="/api/v1/auth/oidc/start"><ShieldCheck :size="17"/>企业账号登录</a><button class="primary" @click="boot"><RefreshCw :size="17"/>重新进入</button></div>
   <div v-else class="app-shell">
     <aside class="sidebar"><a class="brand" href="#" @click.prevent="navigate('mine')"><span class="brand-icon"><Headphones :size="23"/></span><span>IT 服务台<small>祥承科技</small></span></a><p class="nav-caption">员工服务</p><nav aria-label="主要导航"><button :class="{active:view==='mine'}" @click="navigate('mine')"><ClipboardList :size="19"/>我的工单</button><button :class="{active:view==='catalog'}" @click="navigate('catalog')"><LayoutGrid :size="19"/>服务目录</button><button :class="{active:view==='knowledge'}" @click="navigate('knowledge')"><BookOpen :size="19"/>知识库</button><button :class="{active:view==='delegations'}" @click="navigate('delegations')"><UserRound :size="19"/>代报授权</button><template v-if="user.groups.length"><p class="nav-caption">支持中心</p><button :class="{active:view==='queue'}" @click="navigate('queue')"><Activity :size="19"/>IT 工作台</button><button :class="{active:view==='reports'}" @click="navigate('reports')"><BarChart3 :size="19"/>服务报表</button><button :class="{active:view==='notifications'}" @click="navigate('notifications')"><Bell :size="19"/>消息通知</button></template><template v-if="user.canManageRoles"><button :class="{active:view==='routing'}" @click="navigate('routing')"><TriangleAlert :size="19"/>路由告警</button><button :class="{active:view==='roles'}" @click="navigate('roles')"><ShieldCheck :size="19"/>角色授权</button></template>
       <button v-if="user.canManageRoles" :class="{active:view==='support-structure'}" @click="navigate('support-structure')"><Users :size="19"/>支持组</button>
@@ -110,7 +117,7 @@ onBeforeUnmount(()=>{window.removeEventListener('hashchange',syncHash);if(refres
       <button v-if="user.groups.length" :class="{active:view==='fulfillments'}" @click="navigate('fulfillments')"><ClipboardList :size="19"/>交付与回收</button>
       <template v-if="user.canManageRouting"><button :class="{active:view==='service-structure'}" @click="navigate('service-structure')"><LayoutGrid :size="19"/>服务组织</button><button :class="{active:view==='routing-config'}" @click="navigate('routing-config')"><Network :size="19"/>派单配置</button></template>
       </nav><div class="sidebar-bottom"><span class="avatar"><UserRound :size="18"/></span><div><strong>{{user.name}}</strong><small>{{user.groups.length?'IT 支持人员':'员工'}}</small></div><button v-if="!development" class="icon-button" title="退出登录" aria-label="退出登录" @click="logout"><LogOut :size="17"/></button></div></aside>
-    <div class="main-shell"><header class="topbar"><span class="breadcrumb">服务中心 <ChevronRight :size="14"/> {{title}}</span><label v-if="development" class="dev-switch">开发身份<select v-model="identity" aria-label="开发身份" @change="switchIdentity"><option value="employee-1">演示员工一</option><option value="employee-2">演示员工二</option><option value="agent-1">服务台工程师</option><option value="agent-2">应用支持工程师</option><option value="agent-3">服务台值班主管（演示）</option><option value="demo-admin-1">演示配置管理员一</option><option value="demo-admin-2">演示配置管理员二</option></select></label><span v-else class="connection-state"><span></span>钉钉已连接</span></header>
+    <div class="main-shell"><header class="topbar"><span class="breadcrumb">服务中心 <ChevronRight :size="14"/> {{title}}</span><label v-if="development" class="dev-switch">开发身份<select v-model="identity" aria-label="开发身份" @change="switchIdentity"><option value="employee-1">演示员工一</option><option value="employee-2">演示员工二</option><option value="agent-1">服务台工程师</option><option value="agent-2">应用支持工程师</option><option value="agent-3">服务台值班主管（演示）</option><option value="demo-admin-1">演示配置管理员一</option><option value="demo-admin-2">演示配置管理员二</option></select></label><span v-else class="connection-state"><span></span>企业账号已连接</span></header>
       <main class="content"><p v-if="error" class="error-banner" role="alert">{{error}}<button class="text-button" @click="load()">重试</button></p>
         <EmployeeForm v-if="creating" :catalog="catalog" :initial-code="initialCode" @close="back" @created="openTicket"/>
         <TicketDetail v-else-if="selected" :key="`${user.id}:${selected}`" :id="selected" :user="user" @back="back" @changed="load(true)"/>
@@ -188,6 +195,7 @@ onBeforeUnmount(()=>{window.removeEventListener('hashchange',syncHash);if(refres
 </template>
 
 <style scoped>
+.enterprise-login{display:inline-flex;align-items:center;gap:8px;text-decoration:none;padding:10px 16px;border-radius:6px;background:#087f8c;color:white}
 @media(min-width:761px){.sidebar nav{min-height:0;overflow-y:auto}.sidebar-bottom{flex-shrink:0}}
 .ticket-ownership{display:flex;flex-wrap:wrap;gap:4px 10px;max-width:100%;margin-top:7px;color:#61727b;font-size:11px;line-height:1.5;overflow-wrap:anywhere}
 .ticket-ownership span{min-width:0;overflow-wrap:anywhere}

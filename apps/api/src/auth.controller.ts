@@ -2,7 +2,7 @@ import { Body, Controller, Get, Headers, HttpCode, Post, Res, UnauthorizedExcept
 import { AuthService } from './auth.service.js';
 
 type CookieResponse = { setHeader(name: string, value: string): void };
-const cookie = (value: string, age: number) => `itsm_session=${value}; Path=/api; HttpOnly; SameSite=Strict; Max-Age=${age}${process.env.COOKIE_SECURE === 'true' ? '; Secure' : ''}`;
+export const sessionCookie = (value: string, age: number) => `itsm_session=${value}; Path=/api; HttpOnly; SameSite=Strict; Max-Age=${age}${process.env.COOKIE_SECURE === 'true' ? '; Secure' : ''}`;
 
 @Controller('auth')
 export class AuthController {
@@ -16,13 +16,13 @@ export class AuthController {
     // A non-simple custom header prevents cross-site form login. CORS is not enabled.
     if (marker !== '1' || !body || typeof body !== 'object' || Object.keys(body).join(',') !== 'code') throw new UnauthorizedException();
     const result = await this.auth.login((body as { code: unknown }).code);
-    res.setHeader('Set-Cookie', cookie(result.token, 28800));
+    res.setHeader('Set-Cookie', sessionCookie(result.token, 28800));
     return { csrfToken: result.csrfToken };
   }
   @Post('logout') @HttpCode(200)
   async logout(@Headers('cookie') session?: string, @Headers('x-csrf-token') csrf?: string, @Headers('x-dev-user') devUser?: string,
     @Res({ passthrough: true }) res?: CookieResponse) {
     await this.auth.identity({ cookie: session, csrf, devUser }, true);
-    await this.auth.logout(session); res?.setHeader('Set-Cookie', cookie('', 0)); return { ok: true };
+    await this.auth.logout(session); res?.setHeader('Set-Cookie', sessionCookie('', 0)); return { ok: true };
   }
 }
