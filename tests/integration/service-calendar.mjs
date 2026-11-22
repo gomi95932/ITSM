@@ -63,26 +63,31 @@ await sql("UPDATE employees SET active=false WHERE id='demo-admin-1'");
 try{assert.equal((await request(`/admin/sla-calendar/${inactive.id}/review`,'demo-admin-2',review)).status,409);}
 finally{await sql("UPDATE employees SET active=true WHERE id='demo-admin-1'");}
 ok(await request(`/admin/sla-calendar/${inactive.id}/review`,'demo-admin-2',{...review,decision:'REJECT'}),201);
-// A concurrent retirement must serialize with approval, not leave an approved proposal from an inactive employee.
-const concurrent=ok(await request('/admin/sla-calendar','demo-admin-1',{...body,id:randomUUID(),expectedVersion:current.version+1}),201);
-const releaseDisable=await holdEmployeeDisable('demo-admin-1');
-let pendingReview;
-try{
-  pendingReview=request(`/admin/sla-calendar/${concurrent.id}/review`,'demo-admin-2',review)
-    .catch(()=>({status:0,data:{code:'CALENDAR_REVIEW_FETCH_FAILED'}}));
-  let blocked=false;
-  for(let attempt=0;attempt<10&&!blocked;attempt++){
-    blocked=(await sql("SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE '%FOR SHARE OF e' AND query LIKE '%role_bindings%' ")).text!=='0';
-    if(!blocked)await delay(100);
+// Both policy publishers must serialize approval with retirement of their proposer.
+for(const resource of ['sla-calendar','priority-policy']){
+  const baseline=ok(await request(`/admin/${resource}`)).current;
+  const concurrent=ok(await request(`/admin/${resource}`,'demo-admin-1',{
+    ...body,id:randomUUID(),expectedVersion:baseline.version,config:baseline.config,
+  }),201);
+  const releaseDisable=await holdEmployeeDisable('demo-admin-1');
+  let pendingReview;
+  try{
+    pendingReview=request(`/admin/${resource}/${concurrent.id}/review`,'demo-admin-2',review)
+      .catch(()=>({status:0,data:{code:'REVIEW_FETCH_FAILED'}}));
+    let blocked=false;
+    for(let attempt=0;attempt<10&&!blocked;attempt++){
+      blocked=(await sql("SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE '%FOR SHARE OF e' AND query LIKE '%role_bindings%' ")).text!=='0';
+      if(!blocked)await delay(100);
+    }
+    assert.equal(blocked,true,`${resource} approval must wait for concurrent proposer retirement`);
+  }finally{
+    await releaseDisable();
+    try{if(pendingReview)assert.equal((await pendingReview).status,409);}
+    finally{await sql("UPDATE employees SET active=true WHERE id='demo-admin-1'");}
   }
-  assert.equal(blocked,true,'approval must lock the proposer employee while directory retirement is in progress');
-}finally{
-  await releaseDisable();
-  try{if(pendingReview)assert.equal((await pendingReview).status,409);}
-  finally{await sql("UPDATE employees SET active=true WHERE id='demo-admin-1'");}
+  assert.equal(ok(await request(`/admin/${resource}`)).current.version,baseline.version,`${resource}: retired proposer cannot publish a new version`);
+  ok(await request(`/admin/${resource}/${concurrent.id}/review`,'demo-admin-2',{...review,decision:'REJECT'}),201);
 }
-assert.equal(ok(await request('/admin/sla-calendar')).current.version,current.version+1,'concurrent retirement cannot publish a new calendar');
-ok(await request(`/admin/sla-calendar/${concurrent.id}/review`,'demo-admin-2',{...review,decision:'REJECT'}),201);
 // Restore the effective configuration through the same reviewed API, never by editing a historical version.
 const restore=ok(await request('/admin/sla-calendar','demo-admin-1',{...body,id:randomUUID(),expectedVersion:current.version+1,config:current.config,reason:'Restore CI calendar'}),201);
 ok(await request(`/admin/sla-calendar/${restore.id}/review`,'demo-admin-2',review),201);
