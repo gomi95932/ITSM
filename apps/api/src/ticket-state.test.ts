@@ -38,6 +38,18 @@ test('continuity decisions and supervisor initiation never restart a workflow or
   assert.throws(()=>transition('IN_PROGRESS','requester',{action:'CONTINUATION_PROPOSE',expectedVersion:1,reason:'Not authorized'}));
 });
 
+test('forced takeover preserves active waiting and confirmation states and requires an accountable target',()=>{
+  const input={action:'FORCE_TAKEOVER',expectedVersion:1,targetGroupId:'g',targetAssigneeId:'b',reason:'Emergency absence'} as const;
+  for(const status of ['IN_PROGRESS','WAITING_USER','WAITING_VENDOR','PENDING_CONFIRMATION'] as const)
+    assert.equal(transition(status,'agent',input),status);
+  assert.equal(transition('QUEUED','agent',input),'IN_PROGRESS');
+  for(const status of ['NEW','WAITING_APPROVAL','CLOSED','CANCELLED','REJECTED'] as const)
+    assert.throws(()=>transition(status,'agent',input));
+  assert.throws(()=>transition('IN_PROGRESS','requester',input));
+  for(const key of ['targetGroupId','targetAssigneeId','reason'] as const)
+    assert.throws(()=>transition('IN_PROGRESS','agent',{...input,[key]:undefined}));
+});
+
 test('new waits require a structured reason matching the wait type and an absolute follow-up time',()=>{
   const input={expectedVersion:2,comment:'Need further action',dueAt:'2026-12-01T10:00:00.000Z'};
   assert.equal(transition('IN_PROGRESS','agent',{...input,action:'REQUEST_INFO',waitingReason:'USER_INFORMATION'}),'WAITING_USER');

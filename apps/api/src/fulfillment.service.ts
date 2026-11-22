@@ -49,7 +49,7 @@ export class FulfillmentService {
       const groups=await this.groups(client,actor.id),ids=groups.map(g=>g.id);
       if(filter.group&&!ids.includes(filter.group))throw new NotFoundException();
       const scope=filter.group?[filter.group]:ids;
-      const where=`t.owner_group_id=ANY($2::text[]) AND (f.id IS NULL OR f.state IN ('READY','BLOCKED')
+      const where=`t.owner_group_id=ANY($2::text[]) AND staff_site_access(t.service_routing_snapshot,$1,t.owner_group_id) AND (f.id IS NULL OR f.state IN ('READY','BLOCKED')
         OR command.state='PENDING' OR command."completedAt">clock_timestamp()-interval '1 day')
         AND (a.state='APPROVED' OR f.id IS NOT NULL OR command.id IS NOT NULL)`;
       const total=(await client.query(`SELECT count(*)::int AS total ${deliveryFrom} WHERE ${where}`,[actor.id,scope])).rows[0].total;
@@ -127,8 +127,8 @@ export class FulfillmentService {
         JOIN employees sender ON sender.id=c.actor_id
         LEFT JOIN request_delivery_resolutions r ON r.command_id=c.id LEFT JOIN employees verifier ON verifier.id=r.actor_id`;
       const where=`c.operation='DELIVER' AND c.state='REJECTED' AND t.owner_group_id=ANY($1::text[])
-        AND (r.command_id IS NOT NULL)=$2::boolean`;
-      const total=(await client.query(`SELECT count(*)::int AS total ${from} WHERE ${where}`,[scope,resolved])).rows[0].total;
+        AND (r.command_id IS NOT NULL)=$2::boolean AND staff_site_access(t.service_routing_snapshot,$3,t.owner_group_id)`;
+      const total=(await client.query(`SELECT count(*)::int AS total ${from} WHERE ${where}`,[scope,resolved,actor.id])).rows[0].total;
       const items=(await client.query<DeliveryFailureItem>(`SELECT c.id,t.id AS "ticketId",t.number,t.subject,
         g.id AS "groupId",g.name AS "groupName",sender.display_name AS "operatorName",c.evidence_reference AS reference,
         c.completed_at AS "failedAt",(r.command_id IS NULL AND request_delivery_resolution_eligible(c.id,$3)
@@ -175,10 +175,11 @@ export class FulfillmentService {
       const scope=filter.group?[filter.group]:ids;
       const counts=(await client.query<{unreviewed:number;revokeDue:number;all:number}>(`SELECT
         count(*) FILTER(WHERE ${unreviewed})::int AS unreviewed,count(*) FILTER(WHERE ${due})::int AS "revokeDue",
-        count(*)::int AS "all" ${from} WHERE t.owner_group_id=ANY($1::text[])`,[scope])).rows[0];
+        count(*)::int AS "all" ${from} WHERE t.owner_group_id=ANY($1::text[])
+          AND staff_site_access(t.service_routing_snapshot,$2,t.owner_group_id)`,[scope,actor.id])).rows[0];
       const where=filter.queue==='UNREVIEWED'?unreviewed:filter.queue==='REVOKE_DUE'?due:'true';
       const items=(await client.query<FulfillmentItem>(`SELECT ${columns} ${from} ${catalogJoin}
-        WHERE t.owner_group_id=ANY($2::text[]) AND (${where}) ORDER BY f.created_at DESC,f.id
+        WHERE t.owner_group_id=ANY($2::text[]) AND staff_site_access(t.service_routing_snapshot,$1,t.owner_group_id) AND (${where}) ORDER BY f.created_at DESC,f.id
         LIMIT 20 OFFSET $3`,[actor.id,scope,(filter.page-1)*20])).rows;
       return {items,groups,counts,page:filter.page,size:filter.size,total:filter.queue==='UNREVIEWED'?counts.unreviewed:filter.queue==='REVOKE_DUE'?counts.revokeDue:counts.all};
     });
@@ -189,7 +190,7 @@ export class FulfillmentService {
     return this.db.transaction(async client=>{
       const groups=await this.groups(client,actor.id);
       const result=await client.query<FulfillmentItem>(`SELECT ${columns} ${from} ${catalogJoin}
-        WHERE f.id=$3 AND t.owner_group_id=ANY($2::text[])`,[actor.id,groups.map(g=>g.id),id]);
+        WHERE f.id=$3 AND t.owner_group_id=ANY($2::text[]) AND staff_site_access(t.service_routing_snapshot,$1,t.owner_group_id)`,[actor.id,groups.map(g=>g.id),id]);
       if(!result.rowCount)throw new NotFoundException();
       // Only an external record reference is exposed, never provider bindings or approval snapshots.
       const history=await client.query<FulfillmentDetail['events'][number]>(`SELECT e.id,e.action,e.from_state AS "fromState",e.to_state AS "toState",

@@ -45,18 +45,18 @@ export class ReportsController {
         JOIN employees e ON e.id=m.employee_id JOIN support_groups g ON g.id=m.group_id
         WHERE e.id=$1 AND e.active AND g.enabled AND m.group_id=$2`, [actor.id, groupId]);
       if (!membership.rowCount) throw new NotFoundException();
-      const window = [groupId, serviceType, from, to];
+      const window = [groupId, serviceType, from, to, actor.id];
       const coverage = (await client.query(`SELECT count(*)::int AS events,
           count(*) FILTER(WHERE o.expanded_at IS NULL)::int AS unexpanded,
           count(*) FILTER(WHERE o.expanded_at IS NOT NULL AND NOT EXISTS
             (SELECT 1 FROM notification_deliveries d WHERE d.outbox_id=o.id))::int AS without_deliveries
         FROM outbox_events o JOIN tickets t ON t.id=o.ticket_id
-        WHERE t.owner_group_id=$1 AND t.service_type=$2
+        WHERE t.owner_group_id=$1 AND t.service_type=$2 AND staff_site_access(t.service_routing_snapshot,$5,t.owner_group_id)
           AND o.created_at>=($3::date::timestamp AT TIME ZONE 'Asia/Shanghai')
           AND o.created_at<(($4::date+1)::timestamp AT TIME ZONE 'Asia/Shanghai')`, window)).rows[0];
       const rows = await client.query(`SELECT d.id,o.ticket_id,t.number,o.created_at AS event_at,d.updated_at,
           d.state,d.attempts,d.last_error FROM notification_deliveries d JOIN outbox_events o ON o.id=d.outbox_id
-        JOIN tickets t ON t.id=o.ticket_id WHERE t.owner_group_id=$1 AND t.service_type=$2
+        JOIN tickets t ON t.id=o.ticket_id WHERE t.owner_group_id=$1 AND t.service_type=$2 AND staff_site_access(t.service_routing_snapshot,$5,t.owner_group_id)
           AND o.created_at>=($3::date::timestamp AT TIME ZONE 'Asia/Shanghai')
           AND o.created_at<(($4::date+1)::timestamp AT TIME ZONE 'Asia/Shanghai')
         ORDER BY d.updated_at DESC,d.id LIMIT 5001`, window);
@@ -105,11 +105,13 @@ export class ReportsController {
         JOIN ticket_responsibility_history f ON f.ticket_id=h.ticket_id AND f.revision=1
         LEFT JOIN LATERAL (SELECT observed_at FROM ticket_responsibility_history
           WHERE ticket_id=h.ticket_id AND revision>h.revision ORDER BY revision LIMIT 1) n ON true
-        WHERE h.owner_group_id=$1 AND h.service_type=$2 AND h.observed_at<least($4::timestamptz,$5::timestamptz)
+        WHERE h.owner_group_id=$1 AND h.service_type=$2
+          AND EXISTS(SELECT 1 FROM tickets scoped WHERE scoped.id=h.ticket_id AND staff_site_access(scoped.service_routing_snapshot,$6,h.owner_group_id))
+          AND h.observed_at<least($4::timestamptz,$5::timestamptz)
           AND least(coalesce(n.observed_at,$5::timestamptz),$4::timestamptz,$5::timestamptz)
             > greatest(h.observed_at,$3::timestamptz)
         ORDER BY h.observed_at DESC,h.ticket_id,h.revision DESC LIMIT 5001`,
-      [groupId, serviceType, clock.window_start, clock.window_end, clock.as_of]);
+      [groupId, serviceType, clock.window_start, clock.window_end, clock.as_of, actor.id]);
       if (rows.rows.length > 5000) throw new ServiceUnavailableException({ code: 'REPORT_HISTORY_WINDOW_TOO_LARGE' });
       // Do not join current ticket details or expose the next group's identity after a historical transfer.
       const items: ResponsibilityInterval[] = rows.rows.map(row => ({ ticketId: row.ticket_id, number: row.ticket_number,
@@ -161,10 +163,10 @@ export class ReportsController {
         FROM tickets t LEFT JOIN ticket_feedback f ON f.ticket_id=t.id
         JOIN service_catalog c ON c.code=t.service_code
         LEFT JOIN employees a ON a.id=t.assignee_id LEFT JOIN employees p ON p.id=t.pending_assignee_id
-        WHERE t.service_type=$4 AND t.owner_group_id=$1
+        WHERE t.service_type=$4 AND t.owner_group_id=$1 AND staff_site_access(t.service_routing_snapshot,$5,t.owner_group_id)
           AND t.created_at>=($2::date::timestamp AT TIME ZONE 'Asia/Shanghai')
           AND t.created_at<(($3::date + 1)::timestamp AT TIME ZONE 'Asia/Shanghai')
-        ORDER BY t.created_at DESC,t.id DESC LIMIT 5001`, [groupId, from, to, serviceType]);
+        ORDER BY t.created_at DESC,t.id DESC LIMIT 5001`, [groupId, from, to, serviceType, actor.id]);
       if (tickets.rows.length > 5000) throw new ServiceUnavailableException({ code: 'REPORT_WINDOW_TOO_LARGE' });
       const cycles = tickets.rows.length ? await client.query<Cycle>(`SELECT s.*,now() AS clock FROM sla_cycles s
         WHERE s.ticket_id=ANY($1::uuid[]) ORDER BY s.ticket_id,s.cycle`, [tickets.rows.map(t => t.id)]) : { rows: [] as Cycle[] };

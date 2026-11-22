@@ -19,6 +19,7 @@ const audiences: Readonly<Record<string, Audience>> = {
   AUTO_CLOSE: { requester:true, owner:true },
   REASSIGN: { owner:true, pending:true, queue:true },
   INITIATE_HANDOVER: { owner:true, pending:true, escalation:true },
+  FORCE_TAKEOVER: { requester:true, owner:true, escalation:true },
   CONTINUATION_PROPOSE: { owner:true, escalation:true },
   CONTINUATION_APPROVE: { owner:true, escalation:true },
   CONTINUATION_REJECT: { owner:true, escalation:true },
@@ -69,7 +70,8 @@ export async function notificationRecipients(client: Pick<PoolClient,'query'>, e
   if (a.waiting) {
     const recipients = await client.query<{id:string}>(`SELECT e.id FROM ticket_waiting_active_signals s
       JOIN tickets t ON t.id=s.ticket_id JOIN employees e ON e.active
-      WHERE s.event_id=$1 AND ($2::text IS NULL OR e.id=$2) AND (
+      WHERE s.event_id=$1 AND ($2::text IS NULL OR e.id=$2)
+        AND (e.id=t.requester_id OR staff_site_access(t.service_routing_snapshot,e.id,t.owner_group_id)) AND (
         (s.waiting_status='WAITING_USER' AND e.id=t.requester_id) OR
         (e.id=t.assignee_id AND ticket_processing_eligible(t.id,e.id)) OR
         ((t.assignee_id IS NULL OR NOT ticket_processing_eligible(t.id,t.assignee_id)) AND EXISTS(
@@ -92,8 +94,10 @@ export async function notificationRecipients(client: Pick<PoolClient,'query'>, e
   }
   if(a.fulfillment){
     const recipients=await client.query<{id:string}>(`SELECT e.id FROM request_fulfillment_active_signals s
+      JOIN tickets t ON t.id=s.ticket_id
       JOIN group_memberships m ON m.group_id=s.group_id JOIN employees e ON e.id=m.employee_id AND e.active
-      WHERE s.event_id=$1 AND ($2::text IS NULL OR e.id=$2) AND (
+      WHERE s.event_id=$1 AND ($2::text IS NULL OR e.id=$2)
+        AND staff_site_access(t.service_routing_snapshot,e.id,s.group_id) AND (
         (s.kind='REVIEW_REQUIRED' AND request_fulfillment_operator_eligible(s.fulfillment_id,e.id,'REVIEW')) OR
         (s.kind='REVOKE_REQUIRED' AND request_fulfillment_operator_eligible(s.fulfillment_id,e.id,'REVOKE')) OR
         (s.kind IN ('REVIEW_OVERDUE','REVOKE_OVERDUE') AND s.escalate_at<=clock_timestamp() AND EXISTS(
@@ -103,9 +107,13 @@ export async function notificationRecipients(client: Pick<PoolClient,'query'>, e
     return recipients.rows.map(row=>row.id);
   }
   const result = await client.query<{ id:string }>(`SELECT e.id FROM ticket_events v JOIN tickets t ON t.id=v.ticket_id
-    JOIN employees e ON e.active WHERE v.id=$1 AND ($2::text IS NULL OR e.id=$2) AND (
+    JOIN employees e ON e.active WHERE v.id=$1 AND ($2::text IS NULL OR e.id=$2)
+      AND (e.id=t.requester_id OR staff_site_access(t.service_routing_snapshot,e.id,t.owner_group_id)
+        OR (e.id=t.pending_assignee_id AND staff_site_access(t.service_routing_snapshot,e.id,t.pending_group_id))) AND (
       ($3 AND e.id=t.requester_id) OR
       ($4 AND e.id=t.assignee_id AND EXISTS(SELECT 1 FROM group_memberships m WHERE m.employee_id=e.id AND m.group_id=t.owner_group_id)) OR
+      (v.action='FORCE_TAKEOVER' AND e.id=v.detail->>'oldAssigneeId' AND EXISTS(
+        SELECT 1 FROM group_memberships m WHERE m.employee_id=e.id AND m.group_id=t.owner_group_id)) OR
       ($5 AND e.id=t.pending_assignee_id AND v.detail->>'assignmentVersion'=t.version::text
         AND v.detail->>'targetAssigneeId'=t.pending_assignee_id
         AND v.detail->>'targetGroupId'=t.pending_group_id AND EXISTS

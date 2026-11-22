@@ -84,8 +84,8 @@ export class KnowledgeService {
       const {hash,response}=await this.replay(client,actor,null,'CREATE',input,key);
       if (response) return response;
       if (input.sourceTicketId) {
-        const source=await client.query(`SELECT 1 FROM tickets WHERE id=$1 AND owner_group_id=$2 AND service_type='INC' AND status='CLOSED'`,
-          [input.sourceTicketId,input.groupId]);
+        const source=await client.query(`SELECT 1 FROM tickets WHERE id=$1 AND owner_group_id=$2 AND service_type='INC' AND status='CLOSED'
+          AND staff_site_access(service_routing_snapshot,$3,owner_group_id)`,[input.sourceTicketId,input.groupId,actor.id]);
         if (!source.rowCount) throw new BadRequestException({code:'KNOWLEDGE_SOURCE_UNAVAILABLE'});
       }
       const result=await client.query<Article>(`INSERT INTO knowledge_articles(owner_group_id,source_ticket_id,author_id,audience,title,body,review_due_at)
@@ -103,6 +103,7 @@ export class KnowledgeService {
     return this.db.transaction(async client => {
       const row=await this.locked(client,id);
       await this.appointed(client,actor,row.owner_group_id,'editors');
+      if(!(await client.query('SELECT 1 WHERE knowledge_site_access($1,$2)',[id,actor.id])).rowCount)throw new NotFoundException();
       if (row.author_id !== actor.id) throw new ForbiddenException({code:'KNOWLEDGE_AUTHOR_REQUIRED'});
       const {hash,response}=await this.replay(client,actor,id,'REVISE',input,key);
       if (response) return response;
@@ -125,6 +126,7 @@ export class KnowledgeService {
     return this.db.transaction(async client => {
       const row=await this.locked(client,id);
       await this.appointed(client,actor,row.owner_group_id,action==='APPROVE'||action==='REJECT'?'reviewers':'editors');
+      if(!(await client.query('SELECT 1 WHERE knowledge_site_access($1,$2)',[id,actor.id])).rowCount)throw new NotFoundException();
       const {hash,response}=await this.replay(client,actor,id,action,body,key);
       if (response) return response;
       if (row.draft_version !== body.expectedVersion) throw new ConflictException({code:'KNOWLEDGE_VERSION_OR_STATE_CONFLICT'});
@@ -158,7 +160,7 @@ export class KnowledgeService {
     if (scope==='managed') {
       const result=await this.db.pool.query(`SELECT a.id,a.status,a.draft_version AS "draftVersion",a.published_version AS "publishedVersion",
         a.title,a.audience,a.review_due_at AS "reviewDueAt" FROM knowledge_articles a
-        WHERE a.owner_group_id=ANY($1::text[]) AND (EXISTS(SELECT 1 FROM knowledge_editors e WHERE e.employee_id=$2 AND e.group_id=a.owner_group_id)
+        WHERE a.owner_group_id=ANY($1::text[]) AND knowledge_site_access(a.id,$2) AND (EXISTS(SELECT 1 FROM knowledge_editors e WHERE e.employee_id=$2 AND e.group_id=a.owner_group_id)
           OR EXISTS(SELECT 1 FROM knowledge_reviewers r WHERE r.employee_id=$2 AND r.group_id=a.owner_group_id))
         AND a.title ILIKE $3 ESCAPE '!' ORDER BY a.updated_at DESC LIMIT 50`,[actor.groups,actor.id,pattern]);
       return {items:result.rows};
@@ -166,7 +168,7 @@ export class KnowledgeService {
     const result=await this.db.pool.query(`SELECT v.article_id AS id,v.version,v.title,v.audience,v.published_at AS "publishedAt"
       FROM knowledge_articles a JOIN knowledge_versions v ON v.article_id=a.id AND v.version=a.published_version
       WHERE a.status<>'ARCHIVED' AND v.review_due_at>now() AND (v.audience='EMPLOYEE' OR a.owner_group_id=ANY($1::text[]))
-        AND (v.title ILIKE $2 ESCAPE '!' OR v.body ILIKE $2 ESCAPE '!') ORDER BY v.published_at DESC LIMIT 50`,[actor.groups,pattern]);
+        AND knowledge_site_access(a.id,$3) AND (v.title ILIKE $2 ESCAPE '!' OR v.body ILIKE $2 ESCAPE '!') ORDER BY v.published_at DESC LIMIT 50`,[actor.groups,pattern,actor.id]);
     return {items:result.rows};
   }
 
@@ -178,6 +180,7 @@ export class KnowledgeService {
       const row=await this.locked(client,id);
       const employee=await client.query('SELECT 1 FROM employees WHERE id=$1 AND active FOR SHARE',[actor.id]);
       if (!employee.rowCount) throw new ForbiddenException({code:'EMPLOYEE_DISABLED'});
+      if(!(await client.query('SELECT 1 WHERE knowledge_site_access($1,$2)',[id,actor.id])).rowCount)throw new NotFoundException();
       const publication=await client.query<{audience:string;available:boolean}>(`SELECT audience,review_due_at>clock_timestamp() AS available
         FROM knowledge_versions WHERE article_id=$1 AND version=$2`,[id,row.published_version]);
       if (row.status==='ARCHIVED' || !publication.rows[0]?.available) throw new NotFoundException();
@@ -207,7 +210,7 @@ export class KnowledgeService {
   async get(actor: Identity, id: string, managed=false) {
     if (!uuid.test(id)) throw new NotFoundException();
     if (managed) {
-      const result=await this.db.pool.query<Article>(`SELECT a.* FROM knowledge_articles a WHERE a.id=$1 AND a.owner_group_id=ANY($2::text[])
+      const result=await this.db.pool.query<Article>(`SELECT a.* FROM knowledge_articles a WHERE a.id=$1 AND a.owner_group_id=ANY($2::text[]) AND knowledge_site_access(a.id,$3)
         AND (EXISTS(SELECT 1 FROM knowledge_editors e WHERE e.employee_id=$3 AND e.group_id=a.owner_group_id)
           OR EXISTS(SELECT 1 FROM knowledge_reviewers r WHERE r.employee_id=$3 AND r.group_id=a.owner_group_id))`,[id,actor.groups,actor.id]);
       if (!result.rowCount) throw new NotFoundException();
@@ -221,7 +224,7 @@ export class KnowledgeService {
       CASE WHEN f.employee_id IS NULL THEN NULL ELSE jsonb_build_object('version',f.version,'helpful',f.helpful,'submittedAt',f.created_at) END AS feedback
       FROM knowledge_articles a JOIN knowledge_versions v ON v.article_id=a.id AND v.version=a.published_version
       LEFT JOIN knowledge_feedback f ON f.article_id=v.article_id AND f.version=v.version AND f.employee_id=$3
-      WHERE a.id=$1 AND a.status<>'ARCHIVED' AND v.review_due_at>now()
+      WHERE a.id=$1 AND a.status<>'ARCHIVED' AND v.review_due_at>now() AND knowledge_site_access(a.id,$3)
         AND (v.audience='EMPLOYEE' OR a.owner_group_id=ANY($2::text[]))`,[id,actor.groups,actor.id]);
     if (!result.rowCount) throw new NotFoundException();
     return {id,...result.rows[0]};

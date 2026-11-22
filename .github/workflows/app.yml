@@ -218,10 +218,12 @@ jobs:
           "${compose[@]}" up -d --no-deps --force-recreate --wait --wait-timeout 90 web
           node tests/integration/request-intake.mjs
           ITSM_REQUEST_INTAKE_CI_ENABLED=true npx playwright test tests/e2e/request-intake.spec.ts --output test-results/request-intake
+      - name: Verify trusted sites, service SLA snapshots and emergency ownership in final disposable phase
+        run: node tests/integration/operations-scope.mjs
       - name: Verify browser evidence survived all isolated test phases
         run: |
           for viewport in desktop mobile; do
-            for scene in attachments directory voice notification-deeplink request-lifecycle-feedback reports-requests reports-personal reports-history reports-notifications waiting-detail waiting-reports request-delivery-completed request-intake-progress; do
+            for scene in attachments directory voice notification-deeplink request-lifecycle-feedback reports-requests reports-personal reports-history reports-notifications waiting-detail waiting-reports request-delivery-completed request-intake-progress operations appointments; do
               test -s "test-results/${scene}-${viewport}.png"
             done
           done

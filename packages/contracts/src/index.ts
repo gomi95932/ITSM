@@ -26,7 +26,7 @@ export interface TicketListResponse {
   counts: Partial<Record<TicketStatus, number>>;
   workQueues?: WorkQueueCounts;
 }
-export const TICKET_ACTIONS = ['ACCEPT', 'REQUEST_INFO', 'ADD_INFO', 'WAIT_VENDOR', 'RESUME_VENDOR', 'RESOLVE', 'CONFIRM', 'REOPEN', 'CANCEL', 'REASSIGN', 'INITIATE_HANDOVER', 'ACCEPT_HANDOVER', 'DECLINE_HANDOVER', 'CANCEL_HANDOVER', 'ASSIGN_OFFER', 'ACCEPT_OFFER', 'DECLINE_OFFER', 'CANCEL_OFFER', 'CONTINUATION_PROPOSE', 'CONTINUATION_APPROVE', 'CONTINUATION_REJECT', 'CONTINUATION_REVOKE'] as const;
+export const TICKET_ACTIONS = ['ACCEPT', 'REQUEST_INFO', 'ADD_INFO', 'WAIT_VENDOR', 'RESUME_VENDOR', 'RESOLVE', 'CONFIRM', 'REOPEN', 'CANCEL', 'REASSIGN', 'INITIATE_HANDOVER', 'ACCEPT_HANDOVER', 'DECLINE_HANDOVER', 'CANCEL_HANDOVER', 'ASSIGN_OFFER', 'ACCEPT_OFFER', 'DECLINE_OFFER', 'CANCEL_OFFER', 'CONTINUATION_PROPOSE', 'CONTINUATION_APPROVE', 'CONTINUATION_REJECT', 'CONTINUATION_REVOKE', 'FORCE_TAKEOVER'] as const;
 export type TicketAction = typeof TICKET_ACTIONS[number];
 export type TicketType = 'INC' | 'REQ' | 'GEN';
 export type Impact = 'COMPANY' | 'DEPARTMENT' | 'INDIVIDUAL';
@@ -119,6 +119,7 @@ export interface TicketView extends TicketReceipt {
   requestCompletionReady?: boolean;
   ownerContinuityRequired?: boolean;
   canManageContinuity?: boolean;
+  site?: {id:string;name:string;configVersion:number}|null;
   continuations?: {id:string;employeeId:string;proposedBy:string;status:string;expiresAt:string;reason:string;current:boolean;effective:boolean}[];
   priorityReviewState: PriorityReviewState;
   priorityCandidateAt: string | null;
@@ -132,6 +133,7 @@ export interface TicketView extends TicketReceipt {
   priorityAlert?: { reviewersAvailable: boolean; overdue: boolean; notificationMode: string; deliveries: Record<string, number> };
   events?: { action: string; actorId?:string; actorName?:string; fromStatus: string | null; toStatus: string; detail: Record<string, string>; createdAt: string }[];
   sla?: { cycle: number; priority: Priority; responseTarget: number; resolutionTarget: number; responseMinutes: number; resolutionMinutes: number; responded: boolean; completed: boolean; paused: boolean; pauseReason?:'USER'|'APPROVAL'|null; breached: boolean;
+    template?: {id:string;name:string;configVersion:number}|null;
     obligations?: {id:string;priority:string;responseTarget:number;resolutionTarget:number;responseMinutes:number;resolutionMinutes:number;breached:boolean}[] }[];
   requestProgress?: {
     cancellation?: 'NOT_SENT' | 'OA_CONFIRMATION_REQUIRED' | 'OA_CREATION_UNCERTAIN' | 'OA_CLOSED';
@@ -158,3 +160,4 @@ export interface TicketReceipt {
   assignmentPolicyVersionId?: string | null;
 }
 export * from './fulfillment.js';
+export * from './operations.js';

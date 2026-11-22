@@ -14,13 +14,15 @@ import RoutingConfigPanel from './components/RoutingConfigPanel.vue';
 import PriorityConfigPanel from './components/PriorityConfigPanel.vue';
 import ServiceStructurePanel from './components/ServiceStructurePanel.vue';
 import SupportStructurePanel from './components/SupportStructurePanel.vue';
+import OperationsPanel from './components/OperationsPanel.vue';
+import AppointmentsPanel from './components/AppointmentsPanel.vue';
 import WorkQueueTabs from './components/WorkQueueTabs.vue';
 import FulfillmentPanel from './components/FulfillmentPanel.vue';
 import DirectoryPanel from './components/DirectoryPanel.vue';
 import { api,ApiError,devUser,errorText,setUser,useDevelopment } from './api';
 import { formatDate,statuses } from './labels';
 
-type View='mine'|'catalog'|'queue'|'notifications'|'delegations'|'knowledge'|'reports'|'roles'|'routing'|'routing-config'|'priority-config'|'service-structure'|'support-structure'|'fulfillments'|'directory';
+type View='mine'|'catalog'|'queue'|'notifications'|'delegations'|'knowledge'|'reports'|'roles'|'routing'|'routing-config'|'priority-config'|'service-structure'|'support-structure'|'fulfillments'|'directory'|'operations'|'appointments';
 type Delivery={id:string;state:string;attempts:number;lastError:string|null;updatedAt:string;number:string;canRetry:boolean};
 const user=ref<SessionUser>(),booting=ref(true),error=ref(''),loading=ref(false),development=ref(false),identity=ref(devUser());
 const enterpriseLogin=ref(false);
@@ -36,7 +38,7 @@ const unavailableCatalog=computed(()=>catalog.value.filter(item=>!item.available
 const openCount=computed(()=>Object.entries(counts.value).filter(([status])=>!['CLOSED','CANCELLED','REJECTED'].includes(status)).reduce((sum,[,count])=>sum+count,0));
 const noticeLabels:Record<string,string>={PENDING:'待发送',DISPATCHING:'正在提交',SENDING:'平台受理，待确认',DELIVERED:'平台确认发送成功',SIMULATED:'开发模拟',DEAD:'失败待处理',SKIPPED:'已跳过',REVIEW_REQUIRED:'发送结果待核查'};
 const needsNoticeAttention=(item:Delivery)=>['DEAD','REVIEW_REQUIRED'].includes(item.state);
-const title=computed(()=>({mine:'我的工单',catalog:'服务目录',queue:'IT 工作台',notifications:'消息通知',delegations:'代报授权',knowledge:'知识库',reports:'服务报表',roles:'角色授权',routing:'路由告警','routing-config':'派单配置','priority-config':'分级与时限','service-structure':'服务组织','support-structure':'支持组',fulfillments:'交付与回收',directory:'人员同步'})[view.value]);
+const title=computed(()=>({mine:'我的工单',catalog:'服务目录',queue:'IT 工作台',notifications:'消息通知',delegations:'代报授权',knowledge:'知识库',reports:'服务报表',roles:'角色授权',routing:'路由告警','routing-config':'派单配置','priority-config':'分级与时限','service-structure':'服务组织','support-structure':'支持组',fulfillments:'交付与回收',directory:'人员同步',operations:'厂区与服务时限',appointments:'岗位任职'})[view.value]);
 let refreshTimer:ReturnType<typeof setInterval>|undefined;
 let generation=0;
 let bootGeneration=0;
@@ -112,6 +114,8 @@ onBeforeUnmount(()=>{window.removeEventListener('hashchange',syncHash);if(refres
   <div v-else class="app-shell">
     <aside class="sidebar"><a class="brand" href="#" @click.prevent="navigate('mine')"><span class="brand-icon"><Headphones :size="23"/></span><span>IT 服务台<small>祥承科技</small></span></a><p class="nav-caption">员工服务</p><nav aria-label="主要导航"><button :class="{active:view==='mine'}" @click="navigate('mine')"><ClipboardList :size="19"/>我的工单</button><button :class="{active:view==='catalog'}" @click="navigate('catalog')"><LayoutGrid :size="19"/>服务目录</button><button :class="{active:view==='knowledge'}" @click="navigate('knowledge')"><BookOpen :size="19"/>知识库</button><button :class="{active:view==='delegations'}" @click="navigate('delegations')"><UserRound :size="19"/>代报授权</button><template v-if="user.groups.length"><p class="nav-caption">支持中心</p><button :class="{active:view==='queue'}" @click="navigate('queue')"><Activity :size="19"/>IT 工作台</button><button :class="{active:view==='reports'}" @click="navigate('reports')"><BarChart3 :size="19"/>服务报表</button><button :class="{active:view==='notifications'}" @click="navigate('notifications')"><Bell :size="19"/>消息通知</button></template><template v-if="user.canManageRoles"><button :class="{active:view==='routing'}" @click="navigate('routing')"><TriangleAlert :size="19"/>路由告警</button><button :class="{active:view==='roles'}" @click="navigate('roles')"><ShieldCheck :size="19"/>角色授权</button></template>
       <button v-if="user.canManageRoles" :class="{active:view==='support-structure'}" @click="navigate('support-structure')"><Users :size="19"/>支持组</button>
+      <button v-if="user.canManageRoles" :class="{active:view==='appointments'}" @click="navigate('appointments')"><Users :size="19"/>岗位任职</button>
+      <button v-if="user.canManageRouting" :class="{active:view==='operations'}" @click="navigate('operations')"><Network :size="19"/>厂区与服务时限</button>
       <button v-if="user.canManageRouting" :class="{active:view==='directory'}" @click="navigate('directory')"><Users :size="19"/>人员同步</button>
       <button v-if="user.canManageRouting" :class="{active:view==='priority-config'}" @click="navigate('priority-config')"><ShieldCheck :size="19"/>分级与时限</button>
       <button v-if="user.groups.length" :class="{active:view==='fulfillments'}" @click="navigate('fulfillments')"><ClipboardList :size="19"/>交付与回收</button>
@@ -145,6 +149,8 @@ onBeforeUnmount(()=>{window.removeEventListener('hashchange',syncHash);if(refres
           <RoutingConfigPanel v-else-if="view==='routing-config'" :key="user.id" :user="user"/>
           <ServiceStructurePanel v-else-if="view==='service-structure'&&user.canManageRouting" :key="user.id" :user="user"/>
           <SupportStructurePanel v-else-if="view==='support-structure'&&user.canManageRoles" :key="user.id" :user="user"/>
+          <OperationsPanel v-else-if="view==='operations'&&user.canManageRouting" :key="user.id" :user="user"/>
+          <AppointmentsPanel v-else-if="view==='appointments'&&user.canManageRoles" :key="user.id"/>
           <template v-else-if="view==='notifications'">
             <div class="section-heading"><p class="muted">{{notificationMode==='fake'?'开发模拟':notificationMode==='dingtalk'?'钉钉通知':'发送未启用'}}</p><span class="count-badge danger">{{notices.filter(needsNoticeAttention).length}} 条待处理</span></div>
             <div class="table-wrap"><table><thead><tr><th>工单</th><th>发送状态</th><th>尝试次数</th><th>异常代码</th><th>更新时间</th><th>操作</th></tr></thead><tbody>

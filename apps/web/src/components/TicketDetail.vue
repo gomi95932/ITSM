@@ -35,7 +35,7 @@ watch([comment,reason,dueAt,vendorReference,vendorOwner,category,evidence,target
 watch(target,async value=>{
   targetPerson.value='';members.value=[];membersLoading.value=!!value;
   if(!value)return;
-  try{const result=await api<{items:{id:string;name:string}[]}>(`/tickets/${props.id}/assignment-candidates?groupId=${encodeURIComponent(value)}`);if(target.value===value)members.value=result.items.filter(person=>person.id!==props.user.id&&person.id!==ticket.value?.assigneeId);}
+  try{const result=await api<{items:{id:string;name:string}[]}>(`/tickets/${props.id}/assignment-candidates?groupId=${encodeURIComponent(value)}`);if(target.value===value)members.value=result.items.filter(person=>(action.value==='FORCE_TAKEOVER'||person.id!==props.user.id)&&person.id!==ticket.value?.assigneeId);}
   catch(e){if(target.value===value)error.value=errorText(e);}
   finally{if(target.value===value)membersLoading.value=false;}
 });
@@ -59,6 +59,7 @@ const available=computed<TicketAction[]>(()=>{
     const current=ticket.value.continuations?.filter(item=>item.current)??[];
     if(ticket.value.assigneeId&&(owner||ticket.value.canManageContinuity)&&!current.some(item=>item.status==='PENDING'||item.effective))result.push('CONTINUATION_PROPOSE');
     if(ticket.value.canManageContinuity){
+      if(ticket.value.assigneeId)result.push('FORCE_TAKEOVER');
       if(ticket.value.assigneeId&&!owner&&!ticket.value.pendingAssigneeId)result.push('INITIATE_HANDOVER');
       if(current.some(item=>item.status==='PENDING'&&item.proposedBy!==props.user.id&&item.employeeId!==props.user.id))result.push('CONTINUATION_APPROVE','CONTINUATION_REJECT');
       if(current.some(item=>item.effective))result.push('CONTINUATION_REVOKE');
@@ -67,13 +68,13 @@ const available=computed<TicketAction[]>(()=>{
   return result;
 });
 const commands=computed<Record<string,string>>(()=>({ACCEPT:'接单并回复',REQUEST_INFO:'请求补充',ADD_INFO:'补充信息',WAIT_VENDOR:'等待厂商',RESUME_VENDOR:'恢复处理',RESOLVE:'提交解决方案',CONFIRM:'确认已解决',REOPEN:'仍未解决',CANCEL:'撤销报障',REASSIGN:'发起交接',INITIATE_HANDOVER:'主管发起交接',CONTINUATION_PROPOSE:'申请限期处理',CONTINUATION_APPROVE:'批准限期处理',CONTINUATION_REJECT:'拒绝限期处理',CONTINUATION_REVOKE:'立即撤销授权',ACCEPT_HANDOVER:'确认接收',DECLINE_HANDOVER:'退回交接',CANCEL_HANDOVER:'撤回交接',ASSIGN_OFFER:'指定候选人',ACCEPT_OFFER:'确认接单并回复',DECLINE_OFFER:'拒绝接单',CANCEL_OFFER:'撤回派单',
-  ...(ticket.value?.serviceType==='REQ'?{RESOLVE:'提交交付完成',CONFIRM:'确认已交付',REOPEN:'交付仍有问题',CANCEL:'撤销申请'}:{})}));
+  FORCE_TAKEOVER:'主管紧急接管',...(ticket.value?.serviceType==='REQ'?{RESOLVE:'提交交付完成',CONFIRM:'确认已交付',REOPEN:'交付仍有问题',CANCEL:'撤销申请'}:{})}));
 const resolutionCategories=computed(()=>ticket.value?.serviceType==='REQ'?['权限开通','资源交付','服务配置']:['配置调整','故障恢复','操作指导','厂商修复']);
 const continuationLabels:Record<string,string>={PENDING:'待独立复核',APPROVED:'已批准',REJECTED:'已拒绝',REVOKED:'已撤销'};
 const selectableContinuations=computed(()=>ticket.value?.continuations?.filter(item=>item.current&&
   (action.value==='CONTINUATION_REVOKE'?item.effective:item.status==='PENDING'&&item.proposedBy!==props.user.id&&item.employeeId!==props.user.id))??[]);
 async function load(){loading.value=true;error.value='';try{ticket.value=await api<TicketView>(`/tickets/${props.id}`);catalog.value=(await api<{items:CatalogItem[]}>('/catalog')).items;if(props.user.groups.length)groups.value=(await api<{items:{id:string;name:string}[]}>('/support-groups')).items;}catch(e){error.value=errorText(e);}finally{loading.value=false;}}
-function choose(value:TicketAction){correcting.value=false;action.value=value;comment.value='';reason.value='';dueAt.value='';waitingReason.value='';vendorReference.value='';vendorOwner.value='';category.value='';evidence.value='';target.value=value==='ASSIGN_OFFER'?ticket.value?.ownerGroupId??'':'';targetPerson.value='';continuationId.value=selectableContinuations.value[0]?.id??'';contentSafe.value=false;key.value=createRequestKey();error.value='';}
+function choose(value:TicketAction){correcting.value=false;action.value=value;comment.value='';reason.value='';dueAt.value='';waitingReason.value='';vendorReference.value='';vendorOwner.value='';category.value='';evidence.value='';target.value=['ASSIGN_OFFER','FORCE_TAKEOVER'].includes(value)?ticket.value?.ownerGroupId??'':'';targetPerson.value='';continuationId.value=selectableContinuations.value[0]?.id??'';contentSafe.value=false;key.value=createRequestKey();error.value='';}
 async function submitClassification(){
   if(!ticket.value||!classificationService.value||!classificationSafe.value||busy.value)return;busy.value=true;error.value='';
   try{await api(`/tickets/${props.id}/classification`,{method:'POST',key:classificationKey.value,body:{contentClass:'GENERAL',expectedVersion:ticket.value.version,serviceCode:classificationCode.value,formVersion:classificationService.value.formVersion,fields:classificationFields.value,reason:classificationReason.value}});
@@ -87,7 +88,7 @@ async function submit(){
   if(dueAt.value)body.dueAt=new Date(dueAt.value).toISOString();
   if(waitingReason.value&&['REQUEST_INFO','WAIT_VENDOR'].includes(action.value))body.waitingReason=waitingReason.value;
   if(vendorReference.value)body.vendorReference=vendorReference.value;if(vendorOwner.value)body.vendorOwner=vendorOwner.value;
-  if(category.value)body.resolutionCategory=category.value;if(evidence.value)body.evidence=evidence.value;if(target.value&&['REASSIGN','INITIATE_HANDOVER'].includes(action.value))body.targetGroupId=target.value;if(targetPerson.value)body.targetAssigneeId=targetPerson.value;
+  if(category.value)body.resolutionCategory=category.value;if(evidence.value)body.evidence=evidence.value;if(target.value&&['REASSIGN','INITIATE_HANDOVER','FORCE_TAKEOVER'].includes(action.value))body.targetGroupId=target.value;if(targetPerson.value)body.targetAssigneeId=targetPerson.value;
   if(continuationId.value&&action.value.startsWith('CONTINUATION_')&&action.value!=='CONTINUATION_PROPOSE')body.continuationId=continuationId.value;
   try{await api(`/tickets/${props.id}/actions`,{method:'POST',body,key:key.value});action.value=undefined;await load();emit('changed');}
   catch(e){if(e instanceof ApiError&&e.status===409){await load();if(action.value&&!available.value.includes(action.value))action.value=undefined;key.value=createRequestKey();}error.value=errorText(e);}finally{busy.value=false;}
@@ -113,6 +114,8 @@ onMounted(load);
 <template>
   <section class="detail-page"><button class="text-button" @click="emit('back')"><ArrowLeft :size="17"/> 返回工单列表</button><div v-if="loading&&!ticket" class="empty-state"><LoaderCircle class="spin"/> 正在加载</div><p v-if="error" class="error-banner" role="alert">{{error}}</p>
     <template v-if="ticket"><div class="page-title"><div><p class="eyebrow">{{ticket.number}}</p><h1>{{ticket.subject}}</h1></div><button class="icon-button" title="刷新" aria-label="刷新工单" :disabled="loading" @click="load"><RefreshCw :size="18" :class="{spin:loading}"/></button></div><div class="ticket-meta"><span class="status" :data-status="ticket.status">{{statuses[ticket.status]}}</span><span class="priority" :data-priority="ticket.priority">{{ticket.priority}}</span><span>{{formatDate(ticket.createdAt)}}</span><span>责任组：{{groups.find(g=>g.id===ticket?.ownerGroupId)?.name??ticket.ownerGroupId}}</span><span>处理人：{{ticket.assigneeName??ticket.assigneeId??'组内待认领'}}</span><span v-if="ticket.pendingAssigneeId" class="amber-text">{{ticket.assignmentKind==='OFFER'?'待候选确认':'待交接'}}：{{ticket.pendingAssigneeName??ticket.pendingAssigneeId}}<template v-if="ticket.assignmentDueAt"> · 截止 {{formatDate(ticket.assignmentDueAt)}}</template></span></div>
+      <p v-if="ticket.site" class="muted">归属厂区：{{ticket.site.name}} · 配置版本 {{ticket.site.configVersion}}</p>
+      <p v-for="cycle in (ticket.sla??[]).filter(s=>s.template)" :key="`template-${cycle.cycle}`" class="muted">第 {{cycle.cycle}} 轮 SLA 模板：{{cycle.template?.name}} · 配置版本 {{cycle.template?.configVersion}}</p>
       <section v-if="isAgent&&(ticket.ownerContinuityRequired||ticket.continuations?.length)" class="detail-section" aria-label="责任连续性">
         <h2>责任连续性</h2><p v-if="ticket.ownerContinuityRequired" class="danger-text" role="status">当前负责人任职已失效，待交接或独立复核限期处理；负责人及 SLA 保持不变。</p>
         <ul class="timeline"><li v-for="item in ticket.continuations" :key="item.id"><strong>{{continuationLabels[item.status]??item.status}}</strong><span v-if="!item.current" class="muted"> · 历史责任</span><span v-else-if="item.status==='APPROVED'&&!item.effective" class="muted"> · 已失效</span><p>截止 {{formatDate(item.expiresAt)}} · {{item.employeeId}}</p><p class="multiline">{{item.reason}}</p></li></ul>
@@ -174,17 +177,18 @@ onMounted(load);
           <form v-if="action" class="action-form" @submit.prevent="submit">
             <p v-if="action==='CANCEL'&&ticket.serviceType==='REQ'">撤销后将停止交付。已发起的钉钉审批不会自动撤回。</p>
             <label v-if="['ACCEPT','ACCEPT_HANDOVER','ACCEPT_OFFER','REQUEST_INFO','ADD_INFO','WAIT_VENDOR','RESUME_VENDOR','RESOLVE'].includes(action)">{{action==='RESOLVE'?(ticket.serviceType==='REQ'?'交付说明':'解决说明'):action==='REQUEST_INFO'?'需要补充的内容':action==='RESUME_VENDOR'?'继续处理说明':'回复内容'}}<textarea v-model="comment" required maxlength="2000" rows="3"/></label>
-            <label v-if="action.startsWith('CONTINUATION_')||['REOPEN','REASSIGN','INITIATE_HANDOVER','ASSIGN_OFFER','DECLINE_HANDOVER','CANCEL_HANDOVER','DECLINE_OFFER','CANCEL_OFFER'].includes(action)">原因<textarea v-model="reason" required maxlength="2000" rows="3"/></label>
+            <label v-if="action.startsWith('CONTINUATION_')||['REOPEN','REASSIGN','INITIATE_HANDOVER','FORCE_TAKEOVER','ASSIGN_OFFER','DECLINE_HANDOVER','CANCEL_HANDOVER','DECLINE_OFFER','CANCEL_OFFER'].includes(action)">原因<textarea v-model="reason" required maxlength="2000" rows="3"/></label>
             <label v-if="action.startsWith('CONTINUATION_')&&action!=='CONTINUATION_PROPOSE'">授权记录<select v-model="continuationId" required><option value="">请选择</option><option v-for="item in selectableContinuations" :key="item.id" :value="item.id">{{formatDate(item.expiresAt)}} · {{item.employeeId}}</option></select></label>
             <label v-if="action==='CONTINUATION_PROPOSE'">处理授权截止时间<input v-model="dueAt" required type="datetime-local"/></label>
-            <template v-if="['REASSIGN','INITIATE_HANDOVER','ASSIGN_OFFER'].includes(action)">
-              <label v-if="action!=='ASSIGN_OFFER'">目标支持组<select v-model="target" required><option value="">请选择</option><option v-for="group in groups" :key="group.id" :value="group.id">{{group.name}}</option></select></label>
+            <template v-if="['REASSIGN','INITIATE_HANDOVER','FORCE_TAKEOVER','ASSIGN_OFFER'].includes(action)">
+              <label v-if="!['ASSIGN_OFFER','FORCE_TAKEOVER'].includes(action)">目标支持组<select v-model="target" required><option value="">请选择</option><option v-for="group in groups" :key="group.id" :value="group.id">{{group.name}}</option></select></label>
+              <p v-if="action==='FORCE_TAKEOVER'" class="amber-text">立即变更处理人，请填写紧急接管原因。</p>
               <label>接收人<select v-model="targetPerson" required :disabled="!target||membersLoading"><option value="">{{membersLoading?'正在加载':members.length?'请选择':'暂无可选人员'}}</option><option v-for="person in members" :key="person.id" :value="person.id">{{person.name}}</option></select></label>
             </template>
             <template v-if="['REQUEST_INFO','WAIT_VENDOR'].includes(action)"><label>等待原因<select v-model="waitingReason" required><option value="">请选择</option><option v-for="code in waitingOptions" :key="code" :value="code">{{waitingReasons[code]}}</option></select></label><label>{{action==='REQUEST_INFO'?'补充截止时间':'下次跟进时间'}}<input v-model="dueAt" required type="datetime-local"/></label></template>
             <template v-if="action==='WAIT_VENDOR'"><label>厂商工单号<input v-model="vendorReference" required maxlength="200"/></label><label>跟进负责人<input v-model="vendorOwner" required maxlength="200"/></label></template>
             <template v-if="action==='RESOLVE'"><label>{{ticket.serviceType==='REQ'?'交付分类':'解决分类'}}<select v-model="category" required><option value="">请选择</option><option v-for="item in resolutionCategories" :key="item">{{item}}</option></select></label><label>验证依据<textarea v-model="evidence" required maxlength="2000" rows="2"/></label></template>
-            <ContentBoundary v-model="contentSafe"/><div class="form-footer"><button type="button" class="text-button" :disabled="busy" @click="action=undefined">取消</button><button type="submit" class="primary" :disabled="busy||membersLoading||(['REASSIGN','INITIATE_HANDOVER','ASSIGN_OFFER'].includes(action)&&!targetPerson)"><LoaderCircle v-if="busy" :size="16" class="spin"/><Check v-else :size="16"/>{{commands[action]}}</button></div>
+            <ContentBoundary v-model="contentSafe"/><div class="form-footer"><button type="button" class="text-button" :disabled="busy" @click="action=undefined">取消</button><button type="submit" class="primary" :disabled="busy||membersLoading||(['REASSIGN','INITIATE_HANDOVER','FORCE_TAKEOVER','ASSIGN_OFFER'].includes(action)&&!targetPerson)"><LoaderCircle v-if="busy" :size="16" class="spin"/><Check v-else :size="16"/>{{commands[action]}}</button></div>
           </form></section>
       </aside></div>
     </template>

@@ -21,7 +21,8 @@ export class WorkspaceController {
     const actor = await this.identity.identity(auth(h));
     const result = await this.db.pool.query(`SELECT c.*,v.snapshot FROM service_catalog c LEFT JOIN request_catalog_versions v
       ON v.service_code=c.code AND v.form_version=c.form_version WHERE c.published=true AND (c.visible_groups='[]'::jsonb OR EXISTS
-      (SELECT 1 FROM group_memberships WHERE employee_id=$1 AND c.visible_groups ? group_id)) ORDER BY c.sort_order,c.code`,[actor.id]);
+      (SELECT 1 FROM group_memberships WHERE employee_id=$1 AND c.visible_groups ? group_id))
+      AND service_site_visible(c.code,$1) ORDER BY c.sort_order,c.code`,[actor.id]);
     return { items: result.rows.map(r => ({ code:r.code,name:r.name || r.code,description:r.description,type:r.type,formVersion:r.form_version,fields:r.field_schema,
       available:['INC','GEN'].includes(r.type)||(r.type==='REQ'&&!!r.snapshot?.approval?.steps?.length
         &&!!requestIntakePolicy(process.env,r.code,r.form_version)),maxValidityDays:r.type==='REQ'?r.snapshot?.maxValidityDays??null:null })) };
@@ -42,7 +43,7 @@ export class WorkspaceController {
       (d.state='DEAD' AND EXISTS(SELECT 1 FROM role_bindings r WHERE r.employee_id=$2 AND r.group_id=t.owner_group_id
         AND r.role_code IN ('DISPATCHER','GROUP_LEAD') AND ${ROLE_EFFECTIVE_SQL})) AS "canRetry"
       FROM notification_deliveries d JOIN outbox_events o ON o.id=d.outbox_id JOIN tickets t ON t.id=o.ticket_id
-      WHERE t.owner_group_id=ANY($1::text[])
+      WHERE t.owner_group_id=ANY($1::text[]) AND staff_site_access(t.service_routing_snapshot,$2,t.owner_group_id)
       ORDER BY (d.state='REVIEW_REQUIRED') DESC,d.updated_at DESC,d.id LIMIT 100`,[actor.groups,actor.id]);
     return { mode: process.env.NOTIFICATION_MODE ?? 'disabled', items:result.rows };
   }
@@ -52,7 +53,7 @@ export class WorkspaceController {
       g.name AS "ownerGroupName",a.reason,a.opened_at AS "openedAt"
       FROM ticket_routing_alerts a JOIN tickets t ON t.id=a.ticket_id
       JOIN support_groups g ON g.id=a.owner_group_id
-      WHERE a.resolved_at IS NULL AND (
+      WHERE a.resolved_at IS NULL AND staff_site_access(t.service_routing_snapshot,$1,t.owner_group_id) AND (
         EXISTS(SELECT 1 FROM role_bindings r WHERE r.employee_id=$1 AND r.role_code='PLATFORM_ADMIN'
           AND ${ROLE_EFFECTIVE_SQL}) OR
         EXISTS(SELECT 1 FROM role_bindings r WHERE r.employee_id=$1 AND r.group_id=a.owner_group_id
@@ -69,6 +70,7 @@ export class WorkspaceController {
         state=CASE WHEN d.provider_task_id IS NOT NULL THEN 'SENDING' ELSE 'PENDING' END,
         attempts=0,next_at=now(),last_error=NULL,updated_at=now()
         FROM outbox_events o,tickets t WHERE d.id=$1 AND d.outbox_id=o.id AND o.ticket_id=t.id AND t.owner_group_id=ANY($2::text[])
+        AND staff_site_access(t.service_routing_snapshot,$3,t.owner_group_id)
         AND d.state='DEAD' AND EXISTS(SELECT 1 FROM role_bindings r WHERE r.employee_id=$3 AND r.group_id=t.owner_group_id
           AND r.role_code IN ('DISPATCHER','GROUP_LEAD') AND ${ROLE_EFFECTIVE_SQL}) RETURNING d.id`,[id,actor.groups,actor.id]);
       if (!result.rowCount) throw new NotFoundException();
