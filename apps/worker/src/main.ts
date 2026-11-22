@@ -13,9 +13,10 @@ import { expandNotification, refreshFulfillmentNotificationAudiences, refreshWai
 import { dingtalkDirectory } from './directory-provider.js';
 import { directorySettings,synchronizeDirectory } from './directory-sync.js';
 import { dingtalkPilotUsers } from './dingtalk-pilot.js';
+import { ownershipCandidatesQuery } from './ownership-query.js';
 
 const db = new Pool({ host:process.env.DB_HOST ?? 'db',database:process.env.DB_NAME ?? 'itsm',user:process.env.DB_USER ?? 'itsm',password:process.env.DB_PASSWORD,
-  connectionTimeoutMillis:5000,statement_timeout:30000 });
+  application_name:'itsm-worker',connectionTimeoutMillis:5000,statement_timeout:30000 });
 let stopped = false;
 let timer: ReturnType<typeof setTimeout> | undefined;
 let access: { token:string; expires:number } | undefined;
@@ -130,21 +131,11 @@ async function priorityReviewTimers() {
 
 async function recoverOwnership() {
   await transaction(async client => {
+    await client.query("SET LOCAL application_name='itsm-worker:ownership'");
     await client.query('SELECT pg_advisory_xact_lock_shared($1)',[71820512]);
     await client.query(`UPDATE ticket_routing_alerts a SET resolved_at=now() FROM tickets t
       WHERE a.ticket_id=t.id AND a.resolved_at IS NULL AND t.status IN ('CLOSED','CANCELLED','REJECTED')`);
-    const rows = await client.query(`SELECT t.* FROM tickets t LEFT JOIN ticket_routing_alerts a ON a.ticket_id=t.id AND a.resolved_at IS NULL
-      WHERE t.status NOT IN ('CLOSED','CANCELLED','REJECTED') AND
-      ((t.assignee_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM employees e JOIN group_memberships m ON m.employee_id=e.id
-        WHERE e.id=t.assignee_id AND e.active AND m.group_id=t.owner_group_id)) OR
-       (t.pending_assignee_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM employees e JOIN group_memberships m ON m.employee_id=e.id
-        WHERE e.id=t.pending_assignee_id AND e.active AND m.group_id=t.pending_group_id
-          AND service_position_eligible(t.service_routing_snapshot,e.id,t.pending_group_id))) OR
-       (t.assignee_id IS NOT NULL AND NOT ticket_processing_eligible(t.id,t.assignee_id)) OR
-       a.ticket_id IS NOT NULL OR
-       NOT EXISTS (SELECT 1 FROM employees e JOIN group_memberships m ON m.employee_id=e.id
-        WHERE e.active AND m.group_id=t.owner_group_id AND service_position_eligible(t.service_routing_snapshot,e.id,t.owner_group_id)))
-      ORDER BY COALESCE(a.last_checked_at,t.updated_at),t.id LIMIT 100 FOR UPDATE OF t SKIP LOCKED`);
+    const rows = await client.query(ownershipCandidatesQuery);
     for (const row of rows.rows) {
       const valid = async (employee:string|null,group:string|null) => !employee || !!(await client.query(`SELECT e.id FROM employees e
         JOIN group_memberships m ON m.employee_id=e.id WHERE e.id=$1 AND e.active AND m.group_id=$2 FOR SHARE OF e,m`,[employee,group])).rowCount;

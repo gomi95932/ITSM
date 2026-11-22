@@ -2,7 +2,7 @@
 SELECT json_build_object(
   'at', clock_timestamp(),
   'sessions', COALESCE(json_agg(json_build_object(
-    'pid', pid, 'state', state, 'waitType', wait_event_type, 'wait', wait_event,
+    'pid', pid, 'application', application_name, 'state', state, 'waitType', wait_event_type, 'wait', wait_event,
     'querySeconds', EXTRACT(epoch FROM clock_timestamp() - query_start),
     'transactionSeconds', EXTRACT(epoch FROM clock_timestamp() - xact_start),
     'blockers', pg_blocking_pids(pid),
