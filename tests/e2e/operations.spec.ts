@@ -21,5 +21,9 @@ for(const [viewport,width,height] of [['desktop',1440,1000],['mobile',390,844]] 
     await expect(page.getByRole('button',{name:'提交独立复核',exact:true})).toBeDisabled();
     await page.screenshot({path:`test-results/appointments-${viewport}.png`,fullPage:true});
     expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+    await page.getByRole('button',{name:'取消',exact:true}).click();
+    await page.getByRole('button',{name:'维护',exact:true}).first().click();
+    await expect(page.getByLabel('开始时间',{exact:true})).not.toHaveValue('');
+    await expect(page.getByRole('button',{name:'提交独立复核',exact:true})).toBeDisabled();
   });
 }

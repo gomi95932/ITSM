@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import {computed,onMounted,ref} from 'vue';
+import {computed,onMounted,ref,toRaw} from 'vue';
 import {Ban,Plus,RefreshCw,Send} from 'lucide-vue-next';
 import type {ServiceStructure} from '@itsm/contracts';
 import {api,errorText} from '../api';
@@ -19,7 +19,7 @@ const statuses:Record<string,string>={PENDING:'待独立复核',APPROVED:'已批
 const local=(value:string)=>{const date=new Date(value);return new Date(date.getTime()-date.getTimezoneOffset()*60000).toISOString().slice(0,16);};
 function date(event:Event,key:'validFrom'|'validTo'){const value=(event.target as HTMLInputElement).value;if(draft.value&&value)draft.value[key]=new Date(value).toISOString();safe.value=false;}
 async function load(){busy.value=true;error.value='';try{data.value=await api<Data>('/admin/service-structure/appointments');}catch(e){error.value=errorText(e);}finally{busy.value=false;}}
-function edit(item?:Appointment){draft.value=item?structuredClone(item):{id:createRequestKey(),positionId:data.value?.positions.find(p=>p.enabled)?.id??'',employeeId:'',duty:'PRIMARY',validFrom:new Date().toISOString(),validTo:new Date(Date.now()+365*86400000).toISOString(),enabled:true};reason.value='';safe.value=false;requestId.value=createRequestKey();}
+function edit(item?:Appointment){draft.value=item?structuredClone(toRaw(item)):{id:createRequestKey(),positionId:data.value?.positions.find(p=>p.enabled)?.id??'',employeeId:'',duty:'PRIMARY',validFrom:new Date().toISOString(),validTo:new Date(Date.now()+365*86400000).toISOString(),enabled:true};reason.value='';safe.value=false;requestId.value=createRequestKey();}
 async function save(){if(!draft.value||!data.value||!safe.value)return;busy.value=true;error.value='';try{
   await api('/admin/service-structure/appointments',{method:'POST',body:{id:requestId.value,expectedVersion:data.value.version,appointment:draft.value,reason:reason.value,contentClass:'GENERAL'}});
   draft.value=undefined;await load();
@@ -31,7 +31,7 @@ async function revoke(){if(!draft.value||!data.value||!safe.value)return;busy.va
 onMounted(load);
 </script>
 <template>
-  <section><div class="section-heading"><h1>岗位任职</h1><div class="actions"><button class="secondary" :disabled="busy||!data" @click="edit()"><Plus :size="16"/>新增任职</button><button class="icon-button" title="刷新" aria-label="刷新" :disabled="busy" @click="load"><RefreshCw :size="18"/></button></div></div>
+  <section><div class="section-heading"><h2>任职配置</h2><div class="actions"><button class="secondary" :disabled="busy||!data" @click="edit()"><Plus :size="16"/>新增任职</button><button class="icon-button" title="刷新" aria-label="刷新" :disabled="busy" @click="load"><RefreshCw :size="18"/></button></div></div>
     <p v-if="error" class="error-banner" role="alert">{{error}}</p>
     <form v-if="draft&&data" class="appointment-form" @submit.prevent="save"><fieldset :disabled="busy">
       <div class="form-grid"><label>岗位<select v-model="draft.positionId" required @change="draft.employeeId='';safe=false"><option v-for="p in data.positions.filter(p=>p.enabled)" :key="p.id" :value="p.id">{{p.name}}</option></select></label>

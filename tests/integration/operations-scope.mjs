@@ -18,6 +18,15 @@ async function sql(query,success=true){return new Promise((resolve,reject)=>{
   let out='',error='';child.stdout.on('data',v=>out+=v);child.stderr.on('data',v=>error+=v);child.once('error',reject);
   child.once('close',code=>success?(code===0?resolve(out.trim()):reject(new Error(`OPERATIONS_FIXTURE_SQL_FAILED: ${error}`))):resolve(code));
 });}
+async function recipients(eventId){return new Promise((resolve,reject)=>{
+  const source=`import {Pool} from 'pg';import {notificationRecipients} from './apps/worker/dist/notification-audience.js';
+    const db=new Pool({host:process.env.DB_HOST,database:process.env.DB_NAME,user:process.env.DB_USER,password:process.env.DB_PASSWORD});
+    try{console.log(JSON.stringify(await notificationRecipients(db,process.argv[1])));}finally{await db.end();}`;
+  const child=spawn('docker',['compose','--project-name','itsm-dev','--env-file',process.env.ITSM_CI_ENV,'-f','infra/compose/compose.yaml',
+    'exec','-T','worker','node','--input-type=module','-e',source,eventId],{stdio:['ignore','pipe','pipe']});
+  let out='',error='';child.stdout.on('data',v=>out+=v);child.stderr.on('data',v=>error+=v);child.once('error',reject);
+  child.once('close',code=>code===0?resolve(JSON.parse(out.trim())):reject(new Error(`OPERATIONS_AUDIENCE_FAILED: ${error}`)));
+});}
 const readStructure=()=>ok(request(structure));
 const readOperations=()=>ok(request(operations));
 async function publishStructure(config){const current=await readStructure();
@@ -41,8 +50,11 @@ await sql(`INSERT INTO employees(id,display_name) VALUES ${Object.values(person)
   INSERT INTO role_bindings(id,employee_id,role_code,group_id,valid_from,valid_to,status,source,requested_by,reviewed_by,reason,reviewed_at)
     VALUES(${quote(randomUUID())},${quote(person.lead)},'GROUP_LEAD','service-desk',now()-interval '1 day',now()+interval '1 day',
       'ACTIVE','REVIEW','demo-admin-1','demo-admin-2','Disposable operations lead',now());
+  INSERT INTO role_bindings(id,employee_id,role_code,group_id,valid_from,valid_to,status,source,requested_by,reviewed_by,reason,reviewed_at)
+    VALUES(${quote(randomUUID())},${quote(person.engineerB)},'GROUP_LEAD','service-desk',now()-interval '1 day',now()+interval '1 day',
+      'ACTIVE','REVIEW','demo-admin-1','demo-admin-2','Disposable site B lead',now());
   UPDATE service_catalog SET published=false WHERE group_id IN (SELECT id FROM support_groups WHERE NOT enabled);
-  UPDATE service_catalog SET published=true,group_id='service-desk',required_fields='[]',field_schema='[]',visible_groups='[]' WHERE code='INC-PC';`);
+  UPDATE service_catalog SET published=true,group_id='service-desk',required_fields='[]',field_schema='[]',visible_groups='[]' WHERE code IN ('INC-PC','INC-BIZ');`);
 const config=structuredClone((await readStructure()).config);
 // Retain every historical identifier, retiring prior test routes before this isolated final phase.
 config.positions.forEach(p=>p.enabled=false);config.appointments.forEach(a=>a.enabled=false);config.mappings.forEach(m=>m.enabled=false);
@@ -55,6 +67,9 @@ config.appointments.push(primary,backup,appointment(person.engineerB,posB),appoi
 const mapping={serviceCode:'INC-PC',domainId:domain,systemId:null,primaryPositionId:posA,collaboratingPositionIds:[posB],enabled:true};
 const previousMapping=config.mappings.findIndex(m=>m.serviceCode==='INC-PC');
 if(previousMapping<0)config.mappings.push(mapping);else config.mappings[previousMapping]=mapping;
+const businessMapping={...mapping,serviceCode:'INC-BIZ'};
+const previousBusinessMapping=config.mappings.findIndex(m=>m.serviceCode==='INC-BIZ');
+if(previousBusinessMapping<0)config.mappings.push(businessMapping);else config.mappings[previousBusinessMapping]=businessMapping;
 const services=JSON.parse(await sql(`SELECT json_agg(json_build_object('code',code,'groupId',group_id)) FROM service_catalog WHERE published`));
 const groups=[...new Set(services.map(s=>s.groupId))],routePositions=new Map([['service-desk',posA]]);
 for(const [index,group] of groups.entries())if(group!=='service-desk'){
@@ -67,6 +82,7 @@ const create=(user=person.requesterA,extra={})=>request('/tickets',user,{service
 const legacy=await ok(create());await ok(action(legacy,person.requesterA,'CANCEL'));
 await ok(create()); // Explicit in-flight legacy fixture makes the activation guard deterministic.
 const targets={P1:{response:10,resolution:120},P2:{response:30,resolution:240},P3:{response:90,resolution:600},P4:{response:180,resolution:1200}};
+const alternateTargets={P1:{response:5,resolution:60},P2:{response:15,resolution:120},P3:{response:45,resolution:300},P4:{response:90,resolution:600}};
 const ops={siteEnforced:true,sites:[{id:siteA,name:'Site A',enabled:true},{id:siteB,name:'Site B',enabled:true}],
   employeeSites:Object.values(person).filter(id=>id!==person.unknown).map(id=>({employeeId:id,homeSiteId:[person.requesterB,person.engineerB].includes(id)?siteB:siteA,
     siteIds:[person.lead,person.cross].includes(id)?[siteA,siteB]:[[person.requesterB,person.engineerB].includes(id)?siteB:siteA]})),
@@ -75,7 +91,9 @@ const ops={siteEnforced:true,sites:[{id:siteA,name:'Site A',enabled:true},{id:si
     ...[...routePositions].filter(([g])=>g!=='service-desk').map(([,positionId])=>({positionId,siteIds:[siteA]}))],
   serviceSites:services.map(s=>({serviceCode:s.code,siteIds:s.code==='INC-PC'?[siteA,siteB]:[siteA]})),
   siteRoutes:[...services.map(s=>({serviceCode:s.code,siteId:siteA,positionId:routePositions.get(s.groupId)})),{serviceCode:'INC-PC',siteId:siteB,positionId:posB}],
-  slaTemplates:[{id:'ops-standard',name:'Operations SLA',enabled:true,targets}],serviceSlas:[{serviceCode:'INC-PC',templateId:'ops-standard'}]};
+  slaTemplates:[{id:'ops-standard',name:'Operations SLA',enabled:true,targets},
+    {id:'ops-business',name:'Business SLA',enabled:true,targets:alternateTargets}],
+  serviceSlas:[{serviceCode:'INC-PC',templateId:'ops-standard'},{serviceCode:'INC-BIZ',templateId:'ops-business'}]};
 assert.equal((await request(operations,person.engineerA)).status,403);
 let current=(await readOperations()).current;
 assert.equal((await request(operations,'demo-admin-1',{id:randomUUID(),expectedVersion:current.version,config:ops,reason:'Unsafe migration'})).data.code,
@@ -101,14 +119,38 @@ assert.equal((await request(`/tickets/${b.id}`,person.engineerA)).status,404);
 assert.equal((await request(`/tickets/${a.id}/assignment-candidates?groupId=service-desk`,person.lead)).status,200);
 assert.deepEqual((await ok(request(`/tickets/${a.id}/assignment-candidates?groupId=service-desk`,person.lead))).items.map(p=>p.id).sort(),[person.backup,person.engineerA].sort());
 assert.ok(!(await ok(request('/tickets?mine=false&size=100',person.engineerB))).items.some(t=>t.id===a.id));
+const reportDay=await sql("SELECT to_char(now() AT TIME ZONE 'Asia/Shanghai','YYYY-MM-DD')");
+const reportWindow=`?groupId=service-desk&from=${reportDay}&to=${reportDay}`;
+const siteBReport=await ok(request(`/reports/summary${reportWindow}`,person.engineerB));
+assert.ok(siteBReport.items.some(t=>t.id===b.id));assert.ok(!siteBReport.items.some(t=>t.id===a.id));
+const siteBHistory=await ok(request(`/reports/responsibility-history${reportWindow}`,person.engineerB));
+assert.ok(siteBHistory.items.some(t=>t.ticketId===b.id));assert.ok(!siteBHistory.items.some(t=>t.ticketId===a.id));
+const alternate=await ok(create(person.requesterA,{serviceCode:'INC-BIZ'}));
+const alternateDetail=await ok(request(`/tickets/${alternate.id}`,person.requesterA));
+assert.equal(alternateDetail.sla[0].template.id,'ops-business');
+assert.equal(alternateDetail.sla[0].responseTarget,alternateTargets[alternateDetail.priority].response);
+assert.notEqual(alternateDetail.sla[0].responseTarget,targets[alternateDetail.priority].response,'services have separate commitments');
 assert.equal(await sql(`SELECT service_position_eligible(${quote(JSON.stringify({site:{id:siteA},positions:[{id:posA,groupId:'service-desk'},{id:posCross,groupId:'service-desk'}]}))},${quote(person.cross)},'service-desk')`),'f',
   'the appointed position itself must cover the site, not another position');
 const originalCycle=await sql(`SELECT row_to_json(s)::text FROM sla_cycles s WHERE ticket_id=${quote(a.id)}`);
-const changed=structuredClone(ops);changed.slaTemplates[0].targets.P3.response=80;
+let upgrading=await ok(create());upgrading=await ok(action(upgrading,person.engineerA,'ACCEPT',{comment:'Investigating before template update'}));
+assert.equal((await ok(request(`/tickets/${upgrading.id}`,person.requesterA))).priority,'P3');
+const changed=structuredClone(ops);changed.slaTemplates[0].targets.P3.response=80;changed.slaTemplates[0].targets.P2={response:20,resolution:180};
 await publishOperations(changed);
 assert.equal(await sql(`SELECT row_to_json(s)::text FROM sla_cycles s WHERE ticket_id=${quote(a.id)}`),originalCycle);
 const next=await ok(create());const nextDetail=await ok(request(`/tickets/${next.id}`,person.requesterA));
 assert.equal(nextDetail.sla[0].responseTarget,changed.slaTemplates[0].targets[nextDetail.priority].response);
+upgrading=await ok(request(`/tickets/${upgrading.id}/priority`,person.engineerA,{expectedVersion:upgrading.version,
+  mode:'APPLY',priority:'P2',impact:'DEPARTMENT',urgency:'HIGH',reason:'Verified wider impact after configuration update'}));
+const upgraded=await ok(request(`/tickets/${upgrading.id}`,person.requesterA));
+assert.equal(upgraded.sla[0].obligations.at(-1).responseTarget,targets.P2.response,'upgrade uses the original cycle template');
+assert.equal(upgraded.sla[0].obligations.at(-1).resolutionTarget,targets.P2.resolution);
+upgrading=await ok(action(upgrading,person.engineerA,'RESOLVE',{comment:'Restored service',resolutionCategory:'FIX',evidence:'Device verified'}));
+upgrading=await ok(action(upgrading,person.requesterA,'REOPEN',{reason:'A related symptom remains'}));
+const reopened=await ok(request(`/tickets/${upgrading.id}`,person.requesterA));
+assert.equal(reopened.sla.length,2);assert.equal(reopened.sla[0].template.configVersion,current.version);
+assert.equal(reopened.sla[1].responseTarget,changed.slaTemplates[0].targets.P2.response,'reopened cycle uses the latest template');
+assert.equal(reopened.sla[1].template.configVersion,(await readOperations()).current.version);
 assert.notEqual(await sql(`UPDATE sla_cycles SET template_snapshot='{}' WHERE ticket_id=${quote(a.id)}`,false),0);
 assert.equal((await action(a,person.engineerA,'FORCE_TAKEOVER',{targetGroupId:'service-desk',targetAssigneeId:person.backup,reason:'No lead role'})).status,403);
 const takeover={targetGroupId:'service-desk',targetAssigneeId:person.engineerA,reason:'Supervisor assigns current on-call engineer'};
@@ -116,6 +158,9 @@ const takeoverKey=randomUUID(),original=a;
 a=await ok(action(a,person.lead,'FORCE_TAKEOVER',takeover,takeoverKey));
 assert.equal(a.assigneeId,person.engineerA);assert.equal(a.status,'IN_PROGRESS');
 assert.deepEqual(await ok(action(original,person.lead,'FORCE_TAKEOVER',takeover,takeoverKey)),a);
+const takeoverEvent=await sql(`SELECT id FROM ticket_events WHERE ticket_id=${quote(a.id)} AND action='FORCE_TAKEOVER'`);
+assert.deepEqual(await recipients(takeoverEvent),[person.requesterA,person.engineerA,person.lead].sort(),
+  'site B group lead cannot receive site A takeover details');
 assert.equal(await sql(`SELECT row_to_json(s)::text FROM sla_cycles s WHERE ticket_id=${quote(a.id)}`),originalCycle,'takeover is neither response nor SLA restart');
 a=await ok(action(a,person.engineerA,'REQUEST_INFO',{comment:'Please provide device label',waitingReason:'USER_INFORMATION',dueAt:new Date(Date.now()+3600000).toISOString()}));
 const waitingCycle=await sql(`SELECT row_to_json(s)::text FROM sla_cycles s WHERE ticket_id=${quote(a.id)}`);

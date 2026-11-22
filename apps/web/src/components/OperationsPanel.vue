@@ -46,7 +46,7 @@ async function review(p:Proposal,decision:'APPROVE'|'REJECT'){if(!reviewSafe.val
 onMounted(load);
 </script>
 <template>
-  <section class="operations-panel"><div class="section-heading"><div><h1>厂区与服务时限</h1><p class="muted">当前版本 {{version}}</p></div><button class="icon-button" title="刷新" aria-label="刷新" :disabled="busy" @click="load"><RefreshCw :size="18"/></button></div>
+  <section class="operations-panel"><div class="section-heading"><p class="muted">当前版本 {{version}}</p><button class="icon-button" title="刷新" aria-label="刷新" :disabled="busy" @click="load"><RefreshCw :size="18"/></button></div>
     <p v-if="error" class="error-banner" role="alert">{{error}}</p>
     <nav class="section-tabs" aria-label="配置分类"><button v-for="s in sections" :key="s" :class="{selected:tab===s}" @click="tab=s">{{labels[s]}}</button></nav>
     <form @submit.prevent="propose"><fieldset :disabled="busy"><label class="check-row"><input v-model="config.siteEnforced" type="checkbox" @change="safe=false"/>启用厂区隔离</label>
