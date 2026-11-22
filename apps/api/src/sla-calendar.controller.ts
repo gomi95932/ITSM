@@ -71,7 +71,7 @@ export class SlaCalendarController {
       if (p.version !== body.expectedVersion || p.status !== 'PENDING') throw new ConflictException({ code: 'VERSION_CONFLICT' });
       if (body.decision === 'APPROVE') {
         const proposer = await client.query(`SELECT 1 FROM employees e JOIN role_bindings r ON r.employee_id=e.id
-          WHERE e.id=$1 AND e.active AND r.role_code='PLATFORM_ADMIN' AND r.group_id IS NULL AND ${ROLE_EFFECTIVE_SQL}`, [p.proposed_by]);
+          WHERE e.id=$1 AND e.active AND r.role_code='PLATFORM_ADMIN' AND r.group_id IS NULL AND ${ROLE_EFFECTIVE_SQL} FOR SHARE OF e`, [p.proposed_by]);
         if (!proposer.rowCount) throw new ConflictException({ code: 'CALENDAR_PROPOSER_UNAVAILABLE' });
         const current = (await client.query('SELECT max(version) AS version FROM sla_calendars')).rows[0];
         if (current.version !== p.expected_version) throw new ConflictException({ code: 'VERSION_CONFLICT' });
