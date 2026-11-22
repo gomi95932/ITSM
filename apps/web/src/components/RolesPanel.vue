@@ -9,10 +9,10 @@ import ContentBoundary from './ContentBoundary.vue';
 
 const props=defineProps<{user:SessionUser}>();
 type Options={groups:{id:string;name:string}[];people:{id:string;name:string;groups:string[]}[];hasMore:boolean;roleCodes:ManagedRoleCode[]};
-type Audit={actorId:string;action:string;reason:string;createdAt:string};
+type Audit={actorId:string|null;executionPrincipal?:string;authorityRef?:string;action:string;reason:string;createdAt:string};
 const roles:Record<ManagedRoleCode,string>={PLATFORM_ADMIN:'平台管理员',DISPATCHER:'调度员',GROUP_LEAD:'支持组长'};
 const states:Record<string,string>={PENDING:'待独立复核',ACTIVE:'已批准',REJECTED:'已拒绝',REVOKED:'已撤销'};
-const events:Record<string,string>={PROPOSED:'提交提案',APPROVED:'批准',REJECTED:'拒绝',REVOKED:'撤销',BOOTSTRAPPED:'受控初始化'};
+const events:Record<string,string>={PROPOSED:'提交提案',APPROVED:'批准',REJECTED:'拒绝',REVOKED:'撤销',BOOTSTRAPPED:'受控初始化',HANDED_OFF:'管理员交接',HANDOFF_REVOKED:'交接撤销演示权限'};
 const items=ref<RoleBindingView[]>([]),options=ref<Options>({groups:[],people:[],hasMore:false,roleCodes:[]}),canReview=ref(false);
 const busy=ref(false),loading=ref(true),error=ref(''),adding=ref(false),query=ref('');
 const role=ref<ManagedRoleCode>('DISPATCHER'),group=ref(''),employee=ref(''),days=ref(30),reason=ref(''),safe=ref(false),proposalId=ref(createRequestKey());
@@ -117,7 +117,7 @@ onMounted(load);
     <div v-if="history" class="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="role-history-title">
       <div class="section-heading"><h2 id="role-history-title">授权审计</h2><button class="icon-button" title="关闭" aria-label="关闭" @click="history=undefined"><X :size="17"/></button></div>
       <p>{{history.item.employeeName}} · {{roles[history.item.roleCode]}}</p>
-      <ol class="role-history"><li v-for="(event,index) in history.events" :key="index"><strong>{{events[event.action]??event.action}}</strong><p class="muted">{{event.actorId}} · {{formatDate(event.createdAt)}}</p><p>{{event.reason}}</p></li></ol>
+      <ol class="role-history"><li v-for="(event,index) in history.events" :key="index"><strong>{{events[event.action]??event.action}}</strong><p class="muted">{{event.actorId??event.executionPrincipal}} · {{formatDate(event.createdAt)}}</p><p v-if="event.authorityRef" class="muted">{{event.authorityRef}}</p><p>{{event.reason}}</p></li></ol>
     </section></div>
   </div>
 </template>

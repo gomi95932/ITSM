@@ -32,6 +32,20 @@ sudo -H docker compose --project-name itsm-dev --env-file /实际受保护的环
 只要数据库存在任何平台管理员授权历史，就拒绝再次引导，包括授权已撤销或到期的情况。
 真实人员不能用演示管理员替代；开发种子账号只允许隔离开发/CI 环境。
 
+## 演示管理员交接为真实人员
+
+数据库已存在演示管理员历史时，不能重复初始化或将演示员工改名。迁移 `042_admin_handoff.sql` 提供一次性离线交接路径；它不开放 HTTP 接口，不冒用两名真实员工的审批身份。
+
+1. 从已验证的主分支发布制品部署新版本，保留变更前数据库、附件及配置备份。生产认证配置必须关闭开发登录；真实通知在完成试点验收前保持关闭。
+2. 配置企业 ID、明确的部门根及试点用户 ID 白名单，关闭目录缺失自动停用。先在 worker 运行 `node apps/worker/dist/directory-once.js` 预览；核对人名与稳定用户 ID 后使用同一命令加 `--apply` 同步。凭据只从受保护的运行环境取得。
+3. 准备不含密钥的 JSON 选择文件：`requestId`、`corpId`、`roots`、`pilotUserIds`、两名 `admins[{userId,name}]`、现有两项演示平台授权的 `previousBindingIds`、`executionPrincipal`、真实授权来源 `authorityRef`、`reason`、`configurationSha256`、`backupRef`、`validUntil`。有效期须大于一天且不超过 365 天。
+4. 在 api 容器向标准输入传入上述 JSON，并设置 `ITSM_ADMIN_HANDOFF_CONFIRM=TRANSFER_DEMO_ADMINS`，运行 `node apps/api/dist/handoff-role-admins.js`。默认只预览，不修改权限。核对预览后加 `--apply` 执行；该模式还要求 `NODE_ENV=production` 和 `ENABLE_DEV_AUTH=false`。
+5. 工具校验 15 分钟内成功完成的同企业、同部门根及同试点白名单同步，核对有效员工、目录与身份映射、人名及两项原始 BOOTSTRAP 演示授权。演示账号若关联真实身份则拒绝执行。
+6. 同一事务内建立两项真实管理员授权，撤销两名演示管理员全部有效或待审授权、停用演示员工并清除会话。旧员工、工单及授权审计历史保留。任何失败完整回滚；成功后拒绝重放。
+7. 核查恰好两名真实管理员有效，其他试点员工无平台管理权限。授权审计显示实际维护执行主体及授权依据，不能显示伪造的人工批准。随后由本人在钉钉登录，验收角色维护及旧演示入口关闭。
+
+交接后的人员增减与续期使用下述后台角色授权流程，不能重复执行交接命令。备份恢复须同时考虑配置和数据库，并保留本次交接证据，不能通过删交接记录再次执行。
+
 ## 日常授权
 
 1. 管理员从“角色授权”选择现有员工、固定角色、支持组和有效期，填写原因并声明内容不含敏感证据。
@@ -67,3 +81,5 @@ sudo -H docker compose --project-name itsm-dev --env-file /实际受保护的环
 `tests/e2e/roles.spec.ts` 覆盖桌面提案与手机批准、撤销、审计及横向溢出检查。
 `tests/integration/routing-config.mjs` 只在一次性 GitHub CI 数据库运行，检查待审不生效、独立批准、版本冲突、停用、防环和审计。开发机需在发布后另行核对业务操作和回执。
 CI 全绿、主分支制品生成、开发机部署、版本对应和业务验收需要分别留下证据，任何一项不能由本说明替代。
+
+`tests/integration/admin-handoff.mjs` 在 GitHub 临时独立数据库覆盖真实目录映射、试点过滤、预览无写入、旧授权及身份校验、过期同步拒绝、事务回滚、演示会话撤销、既有角色授权与审计页面服务、保留历史、重放拒绝，以及普通授权的独立复核约束。

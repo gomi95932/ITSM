@@ -100,8 +100,8 @@ export interface RoleBindingInput {
 }
 export interface RoleDecisionInput { expectedVersion:number; reason:string; decision?:'APPROVE'|'REJECT'; contentClass:'GENERAL' }
 export interface RoleBindingView extends Omit<RoleBindingInput,'contentClass'> {
-  employeeName:string; groupName:string|null; status:'PENDING'|'ACTIVE'|'REJECTED'|'REVOKED'; source:'REVIEW'|'BOOTSTRAP';
-  requestedBy:string; reviewedBy:string|null; revokedBy:string|null; reviewReason:string|null; revokeReason:string|null;
+  employeeName:string; groupName:string|null; status:'PENDING'|'ACTIVE'|'REJECTED'|'REVOKED'; source:'REVIEW'|'BOOTSTRAP'|'HANDOFF';
+  requestedBy:string|null; reviewedBy:string|null; revokedBy:string|null; reviewReason:string|null; revokeReason:string|null;
   version:number; effective:boolean; createdAt:string;
 }
 export interface SessionUser { id: string; name: string; groups: string[]; priorityReviewGroups?: string[]; csrfToken?: string; canManageRoles?:boolean; canManageRouting?:boolean }
