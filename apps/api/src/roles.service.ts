@@ -128,7 +128,7 @@ export class RolesService {
         }
         await client.query(`UPDATE role_bindings SET status='REVOKED',revoked_by=$2,revoke_reason=$3,revoked_at=now(),version=version+1 WHERE id=$1`,[id,actor.id,b.reason.trim()]);
       }else{
-        const denial=roleReviewDenial(actor.id,before.requestedBy,before.employeeId);
+        const denial=roleReviewDenial(actor.id,before.requestedBy??'',before.employeeId);
         if(denial)throw new ForbiddenException({code:denial});
         if(before.status!=='PENDING')throw new ConflictException({code:'ROLE_STATE_CONFLICT'});
         if(b.decision==='APPROVE'){
@@ -151,7 +151,8 @@ export class RolesService {
     if(!uuid.test(id))throw new NotFoundException();
     const access=await this.access(this.db.pool,actor.id);
     await this.row(this.db.pool,id,access);
-    return {items:(await this.db.pool.query(`SELECT actor_id AS "actorId",action,before_value AS "beforeValue",after_value AS "afterValue",reason,
-      created_at AS "createdAt" FROM role_binding_audits WHERE binding_id=$1 ORDER BY created_at,id`,[id])).rows};
+    return {items:(await this.db.pool.query(`SELECT a.actor_id AS "actorId",a.action,a.before_value AS "beforeValue",a.after_value AS "afterValue",a.reason,
+      a.created_at AS "createdAt",h.execution_principal AS "executionPrincipal",h.authority_ref AS "authorityRef"
+      FROM role_binding_audits a LEFT JOIN admin_handoffs h ON h.id=a.handoff_id WHERE a.binding_id=$1 ORDER BY a.created_at,a.id`,[id])).rows};
   }
 }
