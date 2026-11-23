@@ -9,14 +9,15 @@ import ContentBoundary from './ContentBoundary.vue';
 import ServiceCatalogEditor from './ServiceCatalogEditor.vue';
 import ServiceCatalogSummary from './ServiceCatalogSummary.vue';
 import ServiceStructureTemplate from './ServiceStructureTemplate.vue';
+import CatalogNavigationPanel from './CatalogNavigationPanel.vue';
 
 const props=defineProps<{user:SessionUser}>();
 type StructureTab=keyof ServiceStructure;
-type Tab=StructureTab|'catalog'|'changes';
+type Tab=StructureTab|'catalog'|'changes'|'navigation';
 type Person={id:string;name:string;groups:string[];dingLinked:boolean};
 const empty=():ServiceStructure=>({domains:[],systems:[],positions:[],appointments:[],mappings:[]});
 const copy=<T,>(value:T):T=>JSON.parse(JSON.stringify(value)) as T;
-const labels:Record<Tab,string>={domains:'责任域',systems:'业务系统',positions:'岗位',appointments:'任职人员',catalog:'目录维护',mappings:'服务映射',changes:'变更记录'};
+const labels:Record<Tab,string>={domains:'责任域',systems:'业务系统',positions:'岗位',appointments:'任职人员',catalog:'目录维护',navigation:'目录展示',mappings:'服务映射',changes:'变更记录'};
 const states:Record<string,string>={PENDING:'待独立复核',APPROVED:'已发布',REJECTED:'已拒绝'};
 const warningLabels:Record<string,string>={NO_CURRENT_APPOINTEE:'当前无有效任职人员',DING_ID_NOT_LINKED:'部分人员未绑定企业钉钉',CATALOG_NOT_PUBLISHED:'服务目录尚未发布'};
 const tab=ref<Tab>('domains'),draft=ref<ServiceStructure>(empty()),published=ref<ServiceStructure>(empty()),version=ref(1);
@@ -27,12 +28,12 @@ const preview=ref<ServiceStructurePreview[]>(),inspecting=ref<ServiceStructureCh
 const people=ref<Person[]>([]),query=ref(''),searchMore=ref(false),editing=ref(false),editKey=ref('');
 const peopleLoading=ref(false),peopleSearched=ref(false),peopleError=ref('');
 let peopleGeneration=0,searchTimer:ReturnType<typeof setTimeout>|undefined;
-const templateOpen=ref(false);
+const templateOpen=ref(false),navigationDirty=ref(false);
 const form=ref({id:'',name:'',domainId:'',groupId:'',enabled:true,positionId:'',employeeId:'',duty:'PRIMARY' as 'PRIMARY'|'BACKUP',
   validFrom:'',validTo:'',permanent:true,serviceCode:'',systemId:'',primaryPositionId:'',collaboratingPositionIds:[] as string[]});
 const config=computed(()=>inspecting.value?.config??draft.value);
 const dirty=computed(()=>!!catalogChange.value||JSON.stringify(draft.value)!==JSON.stringify(published.value));
-const structureTab=computed(()=>tab.value!=='catalog'&&tab.value!=='changes'?tab.value:undefined);
+const structureTab=computed(()=>tab.value!=='catalog'&&tab.value!=='changes'&&tab.value!=='navigation'?tab.value:undefined);
 const services=computed(()=>catalogChange.value?[...options.value.services.filter(s=>s.code!==catalogChange.value!.code),catalogChange.value]:options.value.services);
 const eligiblePeople=computed(()=>people.value);
 const allPeople=computed(()=>new Map([...options.value.people,...people.value].map(person=>[person.id,person])));
@@ -88,7 +89,7 @@ function localTime(value:string){
   return `${date.getFullYear()}-${pad(date.getMonth()+1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 function edit(key=''){
-  if(tab.value==='changes'||tab.value==='catalog'||inspecting.value)return;
+  if(tab.value==='changes'||tab.value==='catalog'||tab.value==='navigation'||inspecting.value)return;
   if(tab.value==='appointments'){
     cancelPeopleSearch();query.value='';people.value=[];searchMore.value=false;peopleSearched.value=false;peopleError.value='';
   }
@@ -171,8 +172,8 @@ onMounted(load);
     <p v-if="error" class="error-banner" role="alert">{{error}}</p><p v-if="notice" class="success-banner" role="status">{{notice}}</p>
     <header class="section-heading"><span class="muted">已发布版本 {{version}} <span v-if="dirty">· 未提交修改</span></span><div class="structure-tools">
       <button v-if="dirty&&!inspecting" class="icon-button" title="放弃未提交修改" aria-label="放弃未提交修改" :disabled="busy" @click="reset"><Undo2 :size="17"/></button>
-      <button class="icon-button" title="刷新服务组织" aria-label="刷新服务组织" :disabled="busy||loading||dirty||!!inspecting" @click="load"><RefreshCw :size="17" :class="{spin:loading}"/></button>
-      <button v-if="!inspecting" class="icon-button" title="初始组织模板" aria-label="初始组织模板" :disabled="busy||loading||editing" @click="templateOpen=!templateOpen"><ListPlus :size="17"/></button>
+      <button class="icon-button" title="刷新服务组织" aria-label="刷新服务组织" :disabled="busy||loading||dirty||navigationDirty||!!inspecting" @click="load"><RefreshCw :size="17" :class="{spin:loading}"/></button>
+      <button v-if="!inspecting&&tab!=='navigation'" class="icon-button" title="初始组织模板" aria-label="初始组织模板" :disabled="busy||loading||editing" @click="templateOpen=!templateOpen"><ListPlus :size="17"/></button>
       <button v-if="structureTab&&!inspecting" class="primary" :disabled="busy||loading||templateOpen" @click="edit()"><Plus :size="17"/>新增{{labels[tab]}}</button>
     </div></header>
     <ServiceStructureTemplate v-if="templateOpen&&!inspecting" :config="draft" :groups="options.groups" @save="saveTemplate" @cancel="templateOpen=false"/>
@@ -189,7 +190,7 @@ onMounted(load);
       </form>
     </section>
     <nav class="structure-tabs" role="tablist" aria-label="服务组织配置">
-      <button v-for="(label,key) in labels" :key="key" role="tab" :aria-selected="tab===key" :class="{active:tab===key}" :disabled="busy||templateOpen||!!inspecting&&key==='changes'" @click="tab=key;editing=false">{{label}}</button>
+      <button v-for="(label,key) in labels" :key="key" role="tab" :aria-selected="tab===key" :class="{active:tab===key}" :disabled="busy||templateOpen||navigationDirty&&key!=='navigation'||key==='navigation'&&(dirty||!!inspecting)||!!inspecting&&key==='changes'" @click="tab=key;editing=false">{{label}}</button>
     </nav>
     <section v-if="editing&&!inspecting" class="detail-section" :aria-label="`编辑${labels[tab]}`">
       <div class="section-heading"><h2>{{editKey?'编辑':'新增'}}{{labels[tab]}}</h2><button class="icon-button" title="取消编辑" aria-label="取消编辑" @click="editing=false"><X :size="18"/></button></div>
@@ -222,6 +223,7 @@ onMounted(load);
       </form>
     </section>
     <div v-if="loading" class="empty-state"><LoaderCircle class="spin" :size="26"/></div>
+    <CatalogNavigationPanel v-else-if="tab==='navigation'" @dirty="navigationDirty=$event"/>
     <ServiceCatalogEditor v-else-if="tab==='catalog'&&!inspecting" :items="catalogItems" :config="draft" :options="options" :user="user" :change="catalogChange" :busy="busy" :has-more="catalogMore" @save="saveCatalog" @cancel="cancelCatalog"/>
     <ServiceCatalogSummary v-else-if="tab==='catalog'&&inspecting?.catalogChange" :change="inspecting.catalogChange"/>
     <p v-else-if="tab==='catalog'" class="structure-empty">此提案不包含目录变更</p>

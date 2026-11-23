@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed,onBeforeUnmount,onMounted,ref,watch } from 'vue';
 import * as dd from 'dingtalk-jsapi';
-import { Activity,ArrowRight,BarChart3,Bell,BookOpen,ChevronLeft,ChevronRight,ClipboardList,Headphones,LayoutGrid,LoaderCircle,LogOut,Monitor,Network,Plus,QrCode,RefreshCw,Send,ShieldCheck,TriangleAlert,UserRound,Users } from 'lucide-vue-next';
+import { Activity,BarChart3,Bell,BookOpen,ChevronLeft,ChevronRight,ClipboardList,Headphones,LayoutGrid,LoaderCircle,LogOut,Network,Plus,QrCode,RefreshCw,ShieldCheck,TriangleAlert,UserRound,Users } from 'lucide-vue-next';
 import type { CatalogItem,SessionUser,TicketListResponse,TicketView,WorkQueue,WorkQueueCounts } from '@itsm/contracts';
 import EmployeeForm from './components/EmployeeForm.vue';
+import CatalogBrowser from './components/CatalogBrowser.vue';
 import TicketDetail from './components/TicketDetail.vue';
 import DelegationsPanel from './components/DelegationsPanel.vue';
 import KnowledgePanel from './components/KnowledgePanel.vue';
@@ -32,9 +33,6 @@ const emptyWorkQueues=():WorkQueueCounts=>({all:0,assigned:0,incoming:0,outgoing
 const workQueues=ref<WorkQueueCounts>(emptyWorkQueues());
 const selected=ref(''),creating=ref(false),initialCode=ref(''),notices=ref<Delivery[]>([]),notificationMode=ref('disabled'),retrying=ref('');
 const pages=computed(()=>Math.max(1,Math.ceil(total.value/20)));
-const supportCatalog=computed(()=>catalog.value.filter(item=>item.type!=='REQ'&&item.available));
-const requestCatalog=computed(()=>catalog.value.filter(item=>item.type==='REQ'&&item.available));
-const unavailableCatalog=computed(()=>catalog.value.filter(item=>!item.available));
 const openCount=computed(()=>Object.entries(counts.value).filter(([status])=>!['CLOSED','CANCELLED','REJECTED'].includes(status)).reduce((sum,[,count])=>sum+count,0));
 const noticeLabels:Record<string,string>={PENDING:'待发送',DISPATCHING:'正在提交',SENDING:'平台受理，待确认',DELIVERED:'平台确认发送成功',SIMULATED:'开发模拟',DEAD:'失败待处理',SKIPPED:'已跳过',REVIEW_REQUIRED:'发送结果待核查'};
 const needsNoticeAttention=(item:Delivery)=>['DEAD','REVIEW_REQUIRED'].includes(item.state);
@@ -81,7 +79,10 @@ async function load(quiet=false){
   if(!user.value)return;const current=++generation;
   if(!quiet)loading.value=true;error.value='';
   try{
-    if(view.value==='notifications'){
+    if(view.value==='catalog'){
+      const result=await api<{items:CatalogItem[]}>('/catalog');if(current!==generation)return;
+      catalog.value=result.items;
+    }else if(view.value==='notifications'){
       const result=await api<{items:Delivery[];mode:string}>('/notifications');if(current!==generation)return;
       notices.value=result.items;notificationMode.value=result.mode;
     }else if(!['catalog','delegations','knowledge','reports','roles','routing','routing-config','priority-config','service-structure','support-structure','fulfillments','directory'].includes(view.value)){
@@ -128,17 +129,7 @@ onBeforeUnmount(()=>{window.removeEventListener('hashchange',syncHash);if(refres
         <TicketDetail v-else-if="selected" :key="`${user.id}:${selected}`" :id="selected" :user="user" @back="back" @changed="load(true)"/>
         <template v-else>
           <div class="page-title"><div><p class="eyebrow">{{['queue','reports','routing','routing-config','priority-config','service-structure','support-structure','fulfillments','directory'].includes(view)?'SUPPORT OPERATIONS':'IT SERVICE DESK'}}</p><h1>{{title}}</h1></div><button v-if="view==='mine'||view==='catalog'" class="primary" @click="create()"><Plus :size="18"/>提交报障</button><button v-else-if="!['delegations','knowledge','reports','roles','routing','routing-config','priority-config','service-structure','support-structure','fulfillments','directory'].includes(view)" class="icon-button" title="刷新" aria-label="刷新列表" :disabled="loading" @click="load()"><RefreshCw :size="19" :class="{spin:loading}"/></button></div>
-          <template v-if="view==='catalog'">
-            <section class="catalog-section" aria-labelledby="support-catalog-title">
-              <div class="section-heading"><h2 id="support-catalog-title">故障与支持</h2><span class="muted">{{supportCatalog.length}} 项服务</span></div>
-              <div class="catalog-grid"><button v-for="item in supportCatalog" :key="item.code" class="catalog-item" @click="create(item.code)"><span class="service-icon"><Network v-if="item.code==='INC-NET'" :size="22"/><Monitor v-else-if="item.code==='INC-PC'" :size="22"/><Send v-else-if="item.code==='INC-MAIL'" :size="22"/><LayoutGrid v-else :size="22"/></span><span><strong>{{item.name}}</strong><small>{{item.description}}</small></span><ArrowRight :size="18"/></button></div>
-            </section>
-            <section class="catalog-section" aria-labelledby="request-catalog-title">
-              <h2 id="request-catalog-title">服务申请</h2>
-              <div v-if="requestCatalog.length" class="catalog-grid"><button v-for="item in requestCatalog" :key="item.code" class="catalog-item" @click="create(item.code)"><span class="service-icon"><ClipboardList :size="22"/></span><span><strong>{{item.name}}</strong><small>{{item.description}}</small></span><ArrowRight :size="18"/></button></div>
-              <div class="request-catalog"><div v-for="item in unavailableCatalog" :key="item.code"><span>{{item.name}}</span><span class="muted">暂未开放</span></div></div>
-            </section>
-          </template>
+          <CatalogBrowser v-if="view==='catalog'" :catalog="catalog" @select="create"/>
           <DelegationsPanel v-else-if="view==='delegations'" :user="user"/>
           <FulfillmentPanel v-else-if="view==='fulfillments'" :key="user.id" @open="openTicket"/>
           <KnowledgePanel v-else-if="view==='knowledge'" :key="user.id" :user="user"/>
