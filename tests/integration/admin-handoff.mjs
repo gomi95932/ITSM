@@ -102,5 +102,5 @@ try{
   console.log('Admin handoff verified: migration, pilot filtering, recent identity proof, preview, rejected baselines, rollback, real authorization, demo session revocation, preserved audit and replay refusal');
 }finally{
   if(db)await db.end();
-  await control.query(`DROP DATABASE IF EXISTS ${database} WITH (FORCE)`);await control.end();
+  await control.query(`DROP DATABASE IF EXISTS ${database}`);await control.end();
 }

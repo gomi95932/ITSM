@@ -140,6 +140,6 @@ try{
   console.log('PASS admin direct configuration: roles, self assignment, members, positions, catalog, routing, legacy review, replay and rollback');
 }finally{
   await pool?.end();
-  await control.query(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
+  await control.query(`DROP DATABASE IF EXISTS ${name}`);
   await control.end();
 }
