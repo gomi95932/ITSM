@@ -1,4 +1,5 @@
 import { type PoolClient } from 'pg';
+export {initializeAutomaticDispatch,advanceAutomaticDispatch,automaticDispatchAction,maintainAutomaticDispatch} from './automatic-dispatch.js';
 
 type Person = { employeeId: string; dingUserId: string };
 type Approver = Person & { role: string };

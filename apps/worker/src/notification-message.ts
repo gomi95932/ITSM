@@ -22,7 +22,7 @@ export function notificationLink(publicUrl: string, ticket: {
     title: `${ticket.action.startsWith('P1_') ? 'P1 候选 · ' : 'IT 服务台 · '}${ticket.number}`,
     text: waiting ? `工单 ${ticket.number} ${waiting}` : fulfillment ? `工单 ${ticket.number} ${fulfillment}` : ticket.action.startsWith('P1_')
       ? `${ticket.action === 'P1_REVIEW_OVERDUE' ? '主管确认逾期，请立即跟进。' : '请立即响应，主管确认中。'}工单 ${ticket.number}`
-      : routingAlert ? `工单 ${ticket.number} 所属支持组无人可接，且无可用备用组，请检查路由告警。`
+      : routingAlert ? `工单 ${ticket.number} 需要调度介入，请查看路由告警并安排人员接管。`
       : ticket.action === 'ASSIGN_OFFER' ? `工单 ${ticket.number} 待您确认接收，请在截止时间前处理。`
       : ticket.action === 'ASSIGNMENT_EXPIRED' ? `工单 ${ticket.number} 候选接收已超时，请调度员跟进。`
       : ticket.action === 'FORCE_TAKEOVER' ? `工单 ${ticket.number} 已由主管紧急调整负责人，请查看交接记录。`

@@ -73,6 +73,50 @@ const columns=`id,kind,group_id AS "groupId",priority,config,expected_policy_id 
 export class RoutingConfigService {
   constructor(private readonly db:Database,private readonly intake:IntakePolicyService) {}
 
+  async automatic(actor:Identity){return this.db.transaction(async client=>{
+    await client.query('SELECT pg_advisory_xact_lock_shared($1)',[ROLE_AUTHORIZATION_LOCK]);
+    await this.admin(client,actor.id);
+    const items=(await client.query(`SELECT c.code,c.name,c.published,COALESCE(p.version,0) AS version,
+      COALESCE(p.enabled,false) AS enabled,COALESCE(p.primary_minutes,15) AS "primaryMinutes",
+      COALESCE(p.backup_minutes,15) AS "backupMinutes",
+      EXISTS(SELECT 1 FROM service_position_routes r JOIN support_positions s ON s.id=r."primaryPositionId"
+        JOIN service_domains d ON d.id=s."domainId" AND d.enabled JOIN support_groups g ON g.id=s."groupId" AND g.enabled
+        WHERE r."serviceCode"=c.code AND r.enabled AND s.enabled AND s."groupId"=c.group_id) AS mapped
+      FROM service_catalog c LEFT JOIN LATERAL(SELECT * FROM automatic_dispatch_policies p
+        WHERE p.service_code=c.code ORDER BY version DESC LIMIT 1) p ON true ORDER BY c.sort_order,c.code`)).rows;
+    const history=(await client.query(`SELECT p.service_code AS "serviceCode",p.version,p.enabled,
+      p.primary_minutes AS "primaryMinutes",p.backup_minutes AS "backupMinutes",e.display_name AS "actorName",
+      p.reason,p.created_at AS "createdAt" FROM automatic_dispatch_policies p JOIN employees e ON e.id=p.actor_id
+      ORDER BY p.created_at DESC,p.service_code LIMIT 50`)).rows;
+    return {items,history};
+  });}
+
+  async saveAutomatic(actor:Identity,body:unknown){
+    if(!object(body)||!only(body,['serviceCode','expectedVersion','enabled','primaryMinutes','backupMinutes','reason','contentClass'])
+      ||body.contentClass!=='GENERAL'||!name(body.serviceCode)||!Number.isInteger(body.expectedVersion)||(body.expectedVersion as number)<0
+      ||typeof body.enabled!=='boolean'||!reason(body.reason)
+      ||![body.primaryMinutes,body.backupMinutes].every(v=>Number.isInteger(v)&&(v as number)>=1&&(v as number)<=10080))
+      throw new BadRequestException({code:'INVALID_AUTOMATIC_DISPATCH'});
+    const why=body.reason.trim();
+    await this.intake.requireGeneral(actor.id,body,'routing-config');
+    return this.db.transaction(async client=>{
+      await this.writeAdmin(client,actor.id);
+      const current=(await client.query('SELECT version FROM automatic_dispatch_policies WHERE service_code=$1 ORDER BY version DESC LIMIT 1',[body.serviceCode])).rows[0];
+      if((current?.version??0)!==body.expectedVersion)throw new ConflictException({code:'AUTOMATIC_DISPATCH_VERSION_CONFLICT'});
+      if(!(await client.query('SELECT 1 FROM service_catalog WHERE code=$1 FOR SHARE',[body.serviceCode])).rowCount)throw new NotFoundException();
+      if(body.enabled&&!(await client.query(`SELECT 1 FROM service_position_routes r JOIN support_positions p ON p.id=r."primaryPositionId"
+        JOIN service_domains d ON d.id=p."domainId" AND d.enabled JOIN support_groups g ON g.id=p."groupId" AND g.enabled
+        JOIN service_catalog c ON c.code=r."serviceCode" AND c.group_id=g.id
+        WHERE r."serviceCode"=$1 AND r.enabled AND p.enabled`,[body.serviceCode])).rowCount)
+        throw new ConflictException({code:'AUTOMATIC_DISPATCH_MAPPING_REQUIRED'});
+      const version=(current?.version??0)+1;
+      await client.query(`INSERT INTO automatic_dispatch_policies(service_code,version,enabled,primary_minutes,backup_minutes,actor_id,reason)
+        VALUES($1,$2,$3,$4,$5,$6,$7)`,[body.serviceCode,version,body.enabled,body.primaryMinutes,body.backupMinutes,actor.id,why]);
+      await client.query(`INSERT INTO operational_audits(actor_id,action,target_id) VALUES($1,'AUTOMATIC_DISPATCH_CONFIGURED',$2)`,[actor.id,body.serviceCode]);
+      return {version};
+    });
+  }
+
   private async admin(client:Pick<PoolClient,'query'>,actor:string){
     const role=await client.query(`SELECT 1 FROM role_bindings r WHERE r.employee_id=$1 AND r.role_code='PLATFORM_ADMIN'
       AND ${ROLE_EFFECTIVE_SQL} LIMIT 1`,[actor]);

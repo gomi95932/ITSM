@@ -28,7 +28,7 @@ onBeforeUnmount(()=>{if(timer)clearInterval(timer);});
     <div class="table-wrap">
       <table><thead><tr><th>工单</th><th>支持组</th><th>原因</th><th>发生时间</th></tr></thead>
         <tbody><tr v-for="alert in alerts" :key="alert.ticketId">
-          <td>{{alert.number}}</td><td>{{alert.ownerGroupName}}</td><td><span class="status failed">{{alert.reason==='OWNER_APPOINTMENT_REQUIRED'?'当前负责人任职失效':alert.reason==='NO_POSITION_COVERAGE'?'无有效岗位任职人员':'无可用备用组'}}</span></td><td>{{formatDate(alert.openedAt)}}</td>
+          <td>{{alert.number}}</td><td>{{alert.ownerGroupName}}</td><td><span class="status failed">{{alert.reason==='AUTO_DISPATCH_EXHAUSTED'?'主备派单失败，待调度接管':alert.reason==='OWNER_APPOINTMENT_REQUIRED'?'当前负责人任职失效':alert.reason==='NO_POSITION_COVERAGE'?'无有效岗位任职人员':'无可用备用组'}}</span></td><td>{{formatDate(alert.openedAt)}}</td>
         </tr></tbody>
       </table>
       <div v-if="!alerts.length && !loading" class="empty-state"><TriangleAlert :size="28"/><p>暂无待处理路由告警</p></div>

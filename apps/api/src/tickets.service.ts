@@ -10,7 +10,7 @@ import type { OperationsConfig } from '@itsm/contracts';
 import { IntakePolicyService } from './intake-policy.service.js';
 import { ownershipDenial } from './ticket-ownership.js';
 import { canDispatch, canManageContinuity, ROLE_AUTHORIZATION_LOCK } from './role-policy.js';
-import { blockRequestApprovalOnCancellation, enqueueRequestApproval } from '@itsm/workflow';
+import { blockRequestApprovalOnCancellation, enqueueRequestApproval,initializeAutomaticDispatch,automaticDispatchAction } from '@itsm/workflow';
 import { requestIntakePolicy } from './request-intake-policy.js';
 import { ticketWaiting, type WaitingRow } from './ticket-waiting.js';
 import { evaluatePriority,prioritySlaMeasurements,type SlaClock,type PriorityPolicy,type Impact,type Urgency } from '@itsm/contracts';
@@ -279,7 +279,8 @@ export class TicketsService {
         await client.query("INSERT INTO priority_review_signals(ticket_id,kind) VALUES ($1,'CANDIDATE')",[ticket.id]);
         await this.record(client,ticket,actor.id,'P1_CANDIDATE',ticket.status,{ priority:'P1',reviewState:'PENDING',responseStarted:true },requestId,ticket);
       }
-      const response = this.receipt(ticket);
+      await initializeAutomaticDispatch(client,ticket.id);
+      const response = this.receipt((await client.query<TicketRow>('SELECT * FROM tickets WHERE id=$1',[ticket.id])).rows[0]);
       await client.query('UPDATE api_idempotency SET response=$4 WHERE actor_id=$1 AND scope=$2 AND key=$3', [actor.id, 'create', key, JSON.stringify(response)]);
       return response;
     });
@@ -611,6 +612,7 @@ export class TicketsService {
         catalog_snapshot=$6,service_routing_snapshot=$7,version=version+1 WHERE id=$1 RETURNING *`,[id,service.code,service.type,service.form_version,JSON.stringify(input.fields),JSON.stringify(snapshot),JSON.stringify(service.routingSnapshot)]);
       await this.record(client,updated.rows[0],actor.id,'CLASSIFICATION_CORRECTED',ticket.status,
         {reason:input.reason.trim(),oldServiceCode:ticket.service_code,serviceCode:service.code,oldFields:ticket.fields,fields:input.fields},requestId,ticket);
+      await automaticDispatchAction(client,id,'CLASSIFICATION_CORRECTED');
       const response=this.receipt(updated.rows[0]);
       await client.query('UPDATE api_idempotency SET response=$4 WHERE actor_id=$1 AND scope=$2 AND key=$3',[actor.id,`classification:${id}`,key,JSON.stringify(response)]);
       return response;
@@ -821,7 +823,8 @@ export class TicketsService {
             assignmentVersion:['REASSIGN','INITIATE_HANDOVER','ASSIGN_OFFER'].includes(body.action)?updated.rows[0].version:undefined } : {}) },requestId,ticket);
       if (body.action==='ACCEPT_HANDOVER' && group!==ticket.owner_group_id && ticket.priority_review_state==='PENDING')
         await this.record(client,updated.rows[0],actor.id,'P1_REVIEW_ROUTED',next,{ oldGroupId:ticket.owner_group_id,targetGroupId:group,generation:ticket.priority_review_generation },requestId,ticket);
-      const response = this.receipt(updated.rows[0]);
+      await automaticDispatchAction(client,id,body.action);
+      const response = this.receipt((await client.query<TicketRow>('SELECT * FROM tickets WHERE id=$1',[id])).rows[0]);
       await client.query('UPDATE api_idempotency SET response=$4 WHERE actor_id=$1 AND scope=$2 AND key=$3', [actor.id, `action:${id}`, key, JSON.stringify(response)]);
       return response;
     });
