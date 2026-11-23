@@ -20,6 +20,8 @@ export class CatalogNavigationService {
     const current=(await client.query<{version:number;config:CatalogNavigationEntry[]}>(
       'SELECT version,config FROM catalog_navigation_versions ORDER BY version DESC LIMIT 1')).rows[0];
     const services=(await client.query(`SELECT c.code,c.name,c.published,
+      (SELECT s.name FROM service_position_routes r JOIN business_systems s ON s.id=r."systemId"
+        WHERE r."serviceCode"=c.code LIMIT 1) AS system_name,
       EXISTS(SELECT 1 FROM service_position_routes r JOIN support_positions p ON p.id=r."primaryPositionId"
         JOIN service_domains d ON d.id=p."domainId" AND d.enabled
         JOIN support_groups g ON g.id=p."groupId" AND g.enabled
@@ -36,8 +38,9 @@ export class CatalogNavigationService {
     const entries=new Map(current.config.map(item=>[item.serviceCode,item]));
     const history=(await client.query(`SELECT v.version,e.display_name AS "actorName",v.reason,v.created_at AS "createdAt"
       FROM catalog_navigation_versions v LEFT JOIN employees e ON e.id=v.actor_id ORDER BY v.version DESC LIMIT 20`)).rows;
-    return {version:current.version,services,history,items:services.map((service,index)=>entries.get(service.code)
-      ??{serviceCode:service.code,path:initialCatalogPath(service.code),sortOrder:Math.min(index*10,99999)})};
+    return {version:current.version,services:services.map(({system_name,...service})=>service),history,
+      items:services.map((service,index)=>entries.get(service.code)
+      ??{serviceCode:service.code,path:initialCatalogPath(service.code,service.system_name),sortOrder:Math.min(index*10,99999)})};
   });}
   async save(actor:Identity,body:unknown){
     const input=catalogNavigationInput(body);

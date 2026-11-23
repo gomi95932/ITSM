@@ -9,7 +9,18 @@ const initialPaths:Record<string,string[]>={
   'REQ-VPN':['网络与远程访问'],'REQ-SHARE':['文件共享与存储'],
   'REQ-GPU':['算力与AI服务'],'REQ-AI':['算力与AI服务'],
 };
-export function initialCatalogPath(code:string):string[]{return [...(initialPaths[code]??['其他服务'])];}
+const applicationNames:Record<string,string>={
+  ERP:'ERP系统',SRM:'SRM系统',WMS:'WMS系统',OA:'OA系统',AGV:'AGV系统',PDM:'PDM系统',
+  COST:'COST系统',HUB:'HUB系统',TB:'TB系统',DINGTALK:'钉钉',
+};
+export function initialCatalogPath(code:string,systemName?:string|null):string[]{
+  if(systemName?.trim()){
+    const name=systemName.trim();
+    return ['信息化系统',/^[A-Za-z][A-Za-z0-9_-]*$/.test(name)?`${name}系统`:name];
+  }
+  const application=applicationNames[code.replace(/^(INC|REQ)-/,'')];
+  return application?['信息化系统',application]:[...(initialPaths[code]??['其他服务'])];
+}
 export function catalogNavigationInput(body:unknown):{expectedVersion:number;items:CatalogNavigationEntry[];reason:string;contentClass:'GENERAL'}{
   const invalid=()=>{throw new BadRequestException({code:'INVALID_CATALOG_NAVIGATION'});};
   if(!body||typeof body!=='object'||Array.isArray(body))return invalid();

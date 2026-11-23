@@ -53,20 +53,63 @@ try{
   assert.equal(catalog.some(item=>item.code==='INC-BIZ'),false,'hidden service metadata must not reach employees');
   await pool.query("UPDATE service_catalog SET published=false WHERE code='INC-NET'");
   assert.equal((await workspace.catalog({})).items.some(item=>item.code==='INC-NET'),false);
-  const structure={domains:[{id:'nav-domain',name:'Infrastructure',enabled:true}],systems:[],
+  const adminWorkspace=new WorkspaceController(db,{identity:async()=>admin},{},{},{});
+  let all=(await adminWorkspace.catalog({})).items;
+  assert.equal(all.length,Number((await pool.query('SELECT count(*) FROM service_catalog')).rows[0].count));
+  assert.equal(all.find(item=>item.code==='INC-BIZ').unavailableReason,'OUT_OF_SCOPE');
+  assert.equal(all.find(item=>item.code==='INC-BIZ').available,false);
+  assert.equal(all.find(item=>item.code==='INC-NET').unavailableReason,'UNPUBLISHED');
+  assert.equal(all.find(item=>item.code==='INC-NET').published,false);
+  assert.equal(all.find(item=>item.code==='INC-NET').available,false);
+  assert.equal(all.find(item=>item.code==='REQ-ACCOUNT').unavailableReason,'NOT_READY');
+  assert.equal(all.find(item=>item.code==='INC-PC').available,true);
+  const spoofed=new WorkspaceController(db,{identity:async()=>({...employee,canManageRouting:true})},{},{},{});
+  assert.equal((await spoofed.catalog({})).items.some(item=>item.code==='INC-BIZ'),false,'database roles govern full visibility');
+  await pool.query(`INSERT INTO operations_versions(version,config) VALUES(2,
+    '{"siteEnforced":true,"sites":[],"employeeSites":[],"serviceSites":[]}')`);
+  assert.equal((await workspace.catalog({})).items.length,0);
+  all=(await adminWorkspace.catalog({})).items;
+  assert.equal(all.find(item=>item.code==='INC-PC').unavailableReason,'OUT_OF_SCOPE','admin can inspect services outside their site');
+  assert.equal(all.find(item=>item.code==='INC-PC').available,false);
+  await pool.query(`INSERT INTO operations_versions(version,config) SELECT 3,config FROM operations_versions WHERE version=1`);
+  await pool.query(`UPDATE role_bindings SET status='REVOKED' WHERE employee_id=$1 AND role_code='PLATFORM_ADMIN'`,[admin.id]);
+  assert.equal((await adminWorkspace.catalog({})).items.some(item=>item.code==='INC-BIZ'),false,'revocation takes effect without a new session');
+  await pool.query(`UPDATE role_bindings SET status='ACTIVE',valid_from=now()-interval '2 days',valid_to=now()-interval '1 day'
+    WHERE employee_id=$1 AND role_code='PLATFORM_ADMIN'`,[admin.id]);
+  assert.equal((await adminWorkspace.catalog({})).items.some(item=>item.code==='INC-NET'),false,'expired administrators have no bypass');
+  await pool.query(`UPDATE role_bindings SET valid_to=now()+interval '1 day' WHERE employee_id=$1 AND role_code='PLATFORM_ADMIN'`,[admin.id]);
+  const dispatcher=new WorkspaceController(db,{identity:async()=>actor('agent-1')},{},{},{});
+  assert.equal((await dispatcher.catalog({})).items.some(item=>item.code==='INC-NET'),false,'dispatcher is not a platform administrator');
+  await pool.query(`INSERT INTO service_catalog(code,type,form_version,group_id,name,description,required_fields,field_schema,published,visible_groups,sort_order)
+    SELECT code,type,form_version,group_id,name,description,required_fields,field_schema,published,visible_groups,140
+    FROM (SELECT unnest(ARRAY['INC-SRM','INC-CUSTOMAPP']) AS code) codes CROSS JOIN LATERAL
+      (SELECT type,form_version,group_id,name,description,required_fields,field_schema,published,visible_groups FROM service_catalog WHERE code='INC-PC') template`);
+  assert.deepEqual((await navigation.list(admin)).items.find(item=>item.serviceCode==='INC-SRM').path,['信息化系统','SRM系统']);
+  assert.deepEqual((await adminWorkspace.catalog({})).items.find(item=>item.code==='INC-SRM').navigationPath,['信息化系统','SRM系统']);
+  const structure={domains:[{id:'nav-domain',name:'Infrastructure',enabled:true}],
+    systems:[{id:'nav-crm',name:'CRM',domainId:'nav-domain',enabled:true}],
     positions:[{id:'nav-position',name:'Helpdesk',domainId:'nav-domain',groupId:'service-desk',enabled:true}],
     appointments:[{id:randomUUID(),positionId:'nav-position',employeeId:'agent-1',duty:'PRIMARY',
       validFrom:new Date(Date.now()-60000).toISOString(),validTo:null,enabled:true}],
-    mappings:[{serviceCode:'INC-PC',domainId:'nav-domain',primaryPositionId:'nav-position',collaboratingPositionIds:[],enabled:true}]};
+    mappings:['INC-PC','INC-CUSTOMAPP'].map(serviceCode=>({serviceCode,domainId:'nav-domain',
+      ...(serviceCode==='INC-CUSTOMAPP'?{systemId:'nav-crm'}:{}),
+      primaryPositionId:'nav-position',collaboratingPositionIds:[],enabled:true}))};
   await pool.query('INSERT INTO service_structure_versions(version,config) VALUES(2,$1)',[JSON.stringify(structure)]);
   await pool.query('UPDATE service_structure_current SET version=2');
   let readiness=(await navigation.list(admin)).services.find(row=>row.code==='INC-PC');
   assert.equal(readiness.mapped,true);assert.equal(readiness.staffed,true,'permanent active appointments count as staffed');
+  assert.deepEqual((await navigation.list(admin)).items.find(item=>item.serviceCode==='INC-CUSTOMAPP').path,['信息化系统','CRM系统']);
+  assert.deepEqual((await adminWorkspace.catalog({})).items.find(item=>item.code==='INC-CUSTOMAPP').navigationPath,['信息化系统','CRM系统']);
+  const custom=(await navigation.list(admin)).items.map(item=>item.serviceCode==='INC-CUSTOMAPP'?{...item,path:['自定义业务','客户支持']}:item);
+  await navigation.save(admin,{...basis,expectedVersion:3,items:custom});
+  assert.deepEqual((await adminWorkspace.catalog({})).items.find(item=>item.code==='INC-CUSTOMAPP').navigationPath,['自定义业务','客户支持'],
+    'explicit administrator categories take precedence over defaults');
   await pool.query("UPDATE employees SET active=false WHERE id='agent-1'");
   readiness=(await navigation.list(admin)).services.find(row=>row.code==='INC-PC');
   assert.equal(readiness.mapped,true);assert.equal(readiness.staffed,false,'inactive personnel must not appear ready');
   await pool.query("UPDATE employees SET active=true WHERE id='agent-1'");
   await pool.query("UPDATE employees SET active=false WHERE id='demo-admin-1'");
+  assert.equal((await adminWorkspace.catalog({})).items.some(item=>item.code==='INC-NET'),false,'inactive accounts cannot obtain full visibility');
   await assert.rejects(navigation.save(admin,{...basis,expectedVersion:3,items}));
   console.log('Catalog navigation integration passed: authorization, immutable audit, concurrent saves, visibility, availability, staffing and business invariance');
 }finally{if(pool)await pool.end();await control.query(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);await control.end();}

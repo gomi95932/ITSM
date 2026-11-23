@@ -19,3 +19,12 @@ test('navigation rejects invalid hierarchy, duplicates and unrelated business wr
     assert.throws(()=>catalogNavigationInput(input));
   }
 });
+test('application defaults include new system services and configured custom systems',()=>{
+  for(const system of ['ERP','SRM','WMS','OA','AGV','PDM','COST','HUB','TB'])
+    assert.deepEqual(initialCatalogPath(`INC-${system}`),['信息化系统',`${system}系统`]);
+  assert.deepEqual(initialCatalogPath('INC-CUSTOM',' CRM '),['信息化系统','CRM系统']);
+  assert.deepEqual(initialCatalogPath('INC-CUSTOM','客户服务平台'),['信息化系统','客户服务平台']);
+  assert.deepEqual(initialCatalogPath('INC-CUSTOM',''),['其他服务']);
+  assert.deepEqual(initialCatalogPath('INC-MAIL'),['账号与邮箱']);
+  assert.deepEqual(initialCatalogPath('INC-MAIL','企业邮箱'),['信息化系统','企业邮箱']);
+});

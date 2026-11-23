@@ -91,7 +91,7 @@ export interface TicketFeedback {
 }
 
 export interface CatalogField { key: string; label: string; required: boolean; options?: string[] }
-export interface CatalogItem { code: string; name: string; description: string; type: TicketType; formVersion: number; fields: CatalogField[]; available: boolean; maxValidityDays?: number | null; navigationPath?:string[]; navigationOrder?:number }
+export interface CatalogItem { code: string; name: string; description: string; type: TicketType; formVersion: number; fields: CatalogField[]; available: boolean; published?:boolean; unavailableReason?:'UNPUBLISHED'|'OUT_OF_SCOPE'|'NOT_READY'; maxValidityDays?: number | null; navigationPath?:string[]; navigationOrder?:number }
 export type {CatalogNavigationEntry,CatalogNavigationView} from './catalog-navigation.js';
 export const MANAGED_ROLE_CODES=['PLATFORM_ADMIN','DISPATCHER','GROUP_LEAD'] as const;
 export type ManagedRoleCode=typeof MANAGED_ROLE_CODES[number];

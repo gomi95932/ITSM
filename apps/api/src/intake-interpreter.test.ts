@@ -80,7 +80,7 @@ function controllerFixture(interpreter:IntakeInterpreterService,revoke=false,cha
   const db={pool:{query:async(sql:string,...args:unknown[])=>{
     if(sql.includes('intake_rate_limits'))return {rows:[{count:1}]};
     if(sql.includes('SELECT c.*')){catalogReads++;return {rows:(!changed||catalogReads===1?catalog:[]).map(item=>({code:item.code,name:item.name,description:item.description,
-      type:item.type,published:true,form_version:item.formVersion,field_schema:item.fields}))};}
+      type:item.type,published:true,scope_visible:true,form_version:item.formVersion,field_schema:item.fields}))};}
     writes.push([sql,...args]);return {rows:[{id:'synthetic-draft',expiresAt:'2099-01-01'}]};
   }}} as unknown as Database;
   const identity={identity:async()=>{checks++;if(revoke&&checks>2)throw new Error('IDENTITY_REVOKED');return {id:'employee-1'};}} as unknown as AuthService;
