@@ -80,10 +80,14 @@ assert.equal(withdrawn.assignmentState,'CANCELLED');assert.equal(withdrawn.assig
 let expired=await create();expired=await ok(expired,dispatcher,'ASSIGN_OFFER',offer);
 const expiredSla=await sql(`SELECT row_to_json(s)::text FROM sla_cycles s WHERE ticket_id=${quote(expired.id)}`);
 await sql(`UPDATE tickets SET assignment_due_at=now()-interval '1 second' WHERE id=${quote(expired.id)}`);
-assert.equal((await act(expired,candidate,'ACCEPT_OFFER',{comment:'Too late'})).data.code,'HANDOVER_EXPIRED');
+const lateAcceptance=await act(expired,candidate,'ACCEPT_OFFER',{comment:'Too late'});
+assert.equal(lateAcceptance.status,409);
+// The scheduler can expire the offer before the stale acceptance acquires its lock.
+assert.ok(['HANDOVER_EXPIRED','VERSION_CONFLICT'].includes(lateAcceptance.data.code),JSON.stringify(lateAcceptance));
 await until(async()=>await sql(`SELECT assignment_state FROM tickets WHERE id=${quote(expired.id)}`)==='EXPIRED');
 const row=JSON.parse(await sql(`SELECT row_to_json(t)::text FROM tickets t WHERE id=${quote(expired.id)}`));
 assert.equal(row.assignee_id,null);assert.equal(row.pending_assignee_id,null);assert.equal(row.status,'QUEUED');
+if(lateAcceptance.data.code==='VERSION_CONFLICT')assert.ok(row.version>expired.version,'scheduler expiry must explain the version conflict');
 assert.equal(await sql(`SELECT row_to_json(s)::text FROM sla_cycles s WHERE ticket_id=${quote(expired.id)}`),expiredSla);
 assert.equal(await sql(`SELECT count(*) FROM ticket_events WHERE ticket_id=${quote(expired.id)} AND action='ASSIGNMENT_EXPIRED'`),'1');
 assert.equal(await sql(`SELECT count(*) FROM outbox_events o JOIN ticket_events e ON e.id=o.event_id
