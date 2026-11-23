@@ -6,6 +6,7 @@ import { api,errorText } from '../api';
 import { createRequestKey } from '../request-key';
 import { formatDate } from '../labels';
 import ContentBoundary from './ContentBoundary.vue';
+import AutomaticDispatchPanel from './AutomaticDispatchPanel.vue';
 
 type Group={id:string;name:string;fallbackGroupId:string|null;routingVersion:number};
 type Policy={id:string;groupId:string;priority:string;receiveMinutes:number;calendar:{startHour:number;endHour:number;holidays:string[];workdays:string[]};validFrom:string;validTo:string;approvedBy:string};
@@ -76,6 +77,7 @@ onMounted(load);
 
 <template>
   <div class="routing-config">
+    <AutomaticDispatchPanel/>
     <p v-if="error" class="error-banner" role="alert">{{error}}</p>
     <div class="section-heading"><span class="muted">当前生效配置</span><div class="tools">
       <button class="icon-button" title="刷新路由配置" aria-label="刷新路由配置" :disabled="busy||loading" @click="load"><RefreshCw :size="17" :class="{spin:loading}"/></button>

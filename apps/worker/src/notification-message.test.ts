@@ -75,7 +75,8 @@ test('unroutable tickets link administrators to the alert list, not an inaccessi
     ticket_id:'ticket-3',number:'INC-0003',action:'OWNERSHIP_ESCALATION_REQUIRED',to_status:'QUEUED',
   });
   assert.equal(message.messageUrl,'https://itsm.example.test/#/routing-alerts');
-  assert.match(message.text,/无人可接/);
+  assert.match(message.text,/需要调度介入/);
+  assert.match(message.text,/安排人员接管/);
 });
 
 test('work notifications use an ActionCard that opens an authenticated H5 page without action credentials',()=>{

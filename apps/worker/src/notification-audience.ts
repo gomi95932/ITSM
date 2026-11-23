@@ -119,7 +119,12 @@ export async function notificationRecipients(client: Pick<PoolClient,'query'>, e
       ($4 AND e.id=t.assignee_id AND EXISTS(SELECT 1 FROM group_memberships m WHERE m.employee_id=e.id AND m.group_id=t.owner_group_id)) OR
       (v.action='FORCE_TAKEOVER' AND e.id=v.detail->>'oldAssigneeId' AND EXISTS(
         SELECT 1 FROM group_memberships m WHERE m.employee_id=e.id AND m.group_id=t.owner_group_id)) OR
-      ($5 AND e.id=t.pending_assignee_id AND v.detail->>'assignmentVersion'=t.version::text
+      ($5 AND e.id=t.pending_assignee_id AND (
+          (v.detail->>'automatic'='true' AND EXISTS(SELECT 1 FROM automatic_dispatch_runs r
+            JOIN automatic_dispatch_attempts a ON a.run_id=r.id AND a.state='PENDING'
+            WHERE r.ticket_id=t.id AND r.state='OFFERED' AND r.id::text=v.detail->>'runId'
+              AND a.employee_id=e.id AND a.offered_at=t.assignment_offered_at AND t.assignment_due_at>clock_timestamp()))
+          OR (COALESCE(v.detail->>'automatic','false')<>'true' AND v.detail->>'assignmentVersion'=t.version::text))
         AND v.detail->>'targetAssigneeId'=t.pending_assignee_id
         AND v.detail->>'targetGroupId'=t.pending_group_id AND EXISTS
         (SELECT 1 FROM group_memberships m WHERE m.employee_id=e.id AND m.group_id=t.pending_group_id)

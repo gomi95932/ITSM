@@ -9,6 +9,10 @@ const auth=(h:H)=>({devUser:h['x-dev-user'],cookie:h.cookie,csrf:h['x-csrf-token
 export class RoutingConfigController {
   constructor(private readonly identity:AuthService,private readonly routing:RoutingConfigService) {}
   @Get() async list(@Headers() h:H){return this.routing.list(await this.identity.identity(auth(h)));}
+  @Get('automatic') async automatic(@Headers() h:H){return this.routing.automatic(await this.identity.identity(auth(h)));}
+  @Post('automatic') @HttpCode(200) async saveAutomatic(@Headers() h:H,@Body() body:unknown){
+    return this.routing.saveAutomatic(await this.identity.identity(auth(h),true),body);
+  }
   @Get(':id/history') async history(@Headers() h:H,@Param('id') id:string){return this.routing.history(await this.identity.identity(auth(h)),id);}
   @Post() async propose(@Headers() h:H,@Body() body:unknown){return this.routing.propose(await this.identity.identity(auth(h),true),body);}
   @Post(':id/review') @HttpCode(200) async review(@Headers() h:H,@Param('id') id:string,@Body() body:unknown){

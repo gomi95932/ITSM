@@ -14,6 +14,7 @@ import { dingtalkDirectory } from './directory-provider.js';
 import { directorySettings,synchronizeDirectory } from './directory-sync.js';
 import { dingtalkPilotUsers } from './dingtalk-pilot.js';
 import { recoverOwnership } from './ownership-recovery.js';
+import {maintainAutomaticDispatch,advanceAutomaticDispatch} from '@itsm/workflow';
 
 const db = new Pool({ host:process.env.DB_HOST ?? 'db',database:process.env.DB_NAME ?? 'itsm',user:process.env.DB_USER ?? 'itsm',password:process.env.DB_PASSWORD,
   application_name:'itsm-worker',connectionTimeoutMillis:5000,statement_timeout:30000 });
@@ -121,10 +122,12 @@ async function priorityReviewTimers() {
 
 async function expireAssignments() {
   await transaction(async client=>{
+    await client.query('SELECT pg_advisory_xact_lock_shared(71820512)');
     const rows=await client.query(`SELECT * FROM tickets WHERE pending_assignee_id IS NOT NULL
       AND assignment_due_at<=now() AND status NOT IN ('CLOSED','CANCELLED','REJECTED')
       ORDER BY assignment_due_at,id LIMIT 100 FOR UPDATE SKIP LOCKED`);
     for (const row of rows.rows) {
+      if(await advanceAutomaticDispatch(client,row.id))continue;
       const updated=await client.query(`UPDATE tickets SET pending_group_id=NULL,pending_assignee_id=NULL,
         assignment_kind=NULL,assignment_state='EXPIRED',assignment_due_at=NULL,assignment_offered_at=NULL,
         assignment_policy_version_id=NULL,version=version+1,updated_at=now() WHERE id=$1 RETURNING *`,[row.id]);
@@ -177,6 +180,7 @@ async function tick() {
   timer=undefined;
   try {
     scheduleDirectory();
+    await maintainAutomaticDispatch(db);
     await recoverOwnership(db,record);
     if (ticks++ % 15 === 0) { await expireAssignments(); await priorityReviewTimers(); await maintainRequestApprovals(db); await maintainRequestFulfillments(db); await maintainFulfillmentAttention(db,fulfillmentReminders); await maintainWaitingFollowUps(db); await timers(); }
     if(approvalProvider)for(let i=0;i<5&&!stopped;i++)if(!await processNextRequestApproval(db,approvalProvider))break;

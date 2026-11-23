@@ -1,5 +1,6 @@
 import type { Pool,PoolClient } from 'pg';
 import { ownershipCandidatesQuery } from './ownership-query.js';
+import {advanceAutomaticDispatch} from '@itsm/workflow';
 
 type RecordOwnership=(client:PoolClient,row:any,action:string,detail:object,from:string,to:string,previous?:any)=>Promise<void>;
 
@@ -22,6 +23,7 @@ export async function recoverOwnership(db:Pool,record:RecordOwnership) {
     const row=result.rows[0];
     if(!row)return;
     await client.query('UPDATE tickets SET ownership_checked_at=clock_timestamp() WHERE id=$1',[row.id]);
+    if(await advanceAutomaticDispatch(client,row.id))return;
     const valid = async (employee:string|null,group:string|null) => !employee || !!(await client.query(`SELECT e.id FROM employees e
       JOIN group_memberships m ON m.employee_id=e.id WHERE e.id=$1 AND e.active AND m.group_id=$2 FOR SHARE OF e,m`,[employee,group])).rowCount;
     const groupAvailable = async (group:string) => !!(await client.query(`SELECT e.id FROM employees e
@@ -81,7 +83,7 @@ export async function recoverOwnership(db:Pool,record:RecordOwnership) {
       }
     }
     const moved = group !== row.owner_group_id;
-    if (!moved && available && ownerQualified) await client.query('UPDATE ticket_routing_alerts SET resolved_at=now() WHERE ticket_id=$1 AND resolved_at IS NULL',[row.id]);
+    if (!moved && available && ownerQualified) await client.query("UPDATE ticket_routing_alerts SET resolved_at=now() WHERE ticket_id=$1 AND resolved_at IS NULL AND reason<>'AUTO_DISPATCH_EXHAUSTED'",[row.id]);
     if (!moved && ownerValid && targetValid) return;
     const updated = await client.query(`UPDATE tickets SET owner_group_id=$2,assignee_id=$3,pending_group_id=NULL,pending_assignee_id=NULL,
       assignment_kind=NULL,assignment_state=CASE WHEN pending_assignee_id IS NOT NULL THEN 'INVALIDATED' ELSE assignment_state END,
