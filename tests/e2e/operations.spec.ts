@@ -30,6 +30,8 @@ for(const [viewport,width,height] of [['desktop',1440,1000],['mobile',390,844]] 
     await page.getByRole('button',{name:'新增任职',exact:true}).click();
     await expect(page.getByRole('combobox',{name:'岗位',exact:true})).toBeVisible();
     await expect(page.getByRole('combobox',{name:'人员',exact:true})).toBeVisible();
+    await expect(page.getByRole('combobox',{name:'任职期限',exact:true})).toHaveValue('true');
+    await expect(page.getByLabel('结束时间',{exact:true})).toHaveCount(0);
     await expect(page.getByRole('button',{name:'保存并生效',exact:true})).toBeDisabled();
     await page.getByRole('combobox',{name:'岗位',exact:true}).selectOption(`position-${suffix}`);
     await page.getByRole('combobox',{name:'人员',exact:true}).selectOption('demo-admin-1');
@@ -40,6 +42,7 @@ for(const [viewport,width,height] of [['desktop',1440,1000],['mobile',390,844]] 
     await page.getByRole('button',{name:'保存并生效',exact:true}).click();
     await expect(page.getByRole('textbox',{name:'变更或撤销原因'})).toHaveCount(0);
     await expect(page.getByRole('row').filter({hasText:`Engineer ${viewport}`}).filter({hasText:'演示配置管理员一'})).toHaveCount(1);
+    await expect(page.getByRole('row').filter({hasText:`Engineer ${viewport}`}).filter({hasText:'演示配置管理员一'})).toContainText('长期有效');
     await page.getByRole('button',{name:'维护',exact:true}).first().click();
     await expect(page.getByLabel('开始时间',{exact:true})).not.toHaveValue('');
     await expect(page.getByRole('button',{name:'保存并生效',exact:true})).toBeDisabled();

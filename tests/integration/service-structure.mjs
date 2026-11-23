@@ -34,7 +34,7 @@ config.domains.push({id:domain,name:'研发实验服务域',enabled:true});
 config.systems.push({id:system,name:'自定义试验系统',domainId:domain,enabled:true});
 config.positions.push({id:position,name:'实验运维工程师',domainId:domain,groupId:'service-desk',enabled:true});
 const appointment={id:randomUUID(),positionId:position,employeeId:'agent-3',duty:'PRIMARY',
-  validFrom:new Date(Date.now()-60000).toISOString(),validTo:new Date(Date.now()+86400000).toISOString(),enabled:true};
+  validFrom:new Date(Date.now()-60000).toISOString(),validTo:null,enabled:true};
 config.appointments.push(appointment);
 config.mappings.push({serviceCode:'INC-PC',domainId:domain,systemId:system,primaryPositionId:position,collaboratingPositionIds:[],enabled:true});
 assert.equal((await request(path,'employee-1')).status,404);
@@ -45,6 +45,19 @@ assert.equal((await request(path,'employee-1',input)).status,404);
 assert.equal((await request(path,'demo-admin-1',{...input,config:{...config,roles:[]}})).status,400);
 let preview=await ok(request(`${path}/preview`,'demo-admin-1',input));
 assert.deepEqual(preview.items.find(row=>row.serviceCode==='INC-PC').candidates.map(p=>p.id),['agent-3']);
+for(const [period,expected] of [
+  [{validTo:new Date(Date.now()+3*366*86400000).toISOString()},['agent-3']],
+  [{validFrom:new Date(Date.now()+86400000).toISOString(),validTo:null},[]],
+  [{validFrom:new Date(Date.now()-2*86400000).toISOString(),validTo:new Date(Date.now()-86400000).toISOString()},[]],
+]){
+  const candidate=structuredClone(config);Object.assign(candidate.appointments.at(-1),period);
+  const result=await ok(request(`${path}/preview`,'demo-admin-1',{...input,id:randomUUID(),config:candidate}));
+  assert.deepEqual(result.items.find(row=>row.serviceCode==='INC-PC').candidates.map(p=>p.id),expected);
+}
+const adjacent=structuredClone(config);
+adjacent.appointments.at(-1).validFrom=new Date(Date.now()+86400000).toISOString();
+adjacent.appointments.push({...appointment,id:randomUUID(),validTo:adjacent.appointments.at(-1).validFrom});
+await ok(request(`${path}/preview`,'demo-admin-1',{...input,id:randomUUID(),config:adjacent}));
 let proposal=await ok(request(path,'demo-admin-1',input));
 assert.deepEqual((await list()).config,original.config,'pending changes do not alter live routes');
 assert.equal((await request(path,'demo-admin-1',input)).data.id,proposal.id);
@@ -52,6 +65,7 @@ assert.equal((await request(path,'demo-admin-1',{...input,reason:'Different body
 assert.equal((await review(proposal,'demo-admin-1')).status,403);
 await ok(review(proposal));
 assert.equal((await list()).version,original.version+1);
+assert.equal((await list()).config.appointments.find(a=>a.id===appointment.id).validTo,null);
 assert.deepEqual((await ok(request(`${path}/${proposal.id}/history`))).items.map(e=>e.action),['PROPOSED','APPROVED']);
 assert.notEqual(await sql(`UPDATE service_structure_versions SET config='{}' WHERE version=${original.version+1}`,false),0);
 assert.notEqual(await sql(`DELETE FROM service_structure_audits WHERE proposal_id=${quote(proposal.id)}`,false),0);

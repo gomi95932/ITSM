@@ -8,6 +8,7 @@ test('directory status is restricted to platform administrators and fits desktop
   await expect(page.getByRole('heading',{name:'人员同步',exact:true})).toBeVisible();
   await expect(page.getByRole('region',{name:'钉钉人员同步'})).toContainText('同步未启用');
   await expect(page.getByRole('region',{name:'钉钉人员同步'})).toContainText('暂无同步记录');
+  await expect(page.getByRole('region',{name:'钉钉人员同步'})).toContainText('试点人员范围');
   await page.getByRole('button',{name:'刷新同步状态',exact:true}).click();
   await expect(page.getByRole('button',{name:'刷新同步状态',exact:true})).toBeEnabled();
   for(const [name,width,height] of [['desktop',1440,1000],['mobile',390,844]] as const){

@@ -2,7 +2,7 @@
 import { computed,nextTick,onBeforeUnmount,onMounted,ref,watch } from 'vue';
 import { Ban,Check,Eye,ListPlus,LoaderCircle,Pencil,Plus,RefreshCw,Search,Undo2,X } from 'lucide-vue-next';
 import type { ServiceCatalogAdminItem,ServiceCatalogChange,ServicePositionMapping,ServiceStructure,ServiceStructureChange,ServiceStructureOptions,ServiceStructurePreview,SessionUser } from '@itsm/contracts';
-import { api,errorText } from '../api';
+import { api,ApiError,errorText } from '../api';
 import { createRequestKey } from '../request-key';
 import { formatDate } from '../labels';
 import ContentBoundary from './ContentBoundary.vue';
@@ -29,7 +29,7 @@ const peopleLoading=ref(false),peopleSearched=ref(false),peopleError=ref('');
 let peopleGeneration=0,searchTimer:ReturnType<typeof setTimeout>|undefined;
 const templateOpen=ref(false);
 const form=ref({id:'',name:'',domainId:'',groupId:'',enabled:true,positionId:'',employeeId:'',duty:'PRIMARY' as 'PRIMARY'|'BACKUP',
-  validFrom:'',validTo:'',serviceCode:'',systemId:'',primaryPositionId:'',collaboratingPositionIds:[] as string[]});
+  validFrom:'',validTo:'',permanent:true,serviceCode:'',systemId:'',primaryPositionId:'',collaboratingPositionIds:[] as string[]});
 const config=computed(()=>inspecting.value?.config??draft.value);
 const dirty=computed(()=>!!catalogChange.value||JSON.stringify(draft.value)!==JSON.stringify(published.value));
 const structureTab=computed(()=>tab.value!=='catalog'&&tab.value!=='changes'?tab.value:undefined);
@@ -41,6 +41,10 @@ const systemName=(id:string|null)=>config.value.systems.find(row=>row.id===id)?.
 const positionName=(id:string)=>config.value.positions.find(row=>row.id===id)?.name??id;
 const groupName=(id:string)=>options.value.groups.find(row=>row.id===id)?.name??id;
 const personName=(id:string)=>allPeople.value.get(id)?.name??id;
+function structureError(error:unknown){
+  const appointment=error instanceof ApiError&&error.appointmentId?draft.value.appointments.find(a=>a.id===error.appointmentId):undefined;
+  return appointment?`${personName(appointment.employeeId)}（${positionName(appointment.positionId)}）：${errorText(error)}`:errorText(error);
+}
 const serviceName=(code:string)=>inspecting.value?.catalogChange?.code===code?inspecting.value.catalogChange.name:services.value.find(row=>row.code===code)?.name??code;
 const ownProposal=computed(()=>inspecting.value?.proposedBy===props.user.id);
 watch([draft,reason,catalogChange],()=>{preview.value=undefined;safe.value=false;proposalId.value=createRequestKey();notice.value='';},{deep:true});
@@ -90,14 +94,14 @@ function edit(key=''){
   }
   editKey.value=key;const now=new Date();
   form.value={id:key||createRequestKey(),name:'',domainId:'',groupId:'',enabled:true,positionId:'',employeeId:'',duty:'PRIMARY',
-    validFrom:localTime(now.toISOString()),validTo:localTime(new Date(now.getTime()+90*86400000).toISOString()),
+    validFrom:localTime(now.toISOString()),validTo:'',permanent:true,
     serviceCode:'',systemId:'',primaryPositionId:'',collaboratingPositionIds:[]};
   const collection=draft.value[tab.value];
   const found=collection.find(row=>('id' in row?row.id:row.serviceCode)===key);
   if(found){
     Object.assign(form.value,copy(found));
     if('systemId' in found)form.value.systemId=found.systemId??'';
-    if('validFrom' in found){form.value.validFrom=localTime(found.validFrom);form.value.validTo=localTime(found.validTo);}
+    if('validFrom' in found){form.value.validFrom=localTime(found.validFrom);form.value.validTo=found.validTo===null?'':localTime(found.validTo);form.value.permanent=found.validTo===null;}
     if('employeeId' in found&&!people.value.some(person=>person.id===found.employeeId)){
       const person=options.value.people.find(row=>row.id===found.employeeId);if(person)people.value.push(person);
     }
@@ -111,11 +115,12 @@ function apply(){
   else if(tab.value==='systems')row={id:f.id,name:f.name.trim(),domainId:f.domainId,enabled:f.enabled};
   else if(tab.value==='positions')row={id:f.id,name:f.name.trim(),domainId:f.domainId,groupId:f.groupId,enabled:f.enabled};
   else if(tab.value==='appointments'){
-    if(!Number.isFinite(Date.parse(f.validFrom))||!Number.isFinite(Date.parse(f.validTo))||Date.parse(f.validTo)<=Date.parse(f.validFrom)){
-      error.value='任职截止时间须晚于开始时间。';return;
+    if(!Number.isFinite(Date.parse(f.validFrom))){error.value=`${personName(f.employeeId)}：请填写有效的任职生效时间。`;return;}
+    if(!f.permanent&&(!Number.isFinite(Date.parse(f.validTo))||Date.parse(f.validTo)<=Date.parse(f.validFrom))){
+      error.value=`${personName(f.employeeId)}：任职截止时间须晚于生效时间，请检查完整年月日。`;return;
     }
     row={id:f.id,positionId:f.positionId,employeeId:f.employeeId,duty:f.duty,
-      validFrom:new Date(f.validFrom).toISOString(),validTo:new Date(f.validTo).toISOString(),enabled:f.enabled};
+      validFrom:new Date(f.validFrom).toISOString(),validTo:f.permanent?null:new Date(f.validTo).toISOString(),enabled:f.enabled};
     const person=people.value.find(item=>item.id===f.employeeId);
     if(person&&!options.value.people.some(item=>item.id===person.id))options.value.people.push({...person,active:true});
   }else if(tab.value==='mappings')row={serviceCode:f.serviceCode,domainId:f.domainId,systemId:f.systemId||null,
@@ -142,12 +147,12 @@ function body(){return {id:proposalId.value,expectedVersion:version.value,config
 async function check(){
   if(busy.value||!safe.value||!reason.value.trim())return;busy.value=true;error.value='';
   try{preview.value=(await api<{items:ServiceStructurePreview[]}>('/admin/service-structure/preview',{method:'POST',body:body()})).items;}
-  catch(e){error.value=errorText(e);}finally{busy.value=false;}
+  catch(e){error.value=structureError(e);}finally{busy.value=false;}
 }
 async function submit(){
   if(busy.value||!preview.value||!safe.value)return;busy.value=true;error.value='';
   try{await api('/admin/service-structure/apply',{method:'POST',body:body()});busy.value=false;await load();reason.value='';await nextTick();notice.value='配置已保存并生效。';}
-  catch(e){error.value=errorText(e);}finally{busy.value=false;}
+  catch(e){error.value=structureError(e);}finally{busy.value=false;}
 }
 function inspect(item:ServiceStructureChange){inspecting.value=item;tab.value='domains';editing.value=false;templateOpen.value=false;reviewReason.value='';reviewSafe.value=false;preview.value=undefined;error.value='';}
 async function review(decision:'APPROVE'|'REJECT'){
@@ -200,7 +205,9 @@ onMounted(load);
             <label>任职人员<select v-model="form.employeeId" required :disabled="!form.positionId||peopleLoading"><option value="">请选择</option><option v-for="p in eligiblePeople" :key="p.id" :value="p.id">{{p.name}} · {{p.id}}{{p.dingLinked?'':' · 未绑定钉钉'}}</option><option v-if="form.employeeId&&!eligiblePeople.some(p=>p.id===form.employeeId)" :value="form.employeeId">{{personName(form.employeeId)}}</option></select></label>
             <p v-if="peopleError" class="structure-search-status danger-text" role="alert">{{peopleError}}</p>
             <p v-else role="status" class="structure-search-status muted">{{peopleLoading?'正在查找人员…':peopleSearched?(people.length?`找到 ${people.length} 位人员`:'未找到匹配的在职人员，请核对姓名或人员同步状态。'):query.trim().length<2?'请输入至少 2 个字符的姓名或员工编号。':''}}</p>
-            <label>生效时间<input v-model="form.validFrom" type="datetime-local" required/></label><label>截止时间<input v-model="form.validTo" type="datetime-local" required/></label>
+            <label>生效时间<input v-model="form.validFrom" type="datetime-local" required/></label>
+            <label>任职期限<select v-model="form.permanent"><option :value="true">长期有效</option><option :value="false">指定截止日期</option></select></label>
+            <label v-if="!form.permanent">截止时间<input v-model="form.validTo" type="datetime-local" required/></label>
             <p v-if="searchMore" class="muted">匹配超过 50 人</p>
           </template>
           <template v-if="tab==='mappings'">
@@ -222,7 +229,7 @@ onMounted(load);
       <table v-if="tab==='domains'"><thead><tr><th>责任域</th><th>状态</th><th/></tr></thead><tbody><tr v-for="d in config.domains" :key="d.id"><td><strong>{{d.name}}</strong><small class="mono">{{d.id}}</small></td><td>{{d.enabled?'启用':'停用'}}</td><td><button v-if="!inspecting" class="icon-button" :aria-label="`编辑${d.name}`" title="编辑责任域" @click="edit(d.id)"><Pencil :size="16"/></button></td></tr></tbody></table>
       <table v-else-if="tab==='systems'"><thead><tr><th>业务系统</th><th>责任域</th><th>状态</th><th/></tr></thead><tbody><tr v-for="s in config.systems" :key="s.id"><td><strong>{{s.name}}</strong><small class="mono">{{s.id}}</small></td><td>{{domainName(s.domainId)}}</td><td>{{s.enabled?'启用':'停用'}}</td><td><button v-if="!inspecting" class="icon-button" :aria-label="`编辑${s.name}`" title="编辑业务系统" @click="edit(s.id)"><Pencil :size="16"/></button></td></tr></tbody></table>
       <table v-else-if="tab==='positions'"><thead><tr><th>岗位</th><th>责任域 / 支持组</th><th>状态</th><th/></tr></thead><tbody><tr v-for="p in config.positions" :key="p.id"><td><strong>{{p.name}}</strong><small class="mono">{{p.id}}</small></td><td>{{domainName(p.domainId)}}<small>{{groupName(p.groupId)}}</small></td><td>{{p.enabled?'启用':'停用'}}</td><td><button v-if="!inspecting" class="icon-button" :aria-label="`编辑${p.name}`" title="编辑岗位" @click="edit(p.id)"><Pencil :size="16"/></button></td></tr></tbody></table>
-      <table v-else-if="tab==='appointments'"><thead><tr><th>任职人员</th><th>岗位 / 主备</th><th>任职期间</th><th>状态</th><th/></tr></thead><tbody><tr v-for="a in config.appointments" :key="a.id"><td><strong>{{personName(a.employeeId)}}</strong><small class="mono">{{a.employeeId}}</small><small>{{allPeople.get(a.employeeId)?.dingLinked?'已绑定企业钉钉':'企业钉钉绑定待核验'}}</small></td><td>{{positionName(a.positionId)}}<small>{{a.duty==='PRIMARY'?'主处理':'备岗'}}</small></td><td>{{formatDate(a.validFrom)}}<small>至 {{formatDate(a.validTo)}}</small></td><td>{{a.enabled?'启用':'停用'}}</td><td><button v-if="!inspecting" class="icon-button" :aria-label="`编辑${personName(a.employeeId)}任职`" title="编辑任职" @click="edit(a.id)"><Pencil :size="16"/></button></td></tr></tbody></table>
+      <table v-else-if="tab==='appointments'"><thead><tr><th>任职人员</th><th>岗位 / 主备</th><th>任职期间</th><th>状态</th><th/></tr></thead><tbody><tr v-for="a in config.appointments" :key="a.id"><td><strong>{{personName(a.employeeId)}}</strong><small class="mono">{{a.employeeId}}</small><small>{{allPeople.get(a.employeeId)?.dingLinked?'已绑定企业钉钉':'企业钉钉绑定待核验'}}</small></td><td>{{positionName(a.positionId)}}<small>{{a.duty==='PRIMARY'?'主处理':'备岗'}}</small></td><td>{{formatDate(a.validFrom,true)}}<small>{{a.validTo===null?'长期有效':`至 ${formatDate(a.validTo,true)}`}}</small></td><td>{{a.enabled?'启用':'停用'}}</td><td><button v-if="!inspecting" class="icon-button" :aria-label="`编辑${personName(a.employeeId)}任职`" title="编辑任职" @click="edit(a.id)"><Pencil :size="16"/></button></td></tr></tbody></table>
       <table v-else-if="tab==='mappings'"><thead><tr><th>服务项</th><th>责任域 / 系统</th><th>主办 / 协办岗位</th><th>状态</th><th/></tr></thead><tbody><tr v-for="m in config.mappings" :key="m.serviceCode"><td><strong>{{serviceName(m.serviceCode)}}</strong><small class="mono">{{m.serviceCode}}</small></td><td>{{domainName(m.domainId)}}<small>{{systemName(m.systemId)}}</small></td><td>{{positionName(m.primaryPositionId)}}<small>{{m.collaboratingPositionIds.map(positionName).join('、')||'无协办'}}</small></td><td>{{m.enabled?'启用':'停用'}}</td><td><button v-if="!inspecting" class="icon-button" :aria-label="`编辑${serviceName(m.serviceCode)}映射`" title="编辑服务映射" @click="edit(m.serviceCode)"><Pencil :size="16"/></button></td></tr></tbody></table>
       <table v-else><thead><tr><th>变更依据</th><th>提交 / 复核</th><th>状态</th><th/></tr></thead><tbody><tr v-for="item in items" :key="item.id"><td><strong>{{item.reason}}</strong><small>基于版本 {{item.expectedVersion}} · {{formatDate(item.createdAt)}}</small></td><td>{{personName(item.proposedBy)}}<small>{{item.reviewedBy?personName(item.reviewedBy):'待复核'}}{{item.reviewReason?' · '+item.reviewReason:''}}</small></td><td>{{states[item.status]}}</td><td><button class="icon-button" title="查看完整配置" aria-label="查看完整配置" :disabled="busy||dirty" @click="inspect(item)"><Eye :size="17"/></button></td></tr></tbody></table>
       <p v-if="tab==='changes'?!items.length:structureTab&&!config[structureTab].length" class="structure-empty">暂无{{labels[tab]}}</p>

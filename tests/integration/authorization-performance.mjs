@@ -14,7 +14,7 @@ try{
   const config={domains:[{id:'performance-domain',name:'CI',enabled:true}],systems:[],
     positions:[{id:'performance-position',name:'CI',domainId:'performance-domain',groupId:'service-desk',enabled:true}],
     appointments:[{id:'performance-appointment',positionId:'performance-position',employeeId:'agent-1',duty:'PRIMARY',
-      validFrom:new Date(Date.now()-60000).toISOString(),validTo:new Date(Date.now()+86400000).toISOString(),enabled:true}],mappings:[]};
+      validFrom:new Date(Date.now()-60000).toISOString(),validTo:null,enabled:true}],mappings:[]};
   await db.query('INSERT INTO service_structure_versions(version,config) VALUES(2,$1)',[JSON.stringify(config)]);
   await db.query('UPDATE service_structure_current SET version=2 WHERE id');
   const snapshot={positions:[{id:'performance-position',groupId:'service-desk'}]};
@@ -39,6 +39,33 @@ try{
       planningMs:scan['Planning Time'],compilation:scan.JIT,estimatedCost:scan.Plan['Total Cost']}));
     assert.ok(scan['Execution Time']<1000,'candidate selection must not evaluate eligibility for the entire backlog');
   }
+  const eligible=async(routing=snapshot)=>(await db.query('SELECT service_position_eligible($1,$2,$3) AS eligible',
+    [JSON.stringify(routing),'agent-1','service-desk'])).rows[0].eligible;
+  const term=async patch=>{
+    const next=structuredClone(config);Object.assign(next.appointments[0],patch);
+    const result=await db.query('INSERT INTO service_structure_versions(version,config) SELECT max(version)+1,$1 FROM service_structure_versions RETURNING version',[JSON.stringify(next)]);
+    await db.query('UPDATE service_structure_current SET version=$1 WHERE id',[result.rows[0].version]);
+  };
+  await term({validFrom:new Date(Date.now()+86400000).toISOString()});assert.equal(await eligible(),false,'future permanent appointment is not active');
+  await term({validTo:new Date(Date.now()-1000).toISOString()});assert.equal(await eligible(),false,'expired fixed appointment is not active');
+  await term({enabled:false});assert.equal(await eligible(),false,'permanent appointment can be revoked');
+  await term({});assert.equal(await eligible(),true);
+  await db.query("UPDATE employees SET active=false WHERE id='agent-1'");assert.equal(await eligible(),false,'permanent appointment does not bypass employee retirement');
+  await db.query("UPDATE employees SET active=true WHERE id='agent-1'");
+  await db.query("DELETE FROM group_memberships WHERE employee_id='agent-1' AND group_id='service-desk'");
+  assert.equal(await eligible(),false,'permanent appointment does not bypass group membership');
+  await db.query("INSERT INTO group_memberships(employee_id,group_id) VALUES('agent-1','service-desk')");
+  const operations=(await db.query('SELECT config FROM operations_current')).rows[0].config;
+  const siteConfig={...operations,siteEnforced:true,sites:[{id:'test-site',enabled:true}],
+    employeeSites:[{employeeId:'agent-1',siteIds:['test-site']}],groupSites:[{groupId:'service-desk',siteIds:['test-site']}],
+    positionSites:[{positionId:'performance-position',siteIds:['test-site']}]};
+  await db.query('INSERT INTO operations_versions(version,config) SELECT max(version)+1,$1 FROM operations_versions',[JSON.stringify(siteConfig)]);
+  assert.equal(await eligible(),false,'site enforcement still requires a ticket site');
+  assert.equal(await eligible({...snapshot,site:{id:'test-site'}}),true);
+  assert.equal(await eligible({...snapshot,site:{id:'other-site'}}),false,'permanent appointment cannot cross sites');
+  await db.query('INSERT INTO operations_versions(version,config) SELECT max(version)+1,$1 FROM operations_versions',
+    [JSON.stringify({...siteConfig,positionSites:[]})]);
+  assert.equal(await eligible({...snapshot,site:{id:'test-site'}}),false,'position site restrictions remain enforced');
 }finally{
   await db.query('ROLLBACK').catch(()=>{});
   await db.end();
@@ -57,7 +84,7 @@ try{
   const config={domains:[{id:'fairness-domain',name:'CI',enabled:true}],systems:[],
     positions:[{id:'fairness-position',name:'CI',domainId:'fairness-domain',groupId:'service-desk',enabled:true}],
     appointments:[{id:'fairness-appointment',positionId:'fairness-position',employeeId:'agent-1',duty:'PRIMARY',
-      validFrom:new Date(Date.now()-60000).toISOString(),validTo:new Date(Date.now()+86400000).toISOString(),enabled:true}],mappings:[]};
+      validFrom:new Date(Date.now()-60000).toISOString(),validTo:null,enabled:true}],mappings:[]};
   await pool.query('INSERT INTO service_structure_versions(version,config) VALUES(2,$1)',[JSON.stringify(config)]);
   await pool.query('UPDATE service_structure_current SET version=2 WHERE id');
   const fixture=await pool.query(`INSERT INTO tickets(id,number,requester_id,submitted_by_id,owner_group_id,service_code,service_type,

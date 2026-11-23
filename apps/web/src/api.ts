@@ -5,7 +5,7 @@ export function devUser() { return sessionStorage.getItem('itsm-dev-user') ?? 'e
 let development = false;
 export function useDevelopment(value: boolean) { development = value; }
 export class ApiError extends Error {
-  constructor(public status: number,public code: string) { super(code); }
+  constructor(public status: number,public code: string,public appointmentId?:string) { super(code); }
 }
 export async function api<T>(path: string,options: { method?: string; body?: unknown; key?: string; signal?:AbortSignal } = {}): Promise<T> {
   const response = await fetch(`/api/v1${path}`,{
@@ -18,7 +18,8 @@ export async function api<T>(path: string,options: { method?: string; body?: unk
     },body:options.body === undefined ? undefined : JSON.stringify(options.body),signal:options.signal,
   });
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new ApiError(response.status,data.code ?? 'REQUEST_FAILED');
+  if (!response.ok) throw new ApiError(response.status,data.code ?? 'REQUEST_FAILED',
+    typeof data.appointmentId==='string'?data.appointmentId:undefined);
   return data as T;
 }
 export async function attachmentRequest(url:string,method:'GET'|'PUT',headers:Record<string,string>,body?:Blob):Promise<Response> {
@@ -121,6 +122,9 @@ export const messages: Record<string,string> = {
   SUPPORT_LEAD_CONTINUITY_REQUIRED:'请先完成接替组长的任命，再移除此成员。',
   SUPPORT_REVIEW_CONTINUITY_REQUIRED:'请先安排接替的 P1 复核人，再移除此成员。',
   INVALID_SERVICE_STRUCTURE:'配置不完整或关联无效，请检查名称、任职有效期和启用关系。',
+  SERVICE_STRUCTURE_APPOINTMENT_START_INVALID:'任职生效时间无效，请填写完整的年月日和时间。',
+  SERVICE_STRUCTURE_APPOINTMENT_END_INVALID:'任职截止时间无效，请填写完整日期或选择长期有效。',
+  SERVICE_STRUCTURE_APPOINTMENT_PERIOD_INVALID:'任职截止时间必须晚于生效时间，请检查完整年月日。',
   SERVICE_STRUCTURE_DISABLE_REQUIRED:'已发布记录不能删除，请停用并保留历史引用。',
   SERVICE_STRUCTURE_GROUP_UNAVAILABLE:'岗位所属支持组不存在，请先维护支持组。',
   SERVICE_STRUCTURE_PERSON_UNAVAILABLE:'启用任职的人员须在职且属于岗位对应的支持组。',

@@ -3,7 +3,7 @@ export interface BusinessSystem {id:string;name:string;domainId:string;enabled:b
 export interface SupportPosition {id:string;name:string;domainId:string;groupId:string;enabled:boolean}
 export interface PositionAppointment {
   id:string;positionId:string;employeeId:string;duty:'PRIMARY'|'BACKUP';
-  validFrom:string;validTo:string;enabled:boolean;
+  validFrom:string;validTo:string|null;enabled:boolean;
 }
 export interface ServicePositionMapping {
   serviceCode:string;domainId:string;systemId:string|null;primaryPositionId:string;

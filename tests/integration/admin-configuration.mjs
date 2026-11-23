@@ -82,13 +82,16 @@ try{
   config.systems.push({id:'admin-system',name:'Custom business system',domainId:'admin-domain',enabled:true});
   config.positions.push({id:'admin-position',name:'Service engineer',domainId:'admin-domain',groupId:group,enabled:true});
   const appointment=person=>({id:randomUUID(),positionId:'admin-position',employeeId:person,duty:'PRIMARY',
-    validFrom:new Date(Date.now()-60000).toISOString(),validTo:new Date(Date.now()+86400000).toISOString(),enabled:true});
+    validFrom:new Date(Date.now()-60000).toISOString(),validTo:null,enabled:true});
   config.appointments.push(appointment('employee-2'),appointment(admin.id));
   const input={id:randomUUID(),expectedVersion:current.version,config,...basis};
   assert.equal((await structure.propose(admin,input,true)).status,'APPROVED');
   assert.equal((await pool.query('SELECT 1 FROM group_memberships WHERE employee_id=$1 AND group_id=$2',['employee-2',group])).rowCount,1);
   assert.equal((await structure.appointments(admin)).canApply,true);
   assert.ok((await structure.appointments(admin)).people.some(p=>p.id===admin.id));
+  assert.equal((await structure.appointments(admin)).items.find(a=>a.employeeId===admin.id).validTo,null);
+  await fails(support.propose(admin,{id:randomUUID(),kind:'MEMBER_REMOVE',groupId:group,employeeId:admin.id,
+    expectedGroupVersion:await groupVersion(),config:{},...basis},true),'SUPPORT_POSITION_APPOINTMENT_ACTIVE');
   const structureSaved=await snapshot();
   await structure.propose(admin,input,true);assert.equal(await snapshot(),structureSaved);
   await assert.rejects(structure.propose(employee,{...input,id:randomUUID()},true));

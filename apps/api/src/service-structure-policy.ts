@@ -9,7 +9,9 @@ const id=(value:unknown):value is string=>typeof value==='string'&&/^[a-zA-Z0-9_
 const text=(value:unknown,max:number):value is string=>typeof value==='string'&&!!value.trim()&&value.length<=max&&!/[\x00-\x1f\x7f]/.test(value);
 const timestamp=(value:unknown):value is string=>typeof value==='string'&&/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(value)&&Number.isFinite(Date.parse(value));
 export const structureUuid=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
-function invalid():never {throw new BadRequestException({code:'INVALID_SERVICE_STRUCTURE'});}
+function invalid(code='INVALID_SERVICE_STRUCTURE',appointmentId?:string):never {
+  throw new BadRequestException({code,...(appointmentId?{appointmentId}:{})});
+}
 function rows(value:unknown,keys:string[],max:number){
   if(!Array.isArray(value)||value.length>max||!value.every(row=>object(row)&&exact(row,keys)))return invalid();
   return value as Record<string,unknown>[];
@@ -32,10 +34,13 @@ export function serviceStructure(value:unknown):ServiceStructure {
   });
   const appointments=rows(value.appointments,['id','positionId','employeeId','duty','validFrom','validTo','enabled'],3000).map(row=>{
     if(!id(row.id)||!id(row.positionId)||!validEmployeeId(row.employeeId)||!['PRIMARY','BACKUP'].includes(String(row.duty))
-      ||!timestamp(row.validFrom)||!timestamp(row.validTo)||Date.parse(row.validTo)<=Date.parse(row.validFrom)
-      ||Date.parse(row.validTo)-Date.parse(row.validFrom)>366*86400000||typeof row.enabled!=='boolean')return invalid();
+      ||typeof row.enabled!=='boolean')return invalid();
+    if(!timestamp(row.validFrom))return invalid('SERVICE_STRUCTURE_APPOINTMENT_START_INVALID',row.id);
+    if(row.validTo!==null&&!timestamp(row.validTo))return invalid('SERVICE_STRUCTURE_APPOINTMENT_END_INVALID',row.id);
+    if(row.validTo!==null&&Date.parse(row.validTo)<=Date.parse(row.validFrom))
+      return invalid('SERVICE_STRUCTURE_APPOINTMENT_PERIOD_INVALID',row.id);
     return {id:row.id,positionId:row.positionId,employeeId:row.employeeId,duty:row.duty as 'PRIMARY'|'BACKUP',
-      validFrom:new Date(row.validFrom).toISOString(),validTo:new Date(row.validTo).toISOString(),enabled:row.enabled};
+      validFrom:new Date(row.validFrom).toISOString(),validTo:row.validTo===null?null:new Date(row.validTo).toISOString(),enabled:row.enabled};
   });
   const mappings=rows(value.mappings,['serviceCode','domainId','systemId','primaryPositionId','collaboratingPositionIds','enabled'],1000).map(row=>{
     if(typeof row.serviceCode!=='string'||!/^[A-Z0-9-]{3,40}$/.test(row.serviceCode)||!id(row.domainId)

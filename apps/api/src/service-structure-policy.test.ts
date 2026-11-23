@@ -36,9 +36,28 @@ test('structure rejects overposting, dangling references and enabled children of
     (c:any)=>{c.mappings[0].collaboratingPositionIds=['missing'];},
     (c:any)=>{c.mappings[0].collaboratingPositionIds=['custom-position'];},
     (c:any)=>{c.appointments[0].validTo=c.appointments[0].validFrom;},
-    (c:any)=>{c.appointments[0].validTo='2029-01-01T00:00:00Z';},
     (c:any)=>{c.appointments[0].duty='ADMIN';},(c:any)=>{c.domains[0].name='\u0000bad';},
   ]){const input=fixture();mutate(input);assert.throws(()=>serviceStructure(input));}
+});
+test('appointments support permanent and multi-year terms with precise date errors',()=>{
+  const permanent=fixture();permanent.appointments[0].validTo=null as any;
+  assert.equal(serviceStructure(permanent).appointments[0].validTo,null);
+  const years=fixture();years.appointments[0].validTo='2029-11-21T08:00:00+08:00';
+  assert.equal(serviceStructure(years).appointments[0].validTo,'2029-11-21T00:00:00.000Z');
+  for(const [patch,code] of [
+    [{validFrom:''},'SERVICE_STRUCTURE_APPOINTMENT_START_INVALID'],
+    [{validTo:''},'SERVICE_STRUCTURE_APPOINTMENT_END_INVALID'],
+    [{validTo:'invalid'},'SERVICE_STRUCTURE_APPOINTMENT_END_INVALID'],
+    [{validTo:'2026-11-17T00:00:00Z'},'SERVICE_STRUCTURE_APPOINTMENT_PERIOD_INVALID'],
+    [{validTo:'2025-11-17T00:00:00Z'},'SERVICE_STRUCTURE_APPOINTMENT_PERIOD_INVALID'],
+  ] as const){
+    const input=fixture();Object.assign(input.appointments[0],patch);
+    assert.throws(()=>serviceStructure(input),(error:any)=>{
+      assert.deepEqual(error.getResponse(),{code,appointmentId:'appointment-a'});return true;
+    });
+  }
+  const missing=fixture();delete (missing.appointments[0] as any).validTo;
+  assert.throws(()=>serviceStructure(missing),'missing end must be explicit null, not an implicit permanent grant');
 });
 test('published identifiers survive renaming and disabling, but cannot be hard deleted',()=>{
   const previous=serviceStructure(fixture()),next=structuredClone(previous);
