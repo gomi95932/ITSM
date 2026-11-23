@@ -10,7 +10,7 @@ for(const [viewport,width,height] of [['desktop',1440,1000],['mobile',390,844]] 
     let version=1,previewError=true,applied=false;
     await page.route('**/api/v1/admin/service-structure',route=>route.fulfill({json:{version,config,
       options:{groups:[{id:'service-desk',name:'IT 服务台'}],services:[],people:[person]},items:[]}}));
-    await page.route('**/api/v1/admin/service-structure/catalog',route=>route.fulfill({json:{version:1,items:[],hasMore:false}}));
+    await page.route('**/api/v1/admin/service-structure/catalog',route=>route.fulfill({json:{version,items:[],hasMore:false}}));
     await page.route('**/api/v1/admin/service-structure/preview',route=>{
       expect(route.request().postDataJSON().config.appointments[0].validTo).toContain('2029-11-21');
       if(previewError){previewError=false;return route.fulfill({status:400,json:{code:'SERVICE_STRUCTURE_APPOINTMENT_PERIOD_INVALID',appointmentId:'fixture-appointment'}});}

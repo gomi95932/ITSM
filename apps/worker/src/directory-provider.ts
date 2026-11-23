@@ -1,3 +1,5 @@
+import { setTimeout as delay } from 'node:timers/promises';
+
 export type DirectoryPerson = { userId:string; name:string; departmentIds:number[]; jobTitle:string };
 export type DirectorySnapshot = { people:DirectoryPerson[]; departmentCount:number };
 export type DirectoryProvider = { snapshot(signal:AbortSignal):Promise<DirectorySnapshot> };
@@ -17,13 +19,25 @@ export function dingtalkDirectory(settings:{roots:readonly number[];token:(signa
     const response=await fetch(`https://oapi.dingtalk.com${path}?access_token=${encodeURIComponent(token)}`,{
       method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal,redirect:'error',
     });
-    if(!response.ok)throw new Error('DIRECTORY_PROVIDER_UNAVAILABLE');
+    if(!response.ok)throw new Error([429,502,503,504].includes(response.status)?'DIRECTORY_PROVIDER_TRANSIENT':'DIRECTORY_PROVIDER_UNAVAILABLE');
     return response.json();
   });
   const call=async(path:string,body:object,signal:AbortSignal)=>{
-    const data=await transport(path,body,signal);
-    if(!object(data)||data.errcode!==0||!('result' in data))invalid();
-    return data.result;
+    for(let attempt=0;attempt<3;attempt++){
+      signal.throwIfAborted();
+      try{
+        const data=await transport(path,body,signal);
+        if(object(data)&&(data.errcode===15||data.errcode===88&&!data.sub_code&&!/subcode=/i.test(String(data.errmsg??''))))
+          throw new Error('DIRECTORY_PROVIDER_TRANSIENT');
+        if(!object(data)||data.errcode!==0||!('result' in data))invalid();
+        return data.result;
+      }catch(error){
+        signal.throwIfAborted();
+        if(attempt===2||!(error instanceof Error)||!['DIRECTORY_PROVIDER_TRANSIENT','fetch failed'].includes(error.message))throw error;
+        await delay(250*2**attempt,undefined,{signal});
+      }
+    }
+    invalid();
   };
   return {async snapshot(signal){
     const pending=[...settings.roots],visited=new Set<number>();

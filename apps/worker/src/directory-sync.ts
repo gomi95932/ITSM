@@ -3,7 +3,7 @@ import type { Pool,PoolClient } from 'pg';
 import type { DirectoryProvider,DirectorySnapshot } from './directory-provider.js';
 import { dingtalkPilotUsers } from './dingtalk-pilot.js';
 
-export type DirectorySettings={corpId:string;roots:number[];retireMissing:boolean;maxRemovalPercent:number;pilotUserIds?:string[]};
+export type DirectorySettings={corpId:string;roots:number[];retireMissing:boolean;maxRemovalPercent:number;pilotUserIds?:string[];timeoutMs?:number};
 export const directoryScope=(settings:DirectorySettings)=>createHash('sha256')
   .update(JSON.stringify([settings.corpId,[...settings.roots].sort((a,b)=>a-b),
     ...(settings.pilotUserIds?[[...settings.pilotUserIds].sort()]:[])])).digest('hex');
@@ -19,7 +19,7 @@ export function directorySettings(env:NodeJS.ProcessEnv):DirectorySettings|undef
     ||new Set(roots.map(Number)).size!==roots.length||!rawPercent.trim()||!Number.isFinite(percent)||percent<0||percent>100)
     throw new Error('DIRECTORY_CONFIG_INVALID');
   return {corpId:env.DINGTALK_CORP_ID.trim(),roots:roots.map(Number),retireMissing:env.DIRECTORY_RETIRE_MISSING==='true',maxRemovalPercent:percent,
-    pilotUserIds:mode==='authorized'?undefined:dingtalkPilotUsers(env)};
+    pilotUserIds:mode==='authorized'?undefined:dingtalkPilotUsers(env),timeoutMs:mode==='authorized'?900000:120000};
 }
 const safeErrors=new Set(['DIRECTORY_PROVIDER_INVALID','DIRECTORY_PROVIDER_UNAVAILABLE','DIRECTORY_TOKEN_UNAVAILABLE',
   'DIRECTORY_EMPTY_SNAPSHOT','DIRECTORY_SCOPE_TOO_LARGE','DIRECTORY_SNAPSHOT_CHANGED','DIRECTORY_IDENTITY_CONFLICT','DIRECTORY_REMOVAL_LIMIT',
@@ -93,7 +93,7 @@ export async function synchronizeDirectory(pool:Pool,settings:DirectorySettings,
       WHERE corp_id=$1 AND state='RUNNING'`,[settings.corpId]);
     runId=(await client.query(`INSERT INTO directory_sync_runs(corp_id,scope_hash,state) VALUES($1,$2,'RUNNING') RETURNING id`,
       [settings.corpId,directoryScope(settings)])).rows[0].id;
-    const snapshot=restrictDirectory(await provider.snapshot(AbortSignal.timeout(120000)),settings.pilotUserIds);
+    const snapshot=restrictDirectory(await provider.snapshot(AbortSignal.timeout(settings.timeoutMs??120000)),settings.pilotUserIds);
     await client.query('BEGIN');
     try{
       await client.query('SELECT pg_advisory_xact_lock_shared(71820512)');

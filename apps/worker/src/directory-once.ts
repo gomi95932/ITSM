@@ -27,7 +27,7 @@ try {
     const result=await synchronizeDirectory(db,settings,provider);
     console.log(JSON.stringify(result));if(result.state!=='SUCCEEDED')process.exitCode=1;
   }else{
-    const snapshot=restrictDirectory(await provider.snapshot(AbortSignal.timeout(120000)),settings.pilotUserIds);
+    const snapshot=restrictDirectory(await provider.snapshot(AbortSignal.timeout(settings.timeoutMs??120000)),settings.pilotUserIds);
     console.log(JSON.stringify({state:'PREVIEW',peopleCount:snapshot.people.length,departmentCount:snapshot.departmentCount,
       ...(settings.pilotUserIds?{people:snapshot.people.map(p=>({userId:p.userId,name:p.name}))}:{})}));
   }
