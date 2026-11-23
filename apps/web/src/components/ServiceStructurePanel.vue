@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed,nextTick,onMounted,ref,watch } from 'vue';
+import { computed,nextTick,onBeforeUnmount,onMounted,ref,watch } from 'vue';
 import { Ban,Check,Eye,ListPlus,LoaderCircle,Pencil,Plus,RefreshCw,Search,Undo2,X } from 'lucide-vue-next';
 import type { ServiceCatalogAdminItem,ServiceCatalogChange,ServicePositionMapping,ServiceStructure,ServiceStructureChange,ServiceStructureOptions,ServiceStructurePreview,SessionUser } from '@itsm/contracts';
 import { api,errorText } from '../api';
@@ -25,6 +25,8 @@ const catalogItems=ref<ServiceCatalogAdminItem[]>([]),catalogMore=ref(false),cat
 const loading=ref(true),busy=ref(false),error=ref(''),notice=ref(''),reason=ref(''),safe=ref(false),proposalId=ref(createRequestKey());
 const preview=ref<ServiceStructurePreview[]>(),inspecting=ref<ServiceStructureChange>(),reviewReason=ref(''),reviewSafe=ref(false);
 const people=ref<Person[]>([]),query=ref(''),searchMore=ref(false),editing=ref(false),editKey=ref('');
+const peopleLoading=ref(false),peopleSearched=ref(false),peopleError=ref('');
+let peopleGeneration=0,searchTimer:ReturnType<typeof setTimeout>|undefined;
 const templateOpen=ref(false);
 const form=ref({id:'',name:'',domainId:'',groupId:'',enabled:true,positionId:'',employeeId:'',duty:'PRIMARY' as 'PRIMARY'|'BACKUP',
   validFrom:'',validTo:'',serviceCode:'',systemId:'',primaryPositionId:'',collaboratingPositionIds:[] as string[]});
@@ -44,6 +46,13 @@ const ownProposal=computed(()=>inspecting.value?.proposedBy===props.user.id);
 watch([draft,reason,catalogChange],()=>{preview.value=undefined;safe.value=false;proposalId.value=createRequestKey();notice.value='';},{deep:true});
 watch(reviewReason,()=>{reviewSafe.value=false;});
 watch(()=>form.value.positionId,()=>{if(!editKey.value)form.value.employeeId='';});
+function cancelPeopleSearch(){clearTimeout(searchTimer);++peopleGeneration;peopleLoading.value=false;}
+watch(query,()=>{
+  cancelPeopleSearch();people.value=[];searchMore.value=false;peopleSearched.value=false;peopleError.value='';form.value.employeeId='';
+  if(editing.value&&tab.value==='appointments'&&query.value.trim().length>=2)searchTimer=setTimeout(search,300);
+},{flush:'sync'});
+watch([editing,tab],()=>{if(!editing.value||tab.value!=='appointments')cancelPeopleSearch();},{flush:'sync'});
+onBeforeUnmount(cancelPeopleSearch);
 
 async function load(){
   if(busy.value)return;loading.value=true;error.value='';
@@ -76,6 +85,9 @@ function localTime(value:string){
 }
 function edit(key=''){
   if(tab.value==='changes'||tab.value==='catalog'||inspecting.value)return;
+  if(tab.value==='appointments'){
+    cancelPeopleSearch();query.value='';people.value=[];searchMore.value=false;peopleSearched.value=false;peopleError.value='';
+  }
   editKey.value=key;const now=new Date();
   form.value={id:key||createRequestKey(),name:'',domainId:'',groupId:'',enabled:true,positionId:'',employeeId:'',duty:'PRIMARY',
     validFrom:localTime(now.toISOString()),validTo:localTime(new Date(now.getTime()+90*86400000).toISOString()),
@@ -104,6 +116,8 @@ function apply(){
     }
     row={id:f.id,positionId:f.positionId,employeeId:f.employeeId,duty:f.duty,
       validFrom:new Date(f.validFrom).toISOString(),validTo:new Date(f.validTo).toISOString(),enabled:f.enabled};
+    const person=people.value.find(item=>item.id===f.employeeId);
+    if(person&&!options.value.people.some(item=>item.id===person.id))options.value.people.push({...person,active:true});
   }else if(tab.value==='mappings')row={serviceCode:f.serviceCode,domainId:f.domainId,systemId:f.systemId||null,
     primaryPositionId:f.primaryPositionId,collaboratingPositionIds:[...f.collaboratingPositionIds].sort(),enabled:f.enabled};
   else return;
@@ -114,11 +128,15 @@ function apply(){
   editing.value=false;error.value='';
 }
 async function search(){
-  if(busy.value||query.value.trim().length<2)return;busy.value=true;error.value='';
+  clearTimeout(searchTimer);
+  if(busy.value||!editing.value||tab.value!=='appointments'||query.value.trim().length<2)return;
+  const generation=++peopleGeneration;peopleLoading.value=true;peopleError.value='';peopleSearched.value=false;
   try{const result=await api<{items:Person[];hasMore:boolean}>(`/admin/service-structure/people?q=${encodeURIComponent(query.value.trim())}`);
-    people.value=result.items;searchMore.value=result.hasMore;
-  }catch(e){error.value=errorText(e);}finally{busy.value=false;}
+    if(generation===peopleGeneration){people.value=result.items;searchMore.value=result.hasMore;peopleSearched.value=true;}
+  }catch(e){if(generation===peopleGeneration){people.value=[];searchMore.value=false;peopleError.value=errorText(e);}}
+  finally{if(generation===peopleGeneration)peopleLoading.value=false;}
 }
+function searchOnEnter(event:KeyboardEvent){if(event.isComposing||event.keyCode===229)return;event.preventDefault();void search();}
 function body(){return {id:proposalId.value,expectedVersion:version.value,config:draft.value,reason:reason.value,contentClass:'GENERAL',
   ...(catalogChange.value?{catalogChange:catalogChange.value}:{})};}
 async function check(){
@@ -178,8 +196,10 @@ onMounted(load);
           <template v-if="tab==='appointments'">
             <label>岗位<select v-model="form.positionId" required><option value="">请选择</option><option v-for="p in draft.positions" :key="p.id" :value="p.id">{{p.name}} · {{groupName(p.groupId)}}</option></select></label>
             <label>主备<select v-model="form.duty"><option value="PRIMARY">主处理</option><option value="BACKUP">备岗</option></select></label>
-            <label>查找人员<div class="structure-search"><input v-model="query" aria-label="查找任职人员" maxlength="100"/><button type="button" class="icon-button" title="搜索人员" aria-label="搜索人员" :disabled="busy||query.trim().length<2" @click="search"><Search :size="17"/></button></div></label>
-            <label>任职人员<select v-model="form.employeeId" required :disabled="!form.positionId"><option value="">请选择</option><option v-for="p in eligiblePeople" :key="p.id" :value="p.id">{{p.name}} · {{p.id}}{{p.dingLinked?'':' · 未绑定钉钉'}}</option><option v-if="form.employeeId&&!eligiblePeople.some(p=>p.id===form.employeeId)" :value="form.employeeId">{{personName(form.employeeId)}}</option></select></label>
+            <label>查找人员<div class="structure-search"><input v-model="query" aria-label="查找任职人员" maxlength="100" autocomplete="off" @keydown.enter="searchOnEnter"/><button type="button" class="icon-button" title="搜索人员" aria-label="搜索人员" :disabled="busy||peopleLoading||query.trim().length<2" @click="search"><LoaderCircle v-if="peopleLoading" class="spin" :size="17"/><Search v-else :size="17"/></button></div></label>
+            <label>任职人员<select v-model="form.employeeId" required :disabled="!form.positionId||peopleLoading"><option value="">请选择</option><option v-for="p in eligiblePeople" :key="p.id" :value="p.id">{{p.name}} · {{p.id}}{{p.dingLinked?'':' · 未绑定钉钉'}}</option><option v-if="form.employeeId&&!eligiblePeople.some(p=>p.id===form.employeeId)" :value="form.employeeId">{{personName(form.employeeId)}}</option></select></label>
+            <p v-if="peopleError" class="danger-text" role="alert">{{peopleError}}</p>
+            <p v-else role="status" class="muted">{{peopleLoading?'正在查找人员…':peopleSearched?(people.length?`找到 ${people.length} 位人员`:'未找到匹配的在职人员，请核对姓名或人员同步状态。'):query.trim().length<2?'请输入至少 2 个字符的姓名或员工编号。':''}}</p>
             <label>生效时间<input v-model="form.validFrom" type="datetime-local" required/></label><label>截止时间<input v-model="form.validTo" type="datetime-local" required/></label>
             <p v-if="searchMore" class="muted">匹配超过 50 人</p>
           </template>
@@ -191,7 +211,7 @@ onMounted(load);
           <label class="structure-toggle"><input v-model="form.enabled" type="checkbox"/>启用</label>
         </div>
         <fieldset v-if="tab==='mappings'" class="collaborators"><legend>协办岗位</legend><label v-for="p in draft.positions.filter(p=>p.id!==form.primaryPositionId)" :key="p.id" class="structure-toggle"><input v-model="form.collaboratingPositionIds" type="checkbox" :value="p.id"/>{{p.name}} · {{groupName(p.groupId)}}</label></fieldset>
-        <div class="form-footer"><button class="primary"><Check :size="16"/>确认修改</button></div>
+        <div class="form-footer"><button class="primary" :disabled="tab==='appointments'&&(peopleLoading||!form.employeeId)"><Check :size="16"/>确认修改</button></div>
       </form>
     </section>
     <div v-if="loading" class="empty-state"><LoaderCircle class="spin" :size="26"/></div>
