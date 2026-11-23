@@ -5,12 +5,13 @@ import { Database } from './database.service.js';
 import type { Identity } from './auth.service.js';
 import { IntakePolicyService } from './intake-policy.service.js';
 import { ROLE_AUTHORIZATION_LOCK, ROLE_EFFECTIVE_SQL, roleReviewDenial } from './role-policy.js';
+import { ensureAdminMembership } from './admin-membership.js';
 
 const uuid=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 const fields=`r.id,r.employee_id AS "employeeId",e.display_name AS "employeeName",r.role_code AS "roleCode",
   r.group_id AS "groupId",g.name AS "groupName",r.valid_from AS "validFrom",r.valid_to AS "validTo",r.status,r.source,
   r.requested_by AS "requestedBy",r.reviewed_by AS "reviewedBy",r.revoked_by AS "revokedBy",r.reason,
-  r.review_reason AS "reviewReason",r.revoke_reason AS "revokeReason",r.version,r.created_at AS "createdAt",
+  r.review_reason AS "reviewReason",r.revoke_reason AS "revokeReason",r.version,r.created_at AS "createdAt",r.management_mode AS "managementMode",
   (${ROLE_EFFECTIVE_SQL}) AS effective`;
 type Access={admin:boolean;groups:string[]};
 
@@ -53,7 +54,7 @@ export class RolesService {
     if(search!==undefined&&(typeof search!=='string'||search.length>100))throw new BadRequestException({code:'INVALID_ROLE_BINDING'});
     const groups=await this.db.pool.query('SELECT id,name FROM support_groups WHERE enabled AND ($1 OR id=ANY($2::text[])) ORDER BY name,id',[access.admin,access.groups]);
     const people=await this.db.pool.query(`SELECT e.id,e.display_name AS name,COALESCE(array_agg(m.group_id) FILTER (WHERE m.group_id IS NOT NULL),'{}') AS groups
-      FROM employees e LEFT JOIN group_memberships m ON m.employee_id=e.id AND ($1 OR m.group_id=ANY($2::text[])) WHERE e.active AND e.id<>$3
+      FROM employees e LEFT JOIN group_memberships m ON m.employee_id=e.id AND ($1 OR m.group_id=ANY($2::text[])) WHERE e.active AND ($1 OR e.id<>$3)
       AND ($1 OR EXISTS(SELECT 1 FROM group_memberships x WHERE x.employee_id=e.id AND x.group_id=ANY($2::text[])))
       AND (position(lower($4) in lower(e.display_name))>0 OR position(lower($4) in lower(e.id))>0)
       GROUP BY e.id,e.display_name ORDER BY e.display_name,e.id LIMIT 201`,[access.admin,access.groups,actor.id,(search??'') as string]);
@@ -67,7 +68,7 @@ export class RolesService {
     await client.query('INSERT INTO operational_audits(actor_id,action,target_id) VALUES($1,$2,$3)',[actor,`ROLE_${action}`,id]);
   }
 
-  async propose(actor:Identity,body:unknown) {
+  async propose(actor:Identity,body:unknown,direct=false) {
     const b=body as RoleBindingInput;
     if(!b||typeof b!=='object'||Array.isArray(b)||Object.keys(b).some(k=>!['id','employeeId','roleCode','groupId','validFrom','validTo','reason','contentClass'].includes(k))
       ||typeof b.id!=='string'||!uuid.test(b.id)||typeof b.employeeId!=='string'||!b.employeeId||b.employeeId.length>200
@@ -79,17 +80,18 @@ export class RolesService {
     await this.intake.requireGeneral(actor.id,b as unknown as Record<string,unknown>,'role-proposal');
     return this.db.transaction(async client=>{
       const access=await this.writeAccess(client,actor.id);
-      if(b.employeeId===actor.id)throw new ForbiddenException({code:'ROLE_SELF_GRANT_DENIED'});
+      if(direct&&!access.admin)throw new NotFoundException();
+      if(!direct&&b.employeeId===actor.id)throw new ForbiddenException({code:'ROLE_SELF_GRANT_DENIED'});
       if(!access.admin&&(b.roleCode==='PLATFORM_ADMIN'||!access.groups.includes(b.groupId!)))throw new NotFoundException();
       const employee=await client.query('SELECT id FROM employees WHERE id=$1 AND active FOR SHARE',[b.employeeId]);
       if(!employee.rowCount)throw new BadRequestException({code:'ROLE_SUBJECT_UNAVAILABLE'});
-      if(b.groupId!==null&&!(await client.query('SELECT 1 FROM group_memberships WHERE employee_id=$1 AND group_id=$2 FOR SHARE',[b.employeeId,b.groupId])).rowCount)
+      if(!direct&&b.groupId!==null&&!(await client.query('SELECT 1 FROM group_memberships WHERE employee_id=$1 AND group_id=$2 FOR SHARE',[b.employeeId,b.groupId])).rowCount)
         throw new BadRequestException({code:'ROLE_SUBJECT_UNAVAILABLE'});
       const existing=await client.query('SELECT * FROM role_bindings WHERE id=$1 FOR UPDATE',[b.id]);
       const from=new Date(b.validFrom),to=new Date(b.validTo);
       if(existing.rowCount){
         const row=existing.rows[0];
-        if(row.requested_by!==actor.id||row.employee_id!==b.employeeId||row.role_code!==b.roleCode||row.group_id!==b.groupId
+        if(row.management_mode!==(direct?'ADMIN_DIRECT':'REVIEW')||row.requested_by!==actor.id||row.employee_id!==b.employeeId||row.role_code!==b.roleCode||row.group_id!==b.groupId
           ||row.valid_from.getTime()!==from.getTime()||row.valid_to.getTime()!==to.getTime()||row.reason!==b.reason.trim())
           throw new ConflictException({code:'ROLE_BINDING_ID_CONFLICT'});
         return this.row(client,b.id,access);
@@ -97,11 +99,15 @@ export class RolesService {
       const valid=await client.query(`SELECT $1::timestamptz>=now()-interval '5 minutes' AND $1::timestamptz<=now()+interval '366 days'
         AND $2::timestamptz>$1::timestamptz AND $2::timestamptz<=now()+interval '366 days' AS ok`,[from,to]);
       if(!valid.rows[0].ok)throw new BadRequestException({code:'ROLE_VALIDITY_INVALID'});
-      const inserted=await client.query(`INSERT INTO role_bindings(id,employee_id,role_code,group_id,valid_from,valid_to,requested_by,reason)
-        VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT DO NOTHING RETURNING id`,[b.id,b.employeeId,b.roleCode,b.groupId,from,to,actor.id,b.reason.trim()]);
+      if(direct&&b.groupId!==null)await ensureAdminMembership(client,actor.id,b.employeeId,b.groupId,b.reason.trim());
+      const inserted=await client.query(`INSERT INTO role_bindings(id,employee_id,role_code,group_id,valid_from,valid_to,requested_by,reason,
+        management_mode,status,reviewed_by,review_reason,reviewed_at)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,CASE WHEN $11::text IS NOT NULL THEN now() END) ON CONFLICT DO NOTHING RETURNING id`,
+        [b.id,b.employeeId,b.roleCode,b.groupId,from,to,actor.id,b.reason.trim(),direct?'ADMIN_DIRECT':'REVIEW',direct?'ACTIVE':'PENDING',
+          direct?actor.id:null,direct?b.reason.trim():null]);
       if(!inserted.rowCount)throw new ConflictException({code:'ROLE_BINDING_EXISTS'});
       const result=await this.row(client,b.id,access);
-      await this.audit(client,b.id,actor.id,'PROPOSED',null,result,b.reason.trim());
+      await this.audit(client,b.id,actor.id,direct?'APPROVED':'PROPOSED',null,result,b.reason.trim());
       return result;
     });
   }

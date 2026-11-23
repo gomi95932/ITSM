@@ -14,6 +14,7 @@ export interface SupportDependenciesView {
   items:{kind:SupportDependencyKind;total:number;references:{id:string;name:string}[];hasMore:boolean}[];
 }
 export interface SupportChangeView {
+  managementMode?:'REVIEW'|'ADMIN_DIRECT';
   id:string;kind:SupportChangeKind;groupId:string;employeeId:string|null;employeeName:string|null;
   config:SupportChangeInput['config'];expectedGroupVersion:number|null;proposedBy:string;reviewedBy:string|null;
   status:'PENDING'|'APPROVED'|'REJECTED';reason:string;reviewReason:string|null;version:number;createdAt:string;reviewedAt:string|null;

@@ -19,7 +19,7 @@ const role=ref<ManagedRoleCode>('DISPATCHER'),group=ref(''),employee=ref(''),day
 const decision=ref<{item:RoleBindingView;action:'APPROVE'|'REJECT'|'REVOKE'}>(),decisionReason=ref(''),decisionSafe=ref(false);
 const history=ref<{item:RoleBindingView;events:Audit[]}>();
 let grantDates:{validFrom:string;validTo:string}|undefined;
-const people=computed(()=>options.value.people.filter(person=>role.value==='PLATFORM_ADMIN'||person.groups.includes(group.value)));
+const people=computed(()=>options.value.people.filter(person=>canReview.value||role.value==='PLATFORM_ADMIN'||person.groups.includes(group.value)));
 watch([role,group],()=>{employee.value='';});
 watch([role,group,employee,days,reason],()=>{safe.value=false;proposalId.value=createRequestKey();grantDates=undefined;});
 watch(decisionReason,()=>{decisionSafe.value=false;});
@@ -39,7 +39,7 @@ async function propose(){
   busy.value=true;error.value='';
   try{
     grantDates??={validFrom:new Date().toISOString(),validTo:new Date(Date.now()+days.value*86400000).toISOString()};
-    await api('/admin/role-bindings',{method:'POST',body:{id:proposalId.value,employeeId:employee.value,roleCode:role.value,
+    await api(canReview.value?'/admin/role-bindings/apply':'/admin/role-bindings',{method:'POST',body:{id:proposalId.value,employeeId:employee.value,roleCode:role.value,
       groupId:role.value==='PLATFORM_ADMIN'?null:group.value,...grantDates,reason:reason.value,contentClass:'GENERAL'}});
     adding.value=false;employee.value='';reason.value='';await load();
   }catch(e){error.value=errorText(e);}finally{busy.value=false;}
@@ -72,10 +72,10 @@ onMounted(load);
     <p v-if="error" class="error-banner" role="alert">{{error}}</p>
     <div class="section-heading"><span class="muted">最近 200 条授权记录</span><div class="role-tools">
       <button class="icon-button" title="刷新角色授权" aria-label="刷新角色授权" :disabled="busy||loading" @click="load"><RefreshCw :size="17" :class="{spin:loading}"/></button>
-      <button class="primary" :disabled="busy" @click="openGrant"><Plus :size="17"/>授权提案</button>
+      <button class="primary" :disabled="busy" @click="openGrant"><Plus :size="17"/>新增角色人员</button>
     </div></div>
     <section v-if="adding" class="detail-section" aria-label="新增角色授权">
-      <div class="section-heading"><h2>新增授权提案</h2><button class="icon-button" title="收起提案" aria-label="收起提案" :disabled="busy" @click="adding=false"><X :size="17"/></button></div>
+      <div class="section-heading"><h2>新增角色人员</h2><button class="icon-button" title="收起" aria-label="收起" :disabled="busy" @click="adding=false"><X :size="17"/></button></div>
       <form class="request-form" @submit.prevent="propose">
         <div class="form-grid">
           <label>权限角色<select v-model="role" required><option v-for="code in options.roleCodes" :key="code" :value="code">{{roles[code]}}</option></select></label>
@@ -87,7 +87,7 @@ onMounted(load);
         <p v-if="options.hasMore" class="muted" role="status">匹配超过 200 人，请缩小查询范围。</p>
         <label>授权原因<textarea v-model="reason" maxlength="1000" required rows="3"/></label>
         <ContentBoundary v-model="safe"/>
-        <div class="form-footer"><button class="primary" type="submit" :disabled="busy||!safe||!employee||!reason.trim()"><LoaderCircle v-if="busy" class="spin" :size="16"/><Check v-else :size="16"/>提交独立复核</button></div>
+        <div class="form-footer"><button class="primary" type="submit" :disabled="busy||!safe||!employee||!reason.trim()"><LoaderCircle v-if="busy" class="spin" :size="16"/><Check v-else :size="16"/>{{canReview?'保存并生效':'提交独立复核'}}</button></div>
       </form>
     </section>
     <div v-if="loading" class="empty-state"><LoaderCircle class="spin" :size="26"/></div>
@@ -95,7 +95,7 @@ onMounted(load);
       <li v-for="item in items" :key="item.id" class="role-row" :aria-label="`${item.employeeName} ${roles[item.roleCode]}`">
         <div><strong>{{item.employeeName}}</strong><p class="mono muted">{{item.employeeId}}</p></div>
         <div><strong>{{roles[item.roleCode]}}</strong><p class="muted">{{item.groupName??'全局配置范围'}}</p></div>
-        <div><span class="status">{{states[item.status]}}</span><p class="muted">{{item.effective?'当前生效':item.status==='ACTIVE'?'未生效 / 已到期 / 人员不可用':'未授权'}}</p></div>
+        <div><span class="status">{{item.status==='ACTIVE'&&item.managementMode==='ADMIN_DIRECT'?'管理员配置':states[item.status]}}</span><p class="muted">{{item.effective?'当前生效':item.status==='ACTIVE'?'未生效 / 已到期 / 人员不可用':'未授权'}}</p></div>
         <div><time>{{formatDate(item.validTo)}}</time><p class="muted">{{item.reason}}</p></div>
         <div class="role-tools">
           <template v-if="canReview&&item.status==='PENDING'&&item.requestedBy!==user.id&&item.employeeId!==user.id">

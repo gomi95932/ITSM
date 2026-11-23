@@ -12,7 +12,7 @@ type Client=Pick<PoolClient,'query'>;
 type Access={admin:boolean;groups:string[]};
 const columns=`p.id,p.kind,p.group_id AS "groupId",p.employee_id AS "employeeId",e.display_name AS "employeeName",
   p.config,p.expected_group_version AS "expectedGroupVersion",p.proposed_by AS "proposedBy",p.reviewed_by AS "reviewedBy",
-  p.status,p.reason,p.review_reason AS "reviewReason",p.version,p.created_at AS "createdAt",p.reviewed_at AS "reviewedAt"`;
+  p.status,p.reason,p.review_reason AS "reviewReason",p.version,p.created_at AS "createdAt",p.reviewed_at AS "reviewedAt",p.management_mode AS "managementMode"`;
 const groupColumns=`g.id,g.name,g.description,g.enabled,g.administration_version AS version,
   (SELECT count(*)::int FROM group_memberships m JOIN employees e ON e.id=m.employee_id WHERE m.group_id=g.id AND e.active) AS "activeMembers"`;
 
@@ -62,12 +62,12 @@ export class SupportService {
   }
 
   async people(actor:Identity,query:unknown):Promise<SupportPeopleView>{
-    await this.access(this.db.pool,actor.id);
+    const access=await this.access(this.db.pool,actor.id);
     const q=this.search(query);
     if(q.length<2)return {items:[],hasMore:false};
-    const people=await this.db.pool.query(`SELECT id,display_name AS name FROM employees WHERE active AND id<>$1
+    const people=await this.db.pool.query(`SELECT id,display_name AS name FROM employees WHERE active AND ($3 OR id<>$1)
       AND (position(lower($2) in lower(id))>0 OR position(lower($2) in lower(display_name))>0)
-      ORDER BY display_name,id LIMIT 51`,[actor.id,q]);
+      ORDER BY display_name,id LIMIT 51`,[actor.id,q,access.admin]);
     return {items:people.rows.slice(0,50),hasMore:people.rows.length>50};
   }
 
@@ -138,18 +138,19 @@ export class SupportService {
     return group.rows[0];
   }
 
-  async propose(actor:Identity,body:unknown){
+  async propose(actor:Identity,body:unknown,direct=false){
     const input=supportProposal(body);
     await this.intake.requireGeneral(actor.id,input as unknown as Record<string,unknown>,'support-structure');
     const hash=createHash('sha256').update(JSON.stringify(input)).digest('hex');
     return this.db.transaction(async client=>{
       const access=await this.writeAccess(client,actor.id);this.scope(access,input.groupId,input.kind);
-      const prior=await client.query('SELECT proposed_by,request_hash FROM support_structure_proposals WHERE id=$1',[input.id]);
+      if(direct&&!access.admin)throw new NotFoundException();
+      const prior=await client.query('SELECT proposed_by,request_hash,management_mode FROM support_structure_proposals WHERE id=$1',[input.id]);
       if(prior.rowCount){
-        if(prior.rows[0].proposed_by!==actor.id||prior.rows[0].request_hash!==hash)throw new ConflictException({code:'SUPPORT_ID_CONFLICT'});
+        if(prior.rows[0].proposed_by!==actor.id||prior.rows[0].request_hash!==hash||prior.rows[0].management_mode!==(direct?'ADMIN_DIRECT':'REVIEW'))throw new ConflictException({code:'SUPPORT_ID_CONFLICT'});
         return this.proposal(client,input.id,access);
       }
-      if(input.kind==='MEMBER_ADD'&&input.employeeId===actor.id)throw new ForbiddenException({code:'SUPPORT_SELF_GRANT_DENIED'});
+      if(!direct&&input.kind==='MEMBER_ADD'&&input.employeeId===actor.id)throw new ForbiddenException({code:'SUPPORT_SELF_GRANT_DENIED'});
       await this.expected(client,input);
       if(input.kind==='GROUP_DISABLE')await this.requireNoDependencies(client,input.groupId);
       if(input.employeeId){
@@ -158,12 +159,13 @@ export class SupportService {
         const membership=await client.query('SELECT 1 FROM group_memberships WHERE employee_id=$1 AND group_id=$2',[input.employeeId,input.groupId]);
         if((input.kind==='MEMBER_ADD')===!!membership.rowCount)throw new ConflictException({code:'SUPPORT_MEMBERSHIP_CONFLICT'});
       }
-      const result=await client.query(`INSERT INTO support_structure_proposals(id,kind,group_id,employee_id,config,expected_group_version,request_hash,proposed_by,reason)
-        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT DO NOTHING RETURNING id`,
-        [input.id,input.kind,input.groupId,input.employeeId??null,JSON.stringify(input.config),input.expectedGroupVersion,hash,actor.id,input.reason]);
+      const result=await client.query(`INSERT INTO support_structure_proposals(id,kind,group_id,employee_id,config,expected_group_version,request_hash,proposed_by,reason,management_mode)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT DO NOTHING RETURNING id`,
+        [input.id,input.kind,input.groupId,input.employeeId??null,JSON.stringify(input.config),input.expectedGroupVersion,hash,actor.id,input.reason,direct?'ADMIN_DIRECT':'REVIEW']);
       if(!result.rowCount)throw new ConflictException({code:'SUPPORT_CHANGE_PENDING'});
       const proposal=await this.proposal(client,input.id,access);
       await this.audit(client,input.id,actor.id,'PROPOSED',null,proposal,input.reason);
+      if(direct)return this.applyDecision(client,actor,input.id,{expectedVersion:proposal.version,decision:'APPROVE',reason:input.reason},access,true);
       return proposal;
     });
   }
@@ -244,9 +246,14 @@ export class SupportService {
     await this.intake.requireGeneral(actor.id,input as unknown as Record<string,unknown>,'support-structure');
     return this.db.transaction(async client=>{
       const access=await this.writeAccess(client,actor.id);if(!access.admin)throw new NotFoundException();
+      return this.applyDecision(client,actor,id,input,access);
+    });
+  }
+
+  private async applyDecision(client:PoolClient,actor:Identity,id:string,input:{expectedVersion:number;decision:'APPROVE'|'REJECT';reason:string},access:Access,direct=false){
       await client.query('SELECT id FROM support_structure_proposals WHERE id=$1 FOR UPDATE',[id]);
       const p=await this.proposal(client,id,access);
-      if(!supportIndependentReview(actor.id,p.proposedBy,p.employeeId))throw new ForbiddenException({code:'SUPPORT_INDEPENDENT_REVIEW_REQUIRED'});
+      if(!direct&&!supportIndependentReview(actor.id,p.proposedBy,p.employeeId))throw new ForbiddenException({code:'SUPPORT_INDEPENDENT_REVIEW_REQUIRED'});
       if(p.status!=='PENDING'){
         if(p.version===input.expectedVersion+1&&p.reviewedBy===actor.id&&p.status===(input.decision==='APPROVE'?'APPROVED':'REJECTED')&&p.reviewReason===input.reason)return p;
         throw new ConflictException({code:'SUPPORT_VERSION_CONFLICT'});
@@ -287,7 +294,6 @@ export class SupportService {
       const result=await this.proposal(client,id,access);
       await this.audit(client,id,actor.id,input.decision==='APPROVE'?'APPROVED':'REJECTED',before,after,input.reason);
       return result;
-    });
   }
 
   async history(actor:Identity,id:string){

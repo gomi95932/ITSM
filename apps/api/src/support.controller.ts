@@ -17,6 +17,7 @@ export class SupportController {
   }
   @Get(':id/history') async history(@Headers() h:H,@Param('id') id:string){return this.support.history(await this.auth.identity(auth(h)),id);}
   @Post() async propose(@Headers() h:H,@Body() body:unknown){return this.support.propose(await this.auth.identity(auth(h),true),body);}
+  @Post('apply') async apply(@Headers() h:H,@Body() body:unknown){return this.support.propose(await this.auth.identity(auth(h),true),body,true);}
   @Post(':id/review') @HttpCode(200) async review(@Headers() h:H,@Param('id') id:string,@Body() body:unknown){
     return this.support.review(await this.auth.identity(auth(h),true),id,body);
   }

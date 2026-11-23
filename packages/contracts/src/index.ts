@@ -100,6 +100,7 @@ export interface RoleBindingInput {
 }
 export interface RoleDecisionInput { expectedVersion:number; reason:string; decision?:'APPROVE'|'REJECT'; contentClass:'GENERAL' }
 export interface RoleBindingView extends Omit<RoleBindingInput,'contentClass'> {
+  managementMode?:'REVIEW'|'ADMIN_DIRECT';
   employeeName:string; groupName:string|null; status:'PENDING'|'ACTIVE'|'REJECTED'|'REVOKED'; source:'REVIEW'|'BOOTSTRAP'|'HANDOFF';
   requestedBy:string|null; reviewedBy:string|null; revokedBy:string|null; reviewReason:string|null; revokeReason:string|null;
   version:number; effective:boolean; createdAt:string;

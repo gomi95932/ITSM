@@ -1,6 +1,6 @@
 import { test,expect } from './fixtures';
 
-test('custom domains can be added, reviewed, renamed and disabled without a release',async({page})=>{
+test('administrators directly add, rename and disable custom domains without a release',async({page})=>{
   test.setTimeout(60000);
   const name=`研发实验责任域 ${Date.now()}`;
   const renamed=`${name} 已调整`;
@@ -20,22 +20,15 @@ test('custom domains can be added, reviewed, renamed and disabled without a rele
     await publish.getByRole('textbox',{name:'变更依据'}).fill(reason);
     await publish.getByRole('checkbox',{name:'本次内容不含密码、密钥及安全事件证据'}).check();
     await publish.getByRole('button',{name:'预览分派',exact:true}).click();
-    await expect(publish.getByRole('button',{name:'提交复核',exact:true})).toBeEnabled();
-    await publish.getByRole('button',{name:'提交复核',exact:true}).click();
-    await expect(page.getByRole('status')).toContainText('尚未生效');
+    await expect(publish.getByRole('button',{name:'保存并生效',exact:true})).toBeEnabled();
+    await publish.getByRole('button',{name:'保存并生效',exact:true}).click();
+    await expect(page.getByRole('status')).toContainText('配置已保存并生效');
+    await page.getByRole('tab',{name:'变更记录',exact:true}).click();
     const row=page.getByRole('row').filter({hasText:reason});
+    await expect(row).toContainText('已发布');
     await row.getByRole('button',{name:'查看完整配置',exact:true}).click();
     await expect(page.getByRole('button',{name:'批准发布',exact:true})).toHaveCount(0);
     await page.getByRole('button',{name:'返回编辑配置',exact:true}).click();
-    await page.getByRole('combobox',{name:'开发身份'}).selectOption('demo-admin-2');
-    await page.getByRole('button',{name:'服务组织',exact:true}).click();
-    await page.getByRole('tab',{name:'变更复核',exact:true}).click();
-    await page.getByRole('row').filter({hasText:reason}).getByRole('button',{name:'查看完整配置',exact:true}).click();
-    const review=page.getByRole('region',{name:'配置复核'});
-    await review.getByRole('textbox',{name:'复核依据'}).fill('独立核对本次配置变更及责任记录');
-    await review.getByRole('checkbox',{name:'本次内容不含密码、密钥及安全事件证据'}).check();
-    await review.getByRole('button',{name:'批准发布',exact:true}).click();
-    await expect(page.getByRole('status')).toContainText('配置已发布');
     await page.getByRole('tab',{name:'责任域',exact:true}).click();
   }
   await propose(`新增 ${name}`);

@@ -1,12 +1,12 @@
 import { test,expect } from './fixtures';
 
-test('two administrators propose, review and revoke a scoped role on desktop and mobile',async({page})=>{
+test('administrator directly configures and revokes a scoped role on desktop and mobile',async({page})=>{
   test.setTimeout(60000);
   await page.setViewportSize({width:1440,height:1000});await page.goto('/');
   await expect(page.getByRole('button',{name:'角色授权',exact:true})).toHaveCount(0);
   await page.getByRole('combobox',{name:'开发身份'}).selectOption('demo-admin-1');
   await page.getByRole('button',{name:'角色授权',exact:true}).click();
-  await page.getByRole('button',{name:'授权提案',exact:true}).click();
+  await page.getByRole('button',{name:'新增角色人员',exact:true}).click();
   const form=page.getByRole('region',{name:'新增角色授权'});
   await form.getByRole('combobox',{name:'权限角色'}).selectOption('DISPATCHER');
   await form.getByRole('combobox',{name:'支持组'}).selectOption('service-desk');
@@ -14,18 +14,13 @@ test('two administrators propose, review and revoke a scoped role on desktop and
   await form.getByRole('spinbutton',{name:'有效天数'}).fill('7');
   await form.getByRole('textbox',{name:'授权原因'}).fill('E2E 值班调度授权');
   await form.getByRole('checkbox',{name:'本次内容不含密码、密钥及安全事件证据'}).check();
-  await form.getByRole('button',{name:'提交独立复核'}).click();
+  await expect(form.getByRole('combobox',{name:'授权人员'}).locator('option[value="demo-admin-1"]')).toHaveCount(1);
+  await form.getByRole('button',{name:'保存并生效'}).click();
   const row=page.getByRole('listitem',{name:'服务台协作工程师 调度员',exact:true});
-  await expect(row).toContainText('待独立复核');
+  await expect(row).toContainText('管理员配置');
   await expect(row.getByRole('button',{name:'批准授权'})).toHaveCount(0);
   await page.screenshot({path:'test-results/roles-proposal-desktop.png',fullPage:true});
-  await page.getByRole('combobox',{name:'开发身份'}).selectOption('demo-admin-2');
-  await page.getByRole('button',{name:'角色授权',exact:true}).click();
-  await row.getByRole('button',{name:'批准授权'}).click();
   const dialog=page.getByRole('dialog');
-  await dialog.getByRole('textbox',{name:'处理依据'}).fill('复核服务台值班安排，同意限期授权');
-  await dialog.getByRole('checkbox',{name:'本次内容不含密码、密钥及安全事件证据'}).check();
-  await dialog.getByRole('button',{name:'确认提交'}).click();
   await expect(row).toContainText('当前生效');
   await page.setViewportSize({width:390,height:844});
   await page.screenshot({path:'test-results/roles-approved-mobile.png',fullPage:true});
@@ -36,7 +31,7 @@ test('two administrators propose, review and revoke a scoped role on desktop and
   await dialog.getByRole('button',{name:'确认提交'}).click();
   await expect(row).toContainText('已撤销');
   await row.getByRole('button',{name:'授权审计'}).click();
-  await expect(dialog.getByText('提交提案',{exact:true})).toBeVisible();
+  await expect(dialog.getByText('提交提案',{exact:true})).toHaveCount(0);
   await expect(dialog.getByText('批准',{exact:true})).toBeVisible();
   await expect(dialog.getByText('撤销',{exact:true})).toBeVisible();
   await page.screenshot({path:'test-results/roles-audit-mobile.png',fullPage:true});
