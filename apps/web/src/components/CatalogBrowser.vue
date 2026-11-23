@@ -31,6 +31,8 @@ const sections=computed(()=>[
   return {...section,groups:[...groups.values()]};
 }));
 const unavailable=computed(()=>filtered.value.filter(item=>!item.available));
+const unavailableLabel=(item:CatalogItem)=>item.unavailableReason==='UNPUBLISHED'?'未发布':
+  item.unavailableReason==='OUT_OF_SCOPE'?'不在当前账号申请范围':'暂未开放';
 function reset(){category.value='';system.value='';query.value='';}
 </script>
 <template>
@@ -53,7 +55,7 @@ function reset(){category.value='';system.value='';query.value='';}
           </button></div>
         </div>
       </section>
-      <section v-if="unavailable.length" class="catalog-section" aria-label="暂未开放服务"><h2>暂未开放</h2><div class="request-catalog"><div v-for="item in unavailable" :key="item.code"><span>{{item.name}}<small>{{path(item).join(' / ')}}</small></span><span class="muted">暂未开放</span></div></div></section>
+      <section v-if="unavailable.length" class="catalog-section" aria-label="暂未开放服务"><h2>暂不可申请</h2><div class="request-catalog"><div v-for="item in unavailable" :key="item.code"><span>{{item.name}}<small>{{path(item).join(' / ')}}</small></span><span class="muted">{{unavailableLabel(item)}}</span></div></div></section>
     </template>
     <div v-else class="empty-state"><Search :size="26"/><p>未找到匹配的服务</p><button v-if="query||category||system" @click="reset"><X :size="16"/>清除筛选</button></div>
   </div>

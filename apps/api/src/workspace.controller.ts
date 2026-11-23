@@ -1,4 +1,5 @@
 import { BadRequestException, Body, Controller, Get, Headers, HttpCode, NotFoundException, Param, Post } from '@nestjs/common';
+import type { CatalogItem } from '@itsm/contracts';
 import { AuthService } from './auth.service.js';
 import { Database } from './database.service.js';
 import { IntakePolicyService } from './intake-policy.service.js';
@@ -20,19 +21,32 @@ export class WorkspaceController {
   }
   @Get('catalog') async catalog(@Headers() h: H) {
     const actor = await this.identity.identity(auth(h));
-    const result = await this.db.pool.query(`SELECT c.*,v.snapshot,n.path AS navigation_path,n."sortOrder" AS navigation_order
-      FROM service_catalog c LEFT JOIN request_catalog_versions v
+    const result = await this.db.pool.query(`WITH actor_access AS (SELECT EXISTS(
+      SELECT 1 FROM role_bindings r WHERE r.employee_id=$1 AND r.role_code='PLATFORM_ADMIN'
+        AND ${ROLE_EFFECTIVE_SQL}) AS is_admin)
+      SELECT c.*,v.snapshot,n.path AS navigation_path,n."sortOrder" AS navigation_order,
+        scope.visible AS scope_visible,
+        (SELECT s.name FROM service_position_routes r JOIN business_systems s ON s.id=r."systemId"
+          WHERE r."serviceCode"=c.code LIMIT 1) AS system_name
+      FROM service_catalog c CROSS JOIN actor_access a LEFT JOIN request_catalog_versions v
       ON v.service_code=c.code AND v.form_version=c.form_version
       LEFT JOIN LATERAL (SELECT item->'path' AS path,(item->>'sortOrder')::integer AS "sortOrder"
         FROM jsonb_array_elements((SELECT config FROM catalog_navigation_versions ORDER BY version DESC LIMIT 1)) item
         WHERE item->>'serviceCode'=c.code) n ON true
-      WHERE c.published=true AND (c.visible_groups='[]'::jsonb OR EXISTS
-      (SELECT 1 FROM group_memberships WHERE employee_id=$1 AND c.visible_groups ? group_id))
-      AND service_site_visible(c.code,$1) ORDER BY COALESCE(n."sortOrder",c.sort_order),c.code`,[actor.id]);
-    return { items: result.rows.map(r => ({ code:r.code,name:r.name || r.code,description:r.description,type:r.type,formVersion:r.form_version,fields:r.field_schema,
-      navigationPath:r.navigation_path??initialCatalogPath(r.code),navigationOrder:r.navigation_order??r.sort_order,
-      available:['INC','GEN'].includes(r.type)||(r.type==='REQ'&&!!r.snapshot?.approval?.steps?.length
-        &&!!requestIntakePolicy(process.env,r.code,r.form_version)),maxValidityDays:r.type==='REQ'?r.snapshot?.maxValidityDays??null:null })) };
+      CROSS JOIN LATERAL (SELECT (c.visible_groups='[]'::jsonb OR EXISTS
+        (SELECT 1 FROM group_memberships WHERE employee_id=$1 AND c.visible_groups ? group_id))
+        AND service_site_visible(c.code,$1) AS visible) scope
+      WHERE a.is_admin OR (c.published AND scope.visible)
+      ORDER BY COALESCE(n."sortOrder",c.sort_order),c.code`,[actor.id]);
+    return { items: result.rows.map<CatalogItem>(r => {
+      const ready=['INC','GEN'].includes(r.type)||(r.type==='REQ'&&!!r.snapshot?.approval?.steps?.length
+        &&!!requestIntakePolicy(process.env,r.code,r.form_version));
+      const unavailableReason=!r.published?'UNPUBLISHED':!r.scope_visible?'OUT_OF_SCOPE':!ready?'NOT_READY':undefined;
+      return {code:r.code,name:r.name || r.code,description:r.description,type:r.type,formVersion:r.form_version,fields:r.field_schema,
+        navigationPath:r.navigation_path??initialCatalogPath(r.code,r.system_name),navigationOrder:r.navigation_order??r.sort_order,
+        published:r.published,available:!unavailableReason,unavailableReason,
+        maxValidityDays:r.type==='REQ'?r.snapshot?.maxValidityDays??null:null};
+    }) };
   }
   @Get('support-groups') async groups(@Headers() h: H) {
     const actor = await this.identity.identity(auth(h)); if (!actor.groups.length) throw new NotFoundException();
