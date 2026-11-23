@@ -13,11 +13,13 @@ export function directorySettings(env:NodeJS.ProcessEnv):DirectorySettings|undef
   const roots=(env.DINGTALK_DIRECTORY_ROOTS??'').split(',').map(value=>value.trim());
   const rawPercent=env.DIRECTORY_MAX_REMOVAL_PERCENT??'10';
   const percent=Number(rawPercent);
+  const mode=env.DINGTALK_DIRECTORY_SCOPE??'pilot';
+  if(mode!=='pilot'&&mode!=='authorized')throw new Error('DIRECTORY_CONFIG_INVALID');
   if(!env.DINGTALK_CORP_ID?.trim()||!roots.length||roots.some(value=>!/^\d+$/.test(value)||!Number.isSafeInteger(Number(value))||Number(value)<1)
     ||new Set(roots.map(Number)).size!==roots.length||!rawPercent.trim()||!Number.isFinite(percent)||percent<0||percent>100)
     throw new Error('DIRECTORY_CONFIG_INVALID');
   return {corpId:env.DINGTALK_CORP_ID.trim(),roots:roots.map(Number),retireMissing:env.DIRECTORY_RETIRE_MISSING==='true',maxRemovalPercent:percent,
-    pilotUserIds:dingtalkPilotUsers(env)};
+    pilotUserIds:mode==='authorized'?undefined:dingtalkPilotUsers(env)};
 }
 const safeErrors=new Set(['DIRECTORY_PROVIDER_INVALID','DIRECTORY_PROVIDER_UNAVAILABLE','DIRECTORY_TOKEN_UNAVAILABLE',
   'DIRECTORY_EMPTY_SNAPSHOT','DIRECTORY_SCOPE_TOO_LARGE','DIRECTORY_SNAPSHOT_CHANGED','DIRECTORY_IDENTITY_CONFLICT','DIRECTORY_REMOVAL_LIMIT',

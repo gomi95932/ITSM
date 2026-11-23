@@ -26,6 +26,7 @@ export class DirectoryController {
       const lastSuccess=(await client.query(`SELECT completed_at FROM directory_sync_runs
         WHERE corp_id=$1 AND state='SUCCEEDED' ORDER BY completed_at DESC LIMIT 1`,[corp])).rows[0]?.completed_at??null;
       return {enabled:process.env.ENABLE_DIRECTORY_SYNC==='true',retireMissing:process.env.DIRECTORY_RETIRE_MISSING==='true',
+        scopeMode:process.env.DINGTALK_DIRECTORY_SCOPE==='authorized'?'authorized':'pilot',
         configured:!!(corp&&process.env.DINGTALK_APP_KEY&&process.env.DINGTALK_APP_SECRET&&process.env.DINGTALK_DIRECTORY_ROOTS),
         lastSuccessAt:lastSuccess,stale:!lastSuccess||Date.now()-new Date(lastSuccess).getTime()>900000,counts,runs};
     });

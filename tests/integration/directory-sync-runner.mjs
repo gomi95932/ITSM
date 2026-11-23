@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { randomUUID,randomBytes,createHash } from 'node:crypto';
 import { Pool } from 'pg';
-import { synchronizeDirectory,directoryEmployeeId } from './apps/worker/dist/directory-sync.js';
+import { synchronizeDirectory,directoryEmployeeId,directorySettings } from './apps/worker/dist/directory-sync.js';
 
 if(process.env.ITSM_DIRECTORY_CI!=='true'||process.env.NODE_ENV==='production'
   ||process.env.ENABLE_DIRECTORY_SYNC==='true')throw new Error('DISPOSABLE_DIRECTORY_CI_ONLY');
@@ -93,6 +93,15 @@ try{
   assert.equal(JSON.stringify(await row(employee('pilot-new'))),pilotSnapshot);
   assert.equal(await absence('b'),0,'narrowing the scope never retires prior department peers');
 
+  const authorized=directorySettings({ENABLE_DIRECTORY_SYNC:'true',DINGTALK_CORP_ID:corp,DINGTALK_DIRECTORY_ROOTS:'1',
+    DINGTALK_PILOT_USER_IDS:'pilot-new',DINGTALK_DIRECTORY_SCOPE:'authorized'});
+  result=await synchronizeDirectory(db,authorized,provider([...all,'pilot-new','outside-pilot']));
+  assert.equal(result.state,'SUCCEEDED');assert.equal(result.people,6);
+  assert.ok(await row(employee('outside-pilot')),'authorized directory imports employees outside notification pilot');
+  for(const table of ['group_memberships','role_bindings']){
+    assert.equal((await db.query(`SELECT count(*) FROM ${table} WHERE employee_id=$1`,[employee('outside-pilot')])).rows[0].count,'0');
+  }
+
   const locker=await db.connect();
   try{
     await locker.query('SELECT pg_advisory_lock(71820535)');
@@ -105,6 +114,7 @@ try{
   assert.equal((await request('/admin/directory/status',{'x-dev-user':'agent-1'})).status,403,'dispatcher cannot read directory admin ledger');
   const admin=await request('/admin/directory/status',{'x-dev-user':'demo-admin-1'});
   assert.equal(admin.status,200);assert.equal(admin.body.enabled,false);
+  assert.equal(admin.body.scopeMode,'pilot');
   assert.ok(!JSON.stringify(admin.body).includes('DB_PASSWORD'));
   const client=await db.connect();
   try{

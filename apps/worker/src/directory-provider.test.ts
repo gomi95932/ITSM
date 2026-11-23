@@ -65,3 +65,16 @@ test('pilot scope requires exact unique identities and changes directory scope w
   assert.throws(()=>restrictDirectory(snapshot,['a','missing']),/DIRECTORY_PILOT_PERSON_MISSING/);
   assert.throws(()=>restrictDirectory(snapshot,[]),/DIRECTORY_PILOT_PERSON_MISSING/);
 });
+
+test('authorized directory scope imports non-pilot people without expanding notification pilot recipients',()=>{
+  const env={ENABLE_DIRECTORY_SYNC:'true',DINGTALK_CORP_ID:'fixture',DINGTALK_DIRECTORY_ROOTS:'1',
+    DINGTALK_PILOT_USER_IDS:'a,b',DINGTALK_DIRECTORY_SCOPE:'authorized'};
+  const config=directorySettings(env)!;
+  assert.equal(config.pilotUserIds,undefined);
+  const snapshot={people:['a','b','other'].map(userId=>({userId,name:userId,departmentIds:[1],jobTitle:''})),departmentCount:1};
+  assert.equal(restrictDirectory(snapshot,config.pilotUserIds).people.length,3);
+  assert.deepEqual(dingtalkPilotUsers(env),['a','b']);
+  assert.equal(config.retireMissing,false);
+  assert.notEqual(directoryScope(config),directoryScope({...config,pilotUserIds:['a','b']}));
+  assert.throws(()=>directorySettings({...env,DINGTALK_DIRECTORY_SCOPE:'alll'}),/DIRECTORY_CONFIG_INVALID/);
+});
