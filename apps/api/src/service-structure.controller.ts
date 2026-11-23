@@ -12,10 +12,12 @@ export class ServiceStructureController {
   @Get('catalog') async catalog(@Headers() h:H){return this.structure.catalog(await this.auth.identity(auth(h)));}
   @Get('appointments') async appointments(@Headers() h:H){return this.structure.appointments(await this.auth.identity(auth(h)));}
   @Post('appointments') async proposeAppointment(@Headers() h:H,@Body() body:unknown){return this.structure.proposeAppointment(await this.auth.identity(auth(h),true),body);}
+  @Post('appointments/apply') async applyAppointment(@Headers() h:H,@Body() body:unknown){return this.structure.proposeAppointment(await this.auth.identity(auth(h),true),body,true);}
   @Post('appointments/revoke') async revokeAppointment(@Headers() h:H,@Body() body:unknown){return this.structure.revokeAppointment(await this.auth.identity(auth(h),true),body);}
   @Get(':id/history') async history(@Headers() h:H,@Param('id') id:string){return this.structure.history(await this.auth.identity(auth(h)),id);}
   @Post('preview') @HttpCode(200) async preview(@Headers() h:H,@Body() body:unknown){return this.structure.preview(await this.auth.identity(auth(h),true),body);}
   @Post() async propose(@Headers() h:H,@Body() body:unknown){return this.structure.propose(await this.auth.identity(auth(h),true),body);}
+  @Post('apply') async apply(@Headers() h:H,@Body() body:unknown){return this.structure.propose(await this.auth.identity(auth(h),true),body,true);}
   @Post(':id/review') @HttpCode(200) async review(@Headers() h:H,@Param('id') id:string,@Body() body:unknown){
     return this.structure.review(await this.auth.identity(auth(h),true),id,body);
   }

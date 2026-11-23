@@ -11,6 +11,7 @@ export class RolesController {
   @Get('options') async options(@Headers() h:H,@Query('q') q?:string){return this.roles.options(await this.auth.identity(auth(h)),q);}
   @Get(':id/history') async history(@Headers() h:H,@Param('id') id:string){return this.roles.history(await this.auth.identity(auth(h)),id);}
   @Post() async propose(@Headers() h:H,@Body() b:unknown){return this.roles.propose(await this.auth.identity(auth(h),true),b);}
+  @Post('apply') async apply(@Headers() h:H,@Body() b:unknown){return this.roles.propose(await this.auth.identity(auth(h),true),b,true);}
   @Post(':id/review') @HttpCode(200) async review(@Headers() h:H,@Param('id') id:string,@Body() b:unknown){return this.roles.decide(await this.auth.identity(auth(h),true),id,b);}
   @Post(':id/revoke') @HttpCode(200) async revoke(@Headers() h:H,@Param('id') id:string,@Body() b:unknown){return this.roles.decide(await this.auth.identity(auth(h),true),id,b,true);}
 }

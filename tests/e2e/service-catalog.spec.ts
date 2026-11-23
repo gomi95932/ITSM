@@ -59,20 +59,15 @@ test('administrators configure a new service domain through actual employee inta
     await publishing.getByRole('checkbox',{name:'本次内容不含密码、密钥及安全事件证据'}).check();
     await publishing.getByRole('button',{name:'预览分派',exact:true}).click();
     await expect(publishing).toContainText('服务台工程师');
-    await publishing.getByRole('button',{name:'提交复核',exact:true}).click();
-    await expect(page.getByRole('status')).toContainText('尚未生效');
-    await page.getByRole('combobox',{name:'开发身份'}).selectOption('demo-admin-2');
-    await page.getByRole('button',{name:'服务组织',exact:true}).click();
-    await page.getByRole('tab',{name:'变更复核',exact:true}).click();
+    await publishing.getByRole('button',{name:'保存并生效',exact:true}).click();
+    await expect(page.getByRole('status')).toContainText('配置已保存并生效');
+    await page.getByRole('tab',{name:'变更记录',exact:true}).click();
     await page.getByRole('row').filter({hasText:reason}).getByRole('button',{name:'查看完整配置',exact:true}).click();
     const reviewing=page.getByRole('region',{name:'配置复核'});
     await expect(reviewing.getByRole('region',{name:'服务目录变更明细'})).toContainText(code);
     await expect(reviewing).toContainText('设备编码');
     await page.screenshot({path:'test-results/service-catalog-review-mobile.png',fullPage:true});
-    await reviewing.getByRole('textbox',{name:'复核依据'}).fill('核对服务字段、岗位、人员和目录状态');
-    await reviewing.getByRole('checkbox',{name:'本次内容不含密码、密钥及安全事件证据'}).check();
-    await reviewing.getByRole('button',{name:'批准发布',exact:true}).click();
-    await expect(page.getByRole('status')).toContainText('配置已发布');
+    await expect(reviewing.getByRole('button',{name:'批准发布',exact:true})).toHaveCount(0);
   }
   await publish(`发布试验设备服务 ${suffix}`);
   await page.getByRole('combobox',{name:'开发身份'}).selectOption('employee-1');

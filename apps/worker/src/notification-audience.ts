@@ -93,17 +93,22 @@ export async function notificationRecipients(client: Pick<PoolClient,'query'>, e
     return recipients.rows.map(row=>row.id);
   }
   if(a.fulfillment){
-    const recipients=await client.query<{id:string}>(`SELECT e.id FROM request_fulfillment_active_signals s
-      JOIN tickets t ON t.id=s.ticket_id
-      JOIN group_memberships m ON m.group_id=s.group_id JOIN employees e ON e.id=m.employee_id AND e.active
-      WHERE s.event_id=$1 AND ($2::text IS NULL OR e.id=$2)
-        AND staff_site_access(t.service_routing_snapshot,e.id,s.group_id) AND (
-        (s.kind='REVIEW_REQUIRED' AND request_fulfillment_operator_eligible(s.fulfillment_id,e.id,'REVIEW')) OR
-        (s.kind='REVOKE_REQUIRED' AND request_fulfillment_operator_eligible(s.fulfillment_id,e.id,'REVOKE')) OR
-        (s.kind IN ('REVIEW_OVERDUE','REVOKE_OVERDUE') AND s.escalate_at<=clock_timestamp() AND EXISTS(
-          SELECT 1 FROM role_bindings r WHERE r.employee_id=e.id AND r.group_id=s.group_id AND r.role_code='GROUP_LEAD'
-            AND r.status='ACTIVE' AND r.valid_from<=clock_timestamp() AND r.valid_to>clock_timestamp()))
-      ) ORDER BY e.id`,[eventId,employeeId]);
+    // Bound the signal and group before evaluating the nested current-authorization functions.
+    const recipients=await client.query<{id:string}>(`WITH signal AS MATERIALIZED (
+      SELECT s.*,t.service_routing_snapshot FROM request_fulfillment_active_signals s
+      JOIN tickets t ON t.id=s.ticket_id WHERE s.event_id=$1
+    ), candidates AS MATERIALIZED (
+      SELECT s.fulfillment_id,s.group_id,s.kind,s.escalate_at,s.service_routing_snapshot,e.id
+      FROM signal s JOIN group_memberships m ON m.group_id=s.group_id
+      JOIN employees e ON e.id=m.employee_id AND e.active WHERE ($2::text IS NULL OR e.id=$2)
+    ) SELECT s.id FROM candidates s
+      WHERE staff_site_access(s.service_routing_snapshot,s.id,s.group_id) AND CASE s.kind
+        WHEN 'REVIEW_REQUIRED' THEN request_fulfillment_operator_eligible(s.fulfillment_id,s.id,'REVIEW')
+        WHEN 'REVOKE_REQUIRED' THEN request_fulfillment_operator_eligible(s.fulfillment_id,s.id,'REVOKE')
+        ELSE s.kind IN ('REVIEW_OVERDUE','REVOKE_OVERDUE') AND s.escalate_at<=clock_timestamp() AND EXISTS(
+          SELECT 1 FROM role_bindings r WHERE r.employee_id=s.id AND r.group_id=s.group_id AND r.role_code='GROUP_LEAD'
+            AND r.status='ACTIVE' AND r.valid_from<=clock_timestamp() AND r.valid_to>clock_timestamp())
+      END ORDER BY s.id`,[eventId,employeeId]);
     return recipients.rows.map(row=>row.id);
   }
   const result = await client.query<{ id:string }>(`SELECT e.id FROM ticket_events v JOIN tickets t ON t.id=v.ticket_id

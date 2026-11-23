@@ -100,8 +100,8 @@ async function propose(){
     ...(target?{employeeId:target}:{}),reason:reason.value,contentClass:'GENERAL'};
   busy.value=true;error.value='';notice.value='';
   try{
-    await api<SupportChangeView>(base,{method:'POST',body:input});if(!alive)return;
-    closeEditor();tab.value='changes';await load();notice.value='变更已提交，待其他平台管理员独立复核，当前配置尚未改变。';
+    await api<SupportChangeView>(canManageGroups.value?`${base}/apply`:base,{method:'POST',body:input});if(!alive)return;
+    closeEditor();tab.value=canManageGroups.value?'groups':'changes';await load();notice.value=canManageGroups.value?'配置已保存并生效。':'变更已提交，待其他平台管理员独立复核，当前配置尚未改变。';
   }catch(e){if(alive)error.value=errorText(e);}finally{if(alive)busy.value=false;}
 }
 function review(item:SupportChangeView,action:'APPROVE'|'REJECT'){
@@ -161,7 +161,7 @@ onBeforeUnmount(()=>{alive=false;++memberGeneration;++peopleGeneration;++depende
         <p v-if="editing.kind==='GROUP_RESTORE'" class="muted">恢复后成员、岗位任职及权限仍需重新任命。</p>
         <label>变更依据<textarea v-model="reason" required maxlength="500" rows="3"/></label>
         <ContentBoundary v-model="safe"/>
-        <div class="form-footer"><button class="primary" :disabled="!safe||!reason.trim()||(groupEdit?!name.trim():editing.kind==='MEMBER_ADD'&&!employeeId)||(editing.kind==='GROUP_DISABLE'&&(!dependencies||dependencies.total>0||dependencyLoading))"><LoaderCircle v-if="busy" class="spin" :size="16"/><Check v-else :size="16"/>提交独立复核</button></div>
+        <div class="form-footer"><button class="primary" :disabled="!safe||!reason.trim()||(groupEdit?!name.trim():editing.kind==='MEMBER_ADD'&&!employeeId)||(editing.kind==='GROUP_DISABLE'&&(!dependencies||dependencies.total>0||dependencyLoading))"><LoaderCircle v-if="busy" class="spin" :size="16"/><Check v-else :size="16"/>{{canManageGroups?'保存并生效':'提交独立复核'}}</button></div>
       </fieldset></form>
     </section>
 

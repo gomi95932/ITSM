@@ -1,12 +1,13 @@
 import { BadRequestException,ConflictException,ForbiddenException } from '@nestjs/common';
 import type { PoolClient } from 'pg';
 import type { ServiceCatalogChange,ServiceStructure } from '@itsm/contracts';
+import { ROLE_EFFECTIVE_SQL } from './role-policy.js';
 
 type Client=Pick<PoolClient,'query'>;
 type CatalogRow={code:string;type:string;form_version:number;published:boolean;name:string;description:string;group_id:string;
   visible_groups:string[];field_schema:ServiceCatalogChange['fields'];sort_order:number};
 
-export async function validateCatalogBundle(client:Client,actor:string,change:ServiceCatalogChange,config:ServiceStructure){
+export async function validateCatalogBundle(client:Client,actor:string,change:ServiceCatalogChange,config:ServiceStructure,adminDirect=false){
   const current=await client.query<CatalogRow>('SELECT * FROM service_catalog WHERE code=$1',[change.code]);
   const row=current.rows[0];
   if((row?.form_version??0)!==change.expectedVersion)throw new ConflictException({code:'FORM_VERSION_CONFLICT'});
@@ -21,10 +22,11 @@ export async function validateCatalogBundle(client:Client,actor:string,change:Se
     throw new BadRequestException({code:'CATALOG_ROUTING_BUNDLE_REQUIRED'});
   if(change.type==='REQ'){
     if(!row){
-      if(change.initialPublisherId!==actor||!(await client.query(`SELECT 1 FROM group_memberships m JOIN employees e ON e.id=m.employee_id
+      if(change.initialPublisherId!==actor||(!adminDirect&&!(await client.query(`SELECT 1 FROM group_memberships m JOIN employees e ON e.id=m.employee_id
         WHERE m.employee_id=$1 AND m.group_id=$2 AND e.active`,[actor,change.groupId])).rowCount)
+      )
         throw new ForbiddenException({code:'CATALOG_INITIAL_PUBLISHER_REQUIRED'});
-    }else if(!(await client.query(`SELECT 1 FROM request_catalog_publishers p JOIN employees e ON e.id=p.employee_id
+    }else if(!adminDirect&&!(await client.query(`SELECT 1 FROM request_catalog_publishers p JOIN employees e ON e.id=p.employee_id
       WHERE p.service_code=$1 AND p.employee_id=$2 AND e.active`,[change.code,actor])).rowCount)
       throw new ForbiddenException({code:'CATALOG_PUBLISHER_REQUIRED'});
     const ids=change.approval!.steps.flatMap(step=>step.approverId?[step.approverId]:[]);
@@ -66,7 +68,9 @@ export async function catalogAdminRows(client:Client,actor:string){
   return (await client.query(`SELECT c.code,c.type,c.form_version AS "formVersion",c.published,c.name,c.description,c.group_id AS "groupId",
     c.visible_groups AS "visibleGroups",c.field_schema AS fields,c.sort_order AS "sortOrder",v.snapshot->'approval' AS approval,
     v.snapshot->'maxValidityDays' AS "maxValidityDays",
-    (c.type='INC' OR EXISTS(SELECT 1 FROM request_catalog_publishers p WHERE p.service_code=c.code AND p.employee_id=$1)) AS "canPropose"
+    (c.type IN ('INC','REQ') AND (c.type='INC' OR EXISTS(SELECT 1 FROM role_bindings r WHERE r.employee_id=$1 AND r.role_code='PLATFORM_ADMIN'
+      AND ${ROLE_EFFECTIVE_SQL})
+      OR EXISTS(SELECT 1 FROM request_catalog_publishers p WHERE p.service_code=c.code AND p.employee_id=$1))) AS "canPropose"
     FROM service_catalog c LEFT JOIN request_catalog_versions v ON v.service_code=c.code AND v.form_version=c.form_version
     ORDER BY c.sort_order,c.code LIMIT 501`,[actor])).rows;
 }

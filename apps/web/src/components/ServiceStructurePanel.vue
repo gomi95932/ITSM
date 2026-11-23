@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed,nextTick,onMounted,ref,watch } from 'vue';
-import { Ban,Check,ChevronRight,Eye,ListPlus,LoaderCircle,Pencil,Plus,RefreshCw,Search,Undo2,X } from 'lucide-vue-next';
+import { Ban,Check,Eye,ListPlus,LoaderCircle,Pencil,Plus,RefreshCw,Search,Undo2,X } from 'lucide-vue-next';
 import type { ServiceCatalogAdminItem,ServiceCatalogChange,ServicePositionMapping,ServiceStructure,ServiceStructureChange,ServiceStructureOptions,ServiceStructurePreview,SessionUser } from '@itsm/contracts';
 import { api,errorText } from '../api';
 import { createRequestKey } from '../request-key';
@@ -16,7 +16,7 @@ type Tab=StructureTab|'catalog'|'changes';
 type Person={id:string;name:string;groups:string[];dingLinked:boolean};
 const empty=():ServiceStructure=>({domains:[],systems:[],positions:[],appointments:[],mappings:[]});
 const copy=<T,>(value:T):T=>JSON.parse(JSON.stringify(value)) as T;
-const labels:Record<Tab,string>={domains:'责任域',systems:'业务系统',positions:'岗位',appointments:'任职人员',catalog:'目录维护',mappings:'服务映射',changes:'变更复核'};
+const labels:Record<Tab,string>={domains:'责任域',systems:'业务系统',positions:'岗位',appointments:'任职人员',catalog:'目录维护',mappings:'服务映射',changes:'变更记录'};
 const states:Record<string,string>={PENDING:'待独立复核',APPROVED:'已发布',REJECTED:'已拒绝'};
 const warningLabels:Record<string,string>={NO_CURRENT_APPOINTEE:'当前无有效任职人员',DING_ID_NOT_LINKED:'部分人员未绑定企业钉钉',CATALOG_NOT_PUBLISHED:'服务目录尚未发布'};
 const tab=ref<Tab>('domains'),draft=ref<ServiceStructure>(empty()),published=ref<ServiceStructure>(empty()),version=ref(1);
@@ -32,8 +32,7 @@ const config=computed(()=>inspecting.value?.config??draft.value);
 const dirty=computed(()=>!!catalogChange.value||JSON.stringify(draft.value)!==JSON.stringify(published.value));
 const structureTab=computed(()=>tab.value!=='catalog'&&tab.value!=='changes'?tab.value:undefined);
 const services=computed(()=>catalogChange.value?[...options.value.services.filter(s=>s.code!==catalogChange.value!.code),catalogChange.value]:options.value.services);
-const selectedPosition=computed(()=>draft.value.positions.find(row=>row.id===form.value.positionId));
-const eligiblePeople=computed(()=>people.value.filter(person=>person.groups.includes(selectedPosition.value?.groupId??'')));
+const eligiblePeople=computed(()=>people.value);
 const allPeople=computed(()=>new Map([...options.value.people,...people.value].map(person=>[person.id,person])));
 const domainName=(id:string)=>config.value.domains.find(row=>row.id===id)?.name??id;
 const systemName=(id:string|null)=>config.value.systems.find(row=>row.id===id)?.name??id??'—';
@@ -129,7 +128,7 @@ async function check(){
 }
 async function submit(){
   if(busy.value||!preview.value||!safe.value)return;busy.value=true;error.value='';
-  try{await api('/admin/service-structure',{method:'POST',body:body()});busy.value=false;await load();tab.value='changes';reason.value='';await nextTick();notice.value='配置已提交独立复核，尚未生效。';}
+  try{await api('/admin/service-structure/apply',{method:'POST',body:body()});busy.value=false;await load();reason.value='';await nextTick();notice.value='配置已保存并生效。';}
   catch(e){error.value=errorText(e);}finally{busy.value=false;}
 }
 function inspect(item:ServiceStructureChange){inspecting.value=item;tab.value='domains';editing.value=false;templateOpen.value=false;reviewReason.value='';reviewSafe.value=false;preview.value=undefined;error.value='';}
@@ -210,7 +209,7 @@ onMounted(load);
     </div>
     <section v-if="dirty&&!inspecting" class="detail-section publish-section" aria-label="配置发布">
       <h2>配置发布</h2><label>变更依据<textarea v-model="reason" maxlength="500" rows="2" required/></label><ContentBoundary v-model="safe"/>
-      <div class="structure-tools"><button :disabled="busy||!safe||!reason.trim()||editing||templateOpen" @click="check"><Eye :size="16"/>预览分派</button><button class="primary" :disabled="busy||!safe||!preview||editing||templateOpen" @click="submit"><LoaderCircle v-if="busy" class="spin" :size="16"/><ChevronRight v-else :size="16"/>提交复核</button></div>
+      <div class="structure-tools"><button :disabled="busy||!safe||!reason.trim()||editing||templateOpen" @click="check"><Eye :size="16"/>预览分派</button><button class="primary" :disabled="busy||!safe||!preview||editing||templateOpen" @click="submit"><LoaderCircle v-if="busy" class="spin" :size="16"/><Check v-else :size="16"/>保存并生效</button></div>
       <ul v-if="preview" class="routing-preview"><li v-for="r in preview" :key="r.serviceCode"><strong>{{serviceName(r.serviceCode)}}</strong> · {{r.enabled?groupName(r.groupId):'停用'}} · {{positionName(r.primaryPositionId)}}<p>{{r.candidates.map(p=>`${p.name}（${p.duty==='PRIMARY'?'主处理':'备岗'}）`).join('、')||'暂无有效任职人员'}}</p><p v-for="warning in r.warnings" :key="warning" class="danger-text">{{warningLabels[warning]??warning}}</p></li></ul>
     </section>
     </template>

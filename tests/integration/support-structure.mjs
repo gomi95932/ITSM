@@ -24,7 +24,8 @@ assert.equal((await request('','employee-1')).status,404);
 const admin=await ok(request());assert.equal(admin.canManageGroups,true);assert.equal(admin.canReview,true);
 assert.equal((await ok(request('/people?q=Support'))).items.some(row=>row.id===one),true);
 assert.equal((await ok(request('/people?q=S'))).items.length,0);
-assert.equal((await ok(request('/people?q=demo-admin-1'))).items.some(row=>row.id==='demo-admin-1'),false);
+assert.equal((await ok(request('/people?q=demo-admin-1'))).items.some(row=>row.id==='demo-admin-1'),true,
+  'platform administrators can select themselves for support duties');
 let p=await ok(propose('GROUP_CREATE',null,{config:{name:'自定义研发支持组',description:'CI fixture'}}));
 assert.equal((await review(p,'demo-admin-1')).status,403);
 await ok(review(p));

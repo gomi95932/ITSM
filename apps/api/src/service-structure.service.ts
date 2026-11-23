@@ -11,10 +11,11 @@ import { supportDecision } from './support-policy.js';
 import { preserveStructureIds,serviceStructure,structureProposal,structureUuid } from './service-structure-policy.js';
 import { serviceCatalogChange } from './service-catalog-policy.js';
 import { applyCatalogBundle,catalogAdminRows,validateCatalogBundle } from './service-catalog-store.js';
+import { ensureAdminMembership } from './admin-membership.js';
 
 type Client=Pick<PoolClient,'query'>;
 const columns=`id,expected_version AS "expectedVersion",config,proposed_by AS "proposedBy",reviewed_by AS "reviewedBy",
-  status,version,reason,review_reason AS "reviewReason",created_at AS "createdAt",reviewed_at AS "reviewedAt",catalog_change AS "catalogChange"`;
+  status,version,reason,review_reason AS "reviewReason",created_at AS "createdAt",reviewed_at AS "reviewedAt",catalog_change AS "catalogChange",management_mode AS "managementMode"`;
 
 @Injectable()
 export class ServiceStructureService {
@@ -57,22 +58,22 @@ export class ServiceStructureService {
     const groups=isAdmin?(await client.query('SELECT id AS group_id FROM support_groups WHERE enabled')).rows.map(r=>r.group_id)
       :(await client.query(`SELECT r.group_id FROM role_bindings r WHERE r.employee_id=$1 AND r.role_code='GROUP_LEAD'
       AND ${ROLE_EFFECTIVE_SQL}`,[actor.id])).rows.map(r=>r.group_id);
-    if(!groups.length)throw new NotFoundException();
+    if(!groups.length&&!isAdmin)throw new NotFoundException();
     const current=await this.current(client),positions=current.config.positions.filter(p=>groups.includes(p.groupId));
-    return {version:current.version,positions,items:current.config.appointments.filter(a=>positions.some(p=>p.id===a.positionId)),
+    return {version:current.version,canApply:isAdmin,positions,items:current.config.appointments.filter(a=>positions.some(p=>p.id===a.positionId)),
       people:(await client.query(`SELECT e.id,e.display_name AS name,ARRAY(SELECT group_id FROM group_memberships WHERE employee_id=e.id) AS groups
-        FROM employees e WHERE e.active AND EXISTS(SELECT 1 FROM group_memberships m WHERE m.employee_id=e.id AND m.group_id=ANY($1::text[])) ORDER BY e.display_name,e.id LIMIT 1000`,[groups])).rows,
+        FROM employees e WHERE e.active AND ($2 OR EXISTS(SELECT 1 FROM group_memberships m WHERE m.employee_id=e.id AND m.group_id=ANY($1::text[]))) ORDER BY e.display_name,e.id LIMIT 1000`,[groups,isAdmin])).rows,
       proposals:(await client.query(`SELECT id,status,reason,review_reason AS "reviewReason",created_at AS "createdAt" FROM service_structure_proposals
         WHERE proposed_by=$1 ORDER BY created_at DESC LIMIT 50`,[actor.id])).rows};});}
 
-  async proposeAppointment(actor:Identity,body:unknown){
+  async proposeAppointment(actor:Identity,body:unknown,direct=false){
     const b=body as Record<string,unknown>;
     if(!b||typeof b!=='object'||Array.isArray(b)||Object.keys(b).some(k=>!['id','expectedVersion','appointment','reason','contentClass'].includes(k)))
       throw new BadRequestException({code:'INVALID_SERVICE_STRUCTURE'});
     const current=await this.current(this.db.pool),a=b.appointment as ServiceStructure['appointments'][number];
     if(!a||typeof a!=='object')throw new BadRequestException({code:'INVALID_SERVICE_STRUCTURE'});
     const config={...current.config,appointments:[...current.config.appointments.filter(row=>row.id!==a.id),a]};
-    const result=await this.propose(actor,{id:b.id,expectedVersion:b.expectedVersion,config,reason:b.reason,contentClass:b.contentClass});
+    const result=await this.propose(actor,{id:b.id,expectedVersion:b.expectedVersion,config,reason:b.reason,contentClass:b.contentClass},direct);
     return {id:result.id,status:result.status,version:result.version};
   }
 
@@ -147,7 +148,7 @@ export class ServiceStructureService {
     });
   }
 
-  private async validate(client:Client,config:ServiceStructure,previous:ServiceStructure,catalogChange?:ServiceCatalogChange):Promise<ServiceStructurePreview[]>{
+  private async validate(client:Client,config:ServiceStructure,previous:ServiceStructure,catalogChange?:ServiceCatalogChange,direct=false):Promise<ServiceStructurePreview[]>{
     preserveStructureIds(previous,config);
     const options=await this.options(client),groups=new Set(options.groups.map(row=>row.id));
     if(catalogChange){
@@ -166,7 +167,7 @@ export class ServiceStructureService {
     const positions=new Map(config.positions.map(row=>[row.id,row]));
     for(const a of config.appointments){
       const person=people.get(a.employeeId),position=positions.get(a.positionId)!;
-      if(!person||(a.enabled&&(!person.active||!person.groups.includes(position.groupId))))
+      if(!person||(a.enabled&&(!person.active||(!direct&&!person.groups.includes(position.groupId)))))
         throw new BadRequestException({code:'SERVICE_STRUCTURE_PERSON_UNAVAILABLE'});
       if(a.enabled&&process.env.NOTIFICATION_MODE==='dingtalk'&&!person.dingLinked)
         throw new BadRequestException({code:'SERVICE_STRUCTURE_DING_ID_REQUIRED'});
@@ -203,31 +204,33 @@ export class ServiceStructureService {
       await client.query('SELECT pg_advisory_xact_lock_shared($1)',[ROLE_AUTHORIZATION_LOCK]);await this.admin(client,actor.id);
       const current=await this.current(client);
       if(current.version!==input.expectedVersion)throw new ConflictException({code:'SERVICE_STRUCTURE_VERSION_CONFLICT'});
-      if(input.catalogChange)await validateCatalogBundle(client,actor.id,input.catalogChange,input.config);
-      return {items:await this.validate(client,input.config,current.config,input.catalogChange)};
+      if(input.catalogChange)await validateCatalogBundle(client,actor.id,input.catalogChange,input.config,true);
+      return {items:await this.validate(client,input.config,current.config,input.catalogChange,true)};
     });
   }
 
-  async propose(actor:Identity,body:unknown){
+  async propose(actor:Identity,body:unknown,direct=false){
     const input=structureProposal(body);
     await this.intake.requireGeneral(actor.id,input as unknown as Record<string,unknown>,'service-structure');
     return this.db.transaction(async client=>{
       await this.writer(client,actor.id,false);
+      if(direct)await this.admin(client,actor.id);
       const hash=createHash('sha256').update(JSON.stringify(input)).digest('hex');
       const old=await client.query(`SELECT ${columns},request_hash FROM service_structure_proposals WHERE id=$1`,[input.id]);
       if(old.rowCount){
-        if(old.rows[0].request_hash!==hash||old.rows[0].proposedBy!==actor.id)throw new ConflictException({code:'SERVICE_STRUCTURE_ID_CONFLICT'});
+        if(old.rows[0].request_hash!==hash||old.rows[0].proposedBy!==actor.id||old.rows[0].managementMode!==(direct?'ADMIN_DIRECT':'REVIEW'))throw new ConflictException({code:'SERVICE_STRUCTURE_ID_CONFLICT'});
         const {request_hash:_,...result}=old.rows[0];return result;
       }
       const current=await this.current(client);
       if(current.version!==input.expectedVersion)throw new ConflictException({code:'SERVICE_STRUCTURE_VERSION_CONFLICT'});
       await this.proposer(client,actor.id,current.config,input.config,input.catalogChange);
-      const catalogBase=input.catalogChange?await validateCatalogBundle(client,actor.id,input.catalogChange,input.config):undefined;
-      await this.validate(client,input.config,current.config,input.catalogChange);
-      const row=await client.query(`INSERT INTO service_structure_proposals(id,expected_version,config,request_hash,proposed_by,reason,catalog_change,catalog_base)
-        VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING ${columns}`,[input.id,input.expectedVersion,JSON.stringify(input.config),hash,actor.id,input.reason,
-          input.catalogChange?JSON.stringify(input.catalogChange):null,catalogBase?JSON.stringify(catalogBase):null]);
+      const catalogBase=input.catalogChange?await validateCatalogBundle(client,actor.id,input.catalogChange,input.config,direct):undefined;
+      await this.validate(client,input.config,current.config,input.catalogChange,direct);
+      const row=await client.query(`INSERT INTO service_structure_proposals(id,expected_version,config,request_hash,proposed_by,reason,catalog_change,catalog_base,management_mode)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING ${columns}`,[input.id,input.expectedVersion,JSON.stringify(input.config),hash,actor.id,input.reason,
+          input.catalogChange?JSON.stringify(input.catalogChange):null,catalogBase?JSON.stringify(catalogBase):null,direct?'ADMIN_DIRECT':'REVIEW']);
       await this.audit(client,input.id,actor.id,'PROPOSED',null,input.reason);
+      if(direct)return this.applyDecision(client,actor,input.id,{expectedVersion:row.rows[0].version,decision:'APPROVE',reason:input.reason},true);
       return row.rows[0];
     });
   }
@@ -254,10 +257,15 @@ export class ServiceStructureService {
     await this.intake.requireGeneral(actor.id,input as unknown as Record<string,unknown>,'service-structure');
     return this.db.transaction(async client=>{
       await this.writer(client,actor.id);
+      return this.applyDecision(client,actor,id,input);
+    });
+  }
+
+  private async applyDecision(client:PoolClient,actor:Identity,id:string,input:{expectedVersion:number;decision:'APPROVE'|'REJECT';reason:string},direct=false){
       const result=await client.query<ServiceStructureChange>(`SELECT ${columns} FROM service_structure_proposals WHERE id=$1 FOR UPDATE`,[id]);
       if(!result.rowCount)throw new NotFoundException();
       const p=result.rows[0];
-      if(p.proposedBy===actor.id)throw new ForbiddenException({code:'SERVICE_STRUCTURE_INDEPENDENT_REVIEW_REQUIRED'});
+      if(!direct&&p.proposedBy===actor.id)throw new ForbiddenException({code:'SERVICE_STRUCTURE_INDEPENDENT_REVIEW_REQUIRED'});
       if(p.status!=='PENDING'){
         if(p.version===input.expectedVersion+1&&p.reviewedBy===actor.id&&p.status===(input.decision==='APPROVE'?'APPROVED':'REJECTED')&&p.reviewReason===input.reason)return p;
         throw new ConflictException({code:'SERVICE_STRUCTURE_VERSION_CONFLICT'});
@@ -270,18 +278,22 @@ export class ServiceStructureService {
           throw new ConflictException({code:'SERVICE_STRUCTURE_PROPOSER_UNAVAILABLE'});
         await this.proposer(client,p.proposedBy,current.config,config,p.catalogChange??undefined);
         if(current.version!==p.expectedVersion)throw new ConflictException({code:'SERVICE_STRUCTURE_VERSION_CONFLICT'});
-        if(this.affected(current.config,config).has(actor.id))throw new ForbiddenException({code:'SERVICE_STRUCTURE_INDEPENDENT_REVIEW_REQUIRED'});
+        if(!direct&&this.affected(current.config,config).has(actor.id))throw new ForbiddenException({code:'SERVICE_STRUCTURE_INDEPENDENT_REVIEW_REQUIRED'});
         const catalogChange=p.catalogChange?serviceCatalogChange(p.catalogChange):undefined;
         if(catalogChange){
-          if(catalogChange.initialPublisherId===actor.id||catalogChange.approval?.steps.some(step=>step.approverId===actor.id))
+          if(!direct&&(catalogChange.initialPublisherId===actor.id||catalogChange.approval?.steps.some(step=>step.approverId===actor.id)))
             throw new ForbiddenException({code:'SERVICE_STRUCTURE_INDEPENDENT_REVIEW_REQUIRED'});
-          await validateCatalogBundle(client,p.proposedBy,catalogChange,config);
+          await validateCatalogBundle(client,p.proposedBy,catalogChange,config,direct);
           const unchanged=await client.query(`SELECT catalog_base IS NOT DISTINCT FROM
             (SELECT to_jsonb(c) FROM service_catalog c WHERE c.code=$2) AS unchanged FROM service_structure_proposals WHERE id=$1`,[id,catalogChange.code]);
           if(!unchanged.rows[0].unchanged)throw new ConflictException({code:'FORM_VERSION_CONFLICT'});
         }
-        const preview=await this.validate(client,config,current.config,catalogChange);
+        const preview=await this.validate(client,config,current.config,catalogChange,direct);
         if(preview.some(row=>row.enabled&&!row.candidates.length))throw new ConflictException({code:'SERVICE_STRUCTURE_COVERAGE_REQUIRED'});
+        if(direct)for(const appointment of config.appointments.filter(a=>a.enabled)){
+          const position=config.positions.find(p=>p.id===appointment.positionId)!;
+          await ensureAdminMembership(client,actor.id,appointment.employeeId,position.groupId,input.reason);
+        }
         published=current.version+1;
         await client.query('INSERT INTO service_structure_versions(version,config,proposal_id) VALUES($1,$2,$3)',[published,JSON.stringify(config),id]);
         if(catalogChange)await applyCatalogBundle(client,p.proposedBy,id,published,catalogChange);
@@ -291,7 +303,6 @@ export class ServiceStructureService {
         reviewed_at=now(),version=version+1 WHERE id=$1 RETURNING ${columns}`,[id,input.decision==='APPROVE'?'APPROVED':'REJECTED',actor.id,input.reason]);
       await this.audit(client,id,actor.id,input.decision==='APPROVE'?'APPROVED':'REJECTED',published,input.reason);
       return updated.rows[0];
-    });
   }
 
   private async audit(client:PoolClient,id:string,actor:string,action:string,version:number|null,reason:string){

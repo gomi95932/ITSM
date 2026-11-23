@@ -53,6 +53,8 @@ jobs:
         run: node tests/integration/notification-authorization-performance.mjs
       - name: Verify one-time real administrator handoff in an isolated database
         run: node tests/integration/admin-handoff.mjs
+      - name: Verify direct administrator configuration and atomic rollback in an isolated database
+        run: node tests/integration/admin-configuration.mjs
 
   build-test:
     runs-on: ubuntu-latest

@@ -30,6 +30,7 @@ export interface ServiceCatalogAdminItem {
   approval:ServiceCatalogChange['approval'];maxValidityDays:number|null;canPropose:boolean;
 }
 export interface ServiceStructureChange {
+  managementMode?:'REVIEW'|'ADMIN_DIRECT';
   id:string;expectedVersion:number;config:ServiceStructure;proposedBy:string;reviewedBy:string|null;
   status:'PENDING'|'APPROVED'|'REJECTED';version:number;reason:string;reviewReason:string|null;
   createdAt:string;reviewedAt:string|null;
