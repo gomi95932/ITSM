@@ -36,6 +36,8 @@ import { OidcService } from './oidc.service.js';
 import { OperationsController } from './operations.controller.js';
 import { DingtalkWebController } from './dingtalk-web.controller.js';
 import { DingtalkWebService } from './dingtalk-web.service.js';
+import { CatalogNavigationController } from './catalog-navigation.controller.js';
+import { CatalogNavigationService } from './catalog-navigation.service.js';
 
-@Module({ controllers: [DingtalkWebController,OperationsController,OidcController,SlaCalendarController,PriorityPolicyController,HealthController, TicketsController,AuthController,WorkspaceController,DelegationsController,RequestCatalogController,KnowledgeController,ReportsController,RolesController,RoutingConfigController,SupportController,ServiceStructureController,FulfillmentController,DirectoryController,AttachmentsController], providers: [Database,AuthService,DingtalkWebService,OidcService,TicketsService,SlaService,IntakePolicyService,RequestCatalogService,KnowledgeService,RolesService,RoutingConfigService,SupportService,ServiceStructureService,FulfillmentService,VoiceAsrService,IntakeInterpreterService,AttachmentsService] })
+@Module({ controllers: [CatalogNavigationController,DingtalkWebController,OperationsController,OidcController,SlaCalendarController,PriorityPolicyController,HealthController, TicketsController,AuthController,WorkspaceController,DelegationsController,RequestCatalogController,KnowledgeController,ReportsController,RolesController,RoutingConfigController,SupportController,ServiceStructureController,FulfillmentController,DirectoryController,AttachmentsController], providers: [CatalogNavigationService,Database,AuthService,DingtalkWebService,OidcService,TicketsService,SlaService,IntakePolicyService,RequestCatalogService,KnowledgeService,RolesService,RoutingConfigService,SupportService,ServiceStructureService,FulfillmentService,VoiceAsrService,IntakeInterpreterService,AttachmentsService] })
 export class AppModule {}

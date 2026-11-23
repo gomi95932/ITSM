@@ -7,6 +7,7 @@ import { requestIntakePolicy } from './request-intake-policy.js';
 import { VoiceAsrService } from './voice-asr.service.js';
 import { voiceCandidate } from './voice-catalog.js';
 import { applyIntakeSuggestion, IntakeInterpreterService } from './intake-interpreter.service.js';
+import { initialCatalogPath } from './catalog-navigation-policy.js';
 type H = Record<string,string | undefined>;
 const auth = (h: H) => ({ devUser: h['x-dev-user'], cookie: h.cookie, csrf: h['x-csrf-token'] });
 
@@ -19,11 +20,17 @@ export class WorkspaceController {
   }
   @Get('catalog') async catalog(@Headers() h: H) {
     const actor = await this.identity.identity(auth(h));
-    const result = await this.db.pool.query(`SELECT c.*,v.snapshot FROM service_catalog c LEFT JOIN request_catalog_versions v
-      ON v.service_code=c.code AND v.form_version=c.form_version WHERE c.published=true AND (c.visible_groups='[]'::jsonb OR EXISTS
+    const result = await this.db.pool.query(`SELECT c.*,v.snapshot,n.path AS navigation_path,n."sortOrder" AS navigation_order
+      FROM service_catalog c LEFT JOIN request_catalog_versions v
+      ON v.service_code=c.code AND v.form_version=c.form_version
+      LEFT JOIN LATERAL (SELECT item->'path' AS path,(item->>'sortOrder')::integer AS "sortOrder"
+        FROM jsonb_array_elements((SELECT config FROM catalog_navigation_versions ORDER BY version DESC LIMIT 1)) item
+        WHERE item->>'serviceCode'=c.code) n ON true
+      WHERE c.published=true AND (c.visible_groups='[]'::jsonb OR EXISTS
       (SELECT 1 FROM group_memberships WHERE employee_id=$1 AND c.visible_groups ? group_id))
-      AND service_site_visible(c.code,$1) ORDER BY c.sort_order,c.code`,[actor.id]);
+      AND service_site_visible(c.code,$1) ORDER BY COALESCE(n."sortOrder",c.sort_order),c.code`,[actor.id]);
     return { items: result.rows.map(r => ({ code:r.code,name:r.name || r.code,description:r.description,type:r.type,formVersion:r.form_version,fields:r.field_schema,
+      navigationPath:r.navigation_path??initialCatalogPath(r.code),navigationOrder:r.navigation_order??r.sort_order,
       available:['INC','GEN'].includes(r.type)||(r.type==='REQ'&&!!r.snapshot?.approval?.steps?.length
         &&!!requestIntakePolicy(process.env,r.code,r.form_version)),maxValidityDays:r.type==='REQ'?r.snapshot?.maxValidityDays??null:null })) };
   }

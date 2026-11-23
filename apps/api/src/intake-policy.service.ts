@@ -2,7 +2,7 @@ import { BadRequestException, ForbiddenException, Injectable } from '@nestjs/com
 import { Database } from './database.service.js';
 import { voiceConfiguration } from './voice-asr.service.js';
 
-type IntakeChannel = 'ticket-create' | 'ticket-action' | 'ticket-feedback' | 'voice-interpret' | 'voice-transcribe' | 'priority-review' | 'classification' | 'request-catalog' | 'knowledge' | 'role-proposal' | 'role-decision' | 'routing-config' | 'support-structure' | 'service-structure' | 'fulfillment' | 'attachment' | 'sla-calendar' | 'operations';
+type IntakeChannel = 'ticket-create' | 'ticket-action' | 'ticket-feedback' | 'voice-interpret' | 'voice-transcribe' | 'priority-review' | 'classification' | 'request-catalog' | 'knowledge' | 'role-proposal' | 'role-decision' | 'routing-config' | 'support-structure' | 'service-structure' | 'catalog-navigation' | 'fulfillment' | 'attachment' | 'sla-calendar' | 'operations';
 type Denial = 'CONTENT_DECLARATION_REQUIRED' | 'SECURITY_CHANNEL_REQUIRED';
 
 const sensitivePatterns = [
