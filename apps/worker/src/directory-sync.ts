@@ -21,7 +21,7 @@ export function directorySettings(env:NodeJS.ProcessEnv):DirectorySettings|undef
   return {corpId:env.DINGTALK_CORP_ID.trim(),roots:roots.map(Number),retireMissing:env.DIRECTORY_RETIRE_MISSING==='true',maxRemovalPercent:percent,
     pilotUserIds:mode==='authorized'?undefined:dingtalkPilotUsers(env),timeoutMs:mode==='authorized'?900000:120000};
 }
-const safeErrors=new Set(['DIRECTORY_PROVIDER_INVALID','DIRECTORY_PROVIDER_UNAVAILABLE','DIRECTORY_TOKEN_UNAVAILABLE',
+const safeErrors=new Set(['DIRECTORY_PROVIDER_INVALID','DIRECTORY_PROVIDER_UNAVAILABLE','DIRECTORY_PROVIDER_TRANSIENT','DIRECTORY_TOKEN_UNAVAILABLE',
   'DIRECTORY_EMPTY_SNAPSHOT','DIRECTORY_SCOPE_TOO_LARGE','DIRECTORY_SNAPSHOT_CHANGED','DIRECTORY_IDENTITY_CONFLICT','DIRECTORY_REMOVAL_LIMIT',
   'DIRECTORY_PILOT_PERSON_MISSING']);
 
