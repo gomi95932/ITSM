@@ -176,8 +176,9 @@ export class ServiceStructureService {
     const periods=new Map<string,typeof config.appointments>();
     for(const a of config.appointments.filter(row=>row.enabled)){
       const key=JSON.stringify([a.positionId,a.employeeId]),existing=periods.get(key)??[];
-      if(existing.some(row=>Date.parse(row.validFrom)<Date.parse(a.validTo)&&Date.parse(a.validFrom)<Date.parse(row.validTo)))
-        throw new BadRequestException({code:'SERVICE_STRUCTURE_APPOINTMENT_OVERLAP'});
+      if(existing.some(row=>Date.parse(row.validFrom)<(a.validTo===null?Infinity:Date.parse(a.validTo))
+        &&Date.parse(a.validFrom)<(row.validTo===null?Infinity:Date.parse(row.validTo))))
+        throw new BadRequestException({code:'SERVICE_STRUCTURE_APPOINTMENT_OVERLAP',appointmentId:a.id});
       existing.push(a);periods.set(key,existing);
     }
     const clock=(await client.query<{now:Date}>('SELECT clock_timestamp() AS now')).rows[0].now.getTime();
@@ -186,7 +187,8 @@ export class ServiceStructureService {
       if(!service)throw new BadRequestException({code:'SERVICE_STRUCTURE_SERVICE_UNAVAILABLE'});
       // Catalog ownership may change only through the explicit reviewed bundle.
       if(mapping.enabled&&position.groupId!==service.groupId)throw new BadRequestException({code:'SERVICE_STRUCTURE_GROUP_MISMATCH'});
-      const candidates=config.appointments.filter(a=>a.enabled&&a.positionId===position.id&&Date.parse(a.validFrom)<=clock&&clock<Date.parse(a.validTo))
+      const candidates=config.appointments.filter(a=>a.enabled&&a.positionId===position.id&&Date.parse(a.validFrom)<=clock
+        &&(a.validTo===null||clock<Date.parse(a.validTo)))
         .map(a=>({id:a.employeeId,name:people.get(a.employeeId)!.name,duty:a.duty,dingLinked:people.get(a.employeeId)!.dingLinked}))
         .sort((a,b)=>Number(a.duty==='BACKUP')-Number(b.duty==='BACKUP')||a.id.localeCompare(b.id));
       const warnings:string[]=[];

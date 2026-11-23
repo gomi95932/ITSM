@@ -231,7 +231,8 @@ export class SupportService {
     }
     await client.query(`DELETE FROM request_catalog_publishers p USING service_catalog c WHERE p.service_code=c.code AND p.employee_id=$1 AND c.group_id=$2`,[employee,group]);
     if((await client.query(`SELECT 1 FROM position_appointments a JOIN support_positions p ON p.id=a."positionId"
-      WHERE a."employeeId"=$1 AND p."groupId"=$2 AND a.enabled AND a."validTo">clock_timestamp() LIMIT 1`,[employee,group])).rowCount)
+      WHERE a."employeeId"=$1 AND p."groupId"=$2 AND a.enabled
+        AND (a."validTo" IS NULL OR a."validTo">clock_timestamp()) LIMIT 1`,[employee,group])).rowCount)
       throw new ConflictException({code:'SUPPORT_POSITION_APPOINTMENT_ACTIVE'});
     await client.query('DELETE FROM priority_reviewers WHERE employee_id=$1 AND group_id=$2',[employee,group]);
     await client.query('DELETE FROM knowledge_editors WHERE employee_id=$1 AND group_id=$2',[employee,group]);

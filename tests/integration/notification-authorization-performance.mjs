@@ -25,7 +25,7 @@ try{
       current.domains.push({id:domain,name:'CI notification',enabled:true});
       current.positions.push({id:position,name:'CI notification',domainId:domain,groupId:group,enabled:true});
       current.appointments.push({id:randomUUID(),positionId:position,employeeId:engineer,duty:'PRIMARY',enabled:true,
-        validFrom:new Date(Date.now()-60000).toISOString(),validTo:new Date(Date.now()+86400000).toISOString()});
+        validFrom:new Date(Date.now()-60000).toISOString(),validTo:null});
       await pool.query(`INSERT INTO service_structure_versions(version,config)
         SELECT version+1,$1 FROM service_structure_current WHERE id`,[JSON.stringify(current)]);
       await pool.query('UPDATE service_structure_current SET version=version+1 WHERE id');
