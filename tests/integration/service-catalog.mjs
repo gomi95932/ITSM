@@ -86,8 +86,10 @@ await publish((await current()).config,{...edited,expectedVersion:4,published:tr
 const req={...change,code:reqCode,type:'REQ',name:'实验资源申请',approval:{templateId:'CI-LAB-OA',steps:[{role:'MANAGER'}]},
   maxValidityDays:30,initialPublisherId:'demo-admin-1'};
 next=structuredClone((await current()).config);next.mappings.push({...next.mappings.find(m=>m.serviceCode===code),serviceCode:reqCode});
-assert.equal((await request(path,'demo-admin-1',await body(next,req))).data.code,'CATALOG_INITIAL_PUBLISHER_REQUIRED');
 const wasMember=await sql("SELECT count(*) FROM group_memberships WHERE employee_id='demo-admin-1' AND group_id='service-desk'");
+// Earlier admin configuration scenarios may already have enrolled this fixture.
+await sql("DELETE FROM group_memberships WHERE employee_id='demo-admin-1' AND group_id='service-desk'");
+assert.equal((await request(path,'demo-admin-1',await body(next,req))).data.code,'CATALOG_INITIAL_PUBLISHER_REQUIRED');
 await sql("INSERT INTO group_memberships(employee_id,group_id) VALUES('demo-admin-1','service-desk') ON CONFLICT DO NOTHING");
 await publish(next,req);
 assert.equal(await sql(`SELECT count(*) FROM request_catalog_publishers WHERE service_code=${quote(reqCode)} AND employee_id='demo-admin-1'`),'1');
