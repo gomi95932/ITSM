@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
+import {performance} from 'node:perf_hooks';
 import pg from 'pg';
-import {expandPendingNotifications,refreshFulfillmentNotificationAudiences,refreshWaitingNotificationAudiences}
+import {notificationRecipients,expandPendingNotifications,refreshFulfillmentNotificationAudiences,refreshWaitingNotificationAudiences}
   from '../../apps/worker/dist/notification-audience.js';
 
 if(process.env.GITHUB_ACTIONS!=='true'||process.env.DB_HOST!=='127.0.0.1'||process.env.ITSM_SEED_DEV_DATA!=='true')
@@ -16,16 +17,30 @@ try{
     await pool.query('INSERT INTO employees(id,display_name) VALUES($1,$1)',[engineer]);
     await pool.query('INSERT INTO group_memberships(employee_id,group_id) VALUES($1,$2)',[engineer,group]);
     await pool.query("INSERT INTO service_catalog(code,type,form_version,group_id,name) VALUES($1,'REQ',1,$1,'CI notification fixture')",[group]);
+    let routing={};
+    if(kind==='fulfillment'){
+      const position=`position-${randomUUID()}`,domain=`domain-${randomUUID()}`;
+      const current=(await pool.query(`SELECT v.config FROM service_structure_current c
+        JOIN service_structure_versions v ON v.version=c.version WHERE c.id`)).rows[0].config;
+      current.domains.push({id:domain,name:'CI notification',enabled:true});
+      current.positions.push({id:position,name:'CI notification',domainId:domain,groupId:group,enabled:true});
+      current.appointments.push({id:randomUUID(),positionId:position,employeeId:engineer,duty:'PRIMARY',enabled:true,
+        validFrom:new Date(Date.now()-60000).toISOString(),validTo:new Date(Date.now()+86400000).toISOString()});
+      await pool.query(`INSERT INTO service_structure_versions(version,config)
+        SELECT version+1,$1 FROM service_structure_current WHERE id`,[JSON.stringify(current)]);
+      await pool.query('UPDATE service_structure_current SET version=version+1 WHERE id');
+      routing={positions:[{id:position,groupId:group}]};
+    }
     for(let i=0;i<21;i++){
       const ticket=randomUUID(),event=randomUUID(),outbox=randomUUID();ids.push(outbox);
       const action=kind==='waiting'?'WAITING_VENDOR_FOLLOW_UP_DUE':kind==='fulfillment'?'FULFILLMENT_REVOKE_REQUIRED':'ACCEPT';
       await pool.query(`INSERT INTO tickets(id,number,requester_id,submitted_by_id,owner_group_id,assignee_id,service_code,
         service_type,form_version,subject,description,fields,impact,urgency,priority,status,
-        waiting_reason_code,waiting_since,waiting_due_at)
+        waiting_reason_code,waiting_since,waiting_due_at,service_routing_snapshot)
         VALUES($1::uuid,$1::text,'employee-1','employee-1',$2,$3,$2,'REQ',1,'CI notification','Synthetic fixture',
           '{}','INDIVIDUAL','LOW','P4',$4,CASE WHEN $5 THEN 'VENDOR_SUPPORT' END,
-          CASE WHEN $5 THEN now()-interval '2 hours' END,CASE WHEN $5 THEN now()-interval '1 hour' END)`,
-      [ticket,group,engineer,kind==='waiting'?'WAITING_VENDOR':'IN_PROGRESS',kind==='waiting']);
+          CASE WHEN $5 THEN now()-interval '2 hours' END,CASE WHEN $5 THEN now()-interval '1 hour' END,$6)`,
+      [ticket,group,engineer,kind==='waiting'?'WAITING_VENDOR':'IN_PROGRESS',kind==='waiting',JSON.stringify(routing)]);
       await pool.query(`INSERT INTO ticket_events(id,ticket_id,actor_id,action,to_status,request_id)
         VALUES($1::uuid,$2,'system:scheduler',$3,'IN_PROGRESS',$1::uuid::text)`,[event,ticket,action]);
       if(kind==='waiting')await pool.query(`INSERT INTO ticket_waiting_signals(ticket_id,group_id,waiting_status,
@@ -44,6 +59,23 @@ try{
       }
       await pool.query(`INSERT INTO outbox_events(id,ticket_id,event_id,kind,payload,expanded_at)
         VALUES($1,$2,$3,'TICKET_CHANGED','{}',CASE WHEN $4 THEN now() END)`,[outbox,ticket,event,kind!=='expand']);
+    }
+    if(kind==='fulfillment'){
+      const event=(await pool.query('SELECT event_id FROM outbox_events WHERE id=$1',[ids[0]])).rows[0].event_id;
+      const client=await pool.connect();
+      try{
+        await client.query('BEGIN');
+        for(const jit of ['on','off']){
+          await client.query(`SET LOCAL jit=${jit}`);
+          const start=performance.now();
+          assert.deepEqual(await notificationRecipients(client,event),[engineer]);
+          const elapsedMs=performance.now()-start;
+          assert.ok(elapsedMs<1000,`fulfillment recipients must release authorization writers promptly (jit=${jit}, ${elapsedMs}ms)`);
+          assert.deepEqual(await notificationRecipients(client,event,engineer),[engineer]);
+          assert.deepEqual(await notificationRecipients(client,event,'employee-1'),[]);
+          console.log(JSON.stringify({operation:'notification-fulfillment-query',jit,elapsedMs,status:'passed'}));
+        }
+      }finally{await client.query('ROLLBACK');client.release();}
     }
     let releaseFirst,markFirst,firstId,maintenance,writer,pendingWriter;
     const firstMayContinue=new Promise(resolve=>{releaseFirst=resolve;});
