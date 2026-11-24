@@ -7,14 +7,26 @@ SELECT 'ticket:'||a.id AS id,'tickets'::text AS module,a.actor_id,
   a.before_value,a.after_value,NULL::text AS execution_principal
 FROM audit_logs a JOIN tickets t ON t.id=a.ticket_id
 UNION ALL
-SELECT 'structure:'||a.id,'service-structure',a.actor_id,p.id::text,'服务组织 / 岗位任职',
+SELECT 'structure:'||a.id,'service-structure',a.actor_id,p.id::text,
+  CASE WHEN p.catalog_change IS NULL THEN '服务组织 / 岗位任职' ELSE '服务目录 / '||(p.catalog_change->>'code') END,
   CASE WHEN p.management_mode='ADMIN_DIRECT' AND a.action='APPROVED' THEN 'APPLIED' ELSE a.action END,
   CASE a.action WHEN 'PROPOSED' THEN 'SUBMITTED' WHEN 'REJECTED' THEN 'REJECTED' ELSE 'APPLIED' END,
   a.reason,a.created_at,'service_structure_audits',a.id::text,NULL,
-  v.config,CASE WHEN a.action='APPROVED' THEN n.config ELSE p.config END,NULL
+  v.config||CASE WHEN p.catalog_change IS NULL THEN '{}'::jsonb ELSE jsonb_build_object('catalogChange',
+    CASE WHEN p.catalog_base IS NULL THEN NULL ELSE COALESCE(previous_catalog.snapshot,jsonb_build_object(
+      'code',p.catalog_base->'code','type',p.catalog_base->'type','formVersion',p.catalog_base->'form_version',
+      'published',p.catalog_base->'published','name',p.catalog_base->'name','description',p.catalog_base->'description',
+      'groupId',p.catalog_base->'group_id','visibleGroups',p.catalog_base->'visible_groups',
+      'fields',p.catalog_base->'field_schema','sortOrder',p.catalog_base->'sort_order')) END) END,
+  (CASE WHEN a.action='APPROVED' THEN n.config ELSE p.config END)||
+    CASE WHEN p.catalog_change IS NULL THEN '{}'::jsonb ELSE jsonb_build_object('catalogChange',
+      CASE WHEN a.action='APPROVED' THEN published_catalog.snapshot ELSE p.catalog_change END) END,NULL
 FROM service_structure_audits a JOIN service_structure_proposals p ON p.id=a.proposal_id
 LEFT JOIN service_structure_versions v ON v.version=p.expected_version
 LEFT JOIN service_structure_versions n ON n.version=a.published_version
+LEFT JOIN service_catalog_revisions published_catalog ON published_catalog.proposal_id=p.id
+LEFT JOIN service_catalog_revisions previous_catalog ON previous_catalog.service_code=p.catalog_base->>'code'
+  AND previous_catalog.form_version=(p.catalog_base->>'form_version')::integer
 UNION ALL
 SELECT 'support:'||a.id,'support',a.actor_id,p.group_id,p.group_id,
   p.kind||'_'||CASE WHEN p.management_mode='ADMIN_DIRECT' AND a.action='APPROVED' THEN 'APPLIED' ELSE a.action END,

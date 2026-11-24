@@ -1,4 +1,5 @@
 import { test,expect } from './fixtures';
+import {recordedOperation} from './operation-log-helpers';
 
 test('administrators directly add, rename and disable custom domains without a release',async({page})=>{
   test.setTimeout(60000);
@@ -23,12 +24,14 @@ test('administrators directly add, rename and disable custom domains without a r
     await expect(publish.getByRole('button',{name:'保存并生效',exact:true})).toBeEnabled();
     await publish.getByRole('button',{name:'保存并生效',exact:true}).click();
     await expect(page.getByRole('status')).toContainText('配置已保存并生效');
-    await page.getByRole('tab',{name:'变更记录',exact:true}).click();
-    const row=page.getByRole('row').filter({hasText:reason});
-    await expect(row).toContainText('已发布');
-    await row.getByRole('button',{name:'查看完整配置',exact:true}).click();
+    const row=await recordedOperation(page,'service-structure',reason);
+    await row.getByRole('button',{name:/^查看日志 /}).click();
+    const detail=page.getByRole('dialog',{name:'操作日志详情'});
+    await expect(detail).toContainText(name);
+    await expect(detail).toContainText('service_structure_audits');
     await expect(page.getByRole('button',{name:'批准发布',exact:true})).toHaveCount(0);
-    await page.getByRole('button',{name:'返回编辑配置',exact:true}).click();
+    await detail.getByRole('button',{name:'关闭日志详情'}).click();
+    await page.getByRole('button',{name:'服务组织',exact:true}).click();
     await page.getByRole('tab',{name:'责任域',exact:true}).click();
   }
   await propose(`新增 ${name}`);

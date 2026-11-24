@@ -6,6 +6,7 @@ import pg from 'pg';
 import {RolesService} from '../../apps/api/dist/roles.service.js';
 import {SupportService} from '../../apps/api/dist/support.service.js';
 import {ServiceStructureService} from '../../apps/api/dist/service-structure.service.js';
+import {OperationLogsService} from '../../apps/api/dist/operation-logs.service.js';
 
 if(process.env.GITHUB_ACTIONS!=='true'||process.env.DB_HOST!=='127.0.0.1'||process.env.ITSM_SEED_DEV_DATA!=='true')
   throw new Error('DISPOSABLE_ADMIN_CONFIGURATION_CI_ONLY');
@@ -109,6 +110,12 @@ try{
   const preview=await structure.preview(admin,bundle);
   assert.deepEqual(preview.items.find(x=>x.serviceCode===catalogChange.code).candidates.map(p=>p.id).sort(),[admin.id,'employee-2'].sort());
   await structure.propose(admin,bundle,true);
+  const logs=new OperationLogsService(db);
+  const catalogLog=(await logs.list(admin,{module:'service-structure',object:bundle.id,result:'APPLIED'})).items[0];
+  const originalCatalogLog=await logs.detail(admin,catalogLog.id);
+  assert.equal(originalCatalogLog.beforeValue.catalogChange,null);
+  assert.equal(originalCatalogLog.afterValue.catalogChange.code,catalogChange.code);
+  assert.equal(originalCatalogLog.afterValue.catalogChange.formVersion,1);
   assert.equal((await pool.query('SELECT published FROM service_catalog WHERE code=$1',[catalogChange.code])).rows[0].published,true);
   current=await structure.list(admin);
   const beforeFailure=await snapshot();
@@ -135,6 +142,16 @@ try{
     approval:{templateId:'DISPOSABLE',steps:[{role:'MANAGER'}]}};
   await structure.propose(admin,{id:randomUUID(),expectedVersion:current.version,config:reqConfig,catalogChange:req,...basis},true);
   assert.equal((await pool.query('SELECT count(*)::int n FROM request_catalog_publishers WHERE service_code=$1',[req.code])).rows[0].n,1);
+  current=await structure.list(admin);
+  const edit={id:randomUUID(),expectedVersion:current.version,config:current.config,
+    catalogChange:{...catalogChange,expectedVersion:1,name:'Updated custom service',fields:[{key:'device',label:'Device identifier',required:true}]},...basis};
+  await structure.propose(admin,edit,true);
+  const editedLog=(await logs.list(admin,{module:'service-structure',object:edit.id,result:'APPLIED'})).items[0];
+  const editedDetail=await logs.detail(admin,editedLog.id);
+  assert.equal(editedDetail.beforeValue.catalogChange.name,catalogChange.name);
+  assert.equal(editedDetail.afterValue.catalogChange.fields[0].label,'Device identifier');
+  assert.ok(editedDetail.changes.some(change=>change.field==='catalogChange.name'));
+  assert.deepEqual(await logs.detail(admin,catalogLog.id),originalCatalogLog,'later catalog edits cannot rewrite historical snapshots');
   const revoked=await roles.decide(admin,binding.id,{expectedVersion:binding.version,...basis},true);
   assert.equal(revoked.effective,false);
   assert.equal((await pool.query('SELECT 1 FROM group_memberships WHERE employee_id=$1 AND group_id=$2',[employee.id,group])).rowCount,1,
