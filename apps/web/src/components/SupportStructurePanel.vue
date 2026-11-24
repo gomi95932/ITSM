@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed,onBeforeUnmount,onMounted,ref,watch } from 'vue';
+import { computed,nextTick,onBeforeUnmount,onMounted,ref,watch } from 'vue';
 import { Check,ChevronLeft,ChevronRight,History,LoaderCircle,Pencil,Plus,Power,RotateCcw,RefreshCw,Search,UserMinus,UserPlus,X } from 'lucide-vue-next';
 import type { SessionUser,SupportAuditView,SupportChangeInput,SupportChangeKind,SupportChangeView,SupportDependenciesView,SupportGroupView,SupportMembersView,SupportPeopleView,SupportStructureView } from '@itsm/contracts';
 import { api,errorText } from '../api';
@@ -19,6 +19,7 @@ const tab=ref<'groups'|'changes'>('groups'),groups=ref<SupportGroupView[]>([]),i
 const groupsMore=ref(false),proposalsMore=ref(false),canManageGroups=ref(false),canReview=ref(false);
 const selected=ref(''),memberQuery=ref(''),appliedQuery=ref(''),members=ref<SupportMembersView>(),membersLoading=ref(false);
 const loading=ref(true),busy=ref(false),error=ref(''),notice=ref('');
+const editor=ref<HTMLElement>();
 const editing=ref<{kind:SupportChangeKind;groupId:string;expectedGroupVersion:number|null;employeeId?:string;employeeName?:string}>();
 const groupCode=ref(''),name=ref(''),description=ref(''),reason=ref(''),safe=ref(false),proposalId=ref(createRequestKey());
 const query=ref(''),people=ref<SupportPeopleView>({items:[],hasMore:false}),searched=ref(false),peopleLoading=ref(false),employeeId=ref('');
@@ -62,7 +63,7 @@ async function selectGroup(){
   members.value=undefined;memberQuery.value='';appliedQuery.value='';notice.value='';await loadMembers();
 }
 async function searchMembers(){appliedQuery.value=memberQuery.value.trim();await loadMembers();}
-function open(kind:SupportChangeKind,employee?:{id:string;name:string}){
+async function open(kind:SupportChangeKind,employee?:{id:string;name:string}){
   const group=selectedGroup.value;if(kind!=='GROUP_CREATE'&&!group)return;
   editing.value={kind,groupId:kind==='GROUP_CREATE'?'':group!.id,expectedGroupVersion:kind==='GROUP_CREATE'?null:group!.version,
     ...(employee?{employeeId:employee.id,employeeName:employee.name}:{})};
@@ -71,6 +72,10 @@ function open(kind:SupportChangeKind,employee?:{id:string;name:string}){
   query.value='';employeeId.value='';people.value={items:[],hasMore:false};searched.value=false;error.value='';notice.value='';
   dependencies.value=undefined;++dependencyGeneration;dependencyLoading.value=false;
   if(kind==='GROUP_DISABLE')void loadDependencies(group!.id);
+  await nextTick();
+  if(!alive||!editing.value)return;
+  editor.value?.scrollIntoView({block:'start'});
+  editor.value?.querySelector<HTMLInputElement|HTMLTextAreaElement>('input,textarea')?.focus({preventScroll:true});
 }
 function closeEditor(){editing.value=undefined;++peopleGeneration;peopleLoading.value=false;++dependencyGeneration;dependencyLoading.value=false;}
 async function loadDependencies(group:string){
@@ -130,7 +135,7 @@ onBeforeUnmount(()=>{alive=false;++memberGeneration;++peopleGeneration;++depende
 
 <template>
   <div class="support-panel">
-    <p v-if="error&&!decision" class="error-banner" role="alert">{{error}}</p>
+    <p v-if="error&&!decision&&!editing" class="error-banner" role="alert">{{error}}</p>
     <p v-if="notice" class="support-notice" role="status">{{notice}}</p>
     <div class="section-heading"><div class="support-tabs" role="tablist" aria-label="支持组管理视图">
       <button role="tab" :aria-selected="tab==='groups'" :disabled="!!editing||busy" @click="tab='groups'">支持组与成员</button>
@@ -141,8 +146,9 @@ onBeforeUnmount(()=>{alive=false;++memberGeneration;++peopleGeneration;++depende
     </div></div>
     <p v-if="groupsMore" class="danger-text">支持组仅显示前 200 条，清单尚未完整。</p>
 
-    <section v-if="editing" class="detail-section support-editor" :aria-label="kinds[editing.kind]">
+    <section v-if="editing" ref="editor" class="detail-section support-editor" :aria-label="kinds[editing.kind]">
       <div class="section-heading"><h2>{{kinds[editing.kind]}}</h2><button class="icon-button" title="取消编辑" aria-label="取消编辑" :disabled="busy" @click="closeEditor"><X :size="17"/></button></div>
+      <p v-if="error" class="error-banner" role="alert">{{error}}</p>
       <form class="action-form" @submit.prevent="propose"><fieldset :disabled="busy" class="support-fields">
         <div v-if="groupEdit" class="form-grid">
           <label>支持组编码<input v-model="groupCode" required pattern="[a-zA-Z0-9_-]+" maxlength="100" :readonly="editing.kind==='GROUP_UPDATE'"/></label>
