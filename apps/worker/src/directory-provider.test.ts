@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { dingtalkDirectory } from './directory-provider.js';
+import { dingtalkDirectory,DirectoryProviderError } from './directory-provider.js';
 import { directoryEmployeeId,directoryScope,directorySettings,restrictDirectory } from './directory-sync.js';
 import { dingtalkPilotUsers } from './dingtalk-pilot.js';
 const person=(id:string)=>({userid:id,name:`Person ${id}`,dept_id_list:[1,2],title:'Engineer',active:false});
@@ -37,6 +37,24 @@ test('empty snapshots and invalid roots fail closed',async()=>{
   assert.throws(()=>dingtalkDirectory({...settings,roots:[1,1]}),/DIRECTORY_SCOPE_INVALID/);
   const provider=dingtalkDirectory({...settings,transport:async path=>path.endsWith('listsub')?result([]):result({list:[],has_more:false})});
   await assert.rejects(()=>provider.snapshot(AbortSignal.timeout(1000)),/DIRECTORY_EMPTY_SNAPSHOT/);
+});
+
+test('provider diagnostics identify the failing stage without retaining payloads or credentials',async()=>{
+  for(const member of [false,true]){
+    const provider=dingtalkDirectory({...settings,transport:async path=>
+      member&&path.endsWith('listsub')?result([]):{errcode:88,errmsg:'subcode=60011, secret=fixture-secret person=fixture-person',access_token:'fixture-token'}});
+    await assert.rejects(()=>provider.snapshot(AbortSignal.timeout(1000)),error=>{
+      assert.ok(error instanceof DirectoryProviderError);
+      assert.deepEqual(error.diagnostic,{stage:member?'MEMBER_API':'DEPARTMENT_API',vendorCode:88,vendorSubcode:'60011'});
+      assert.equal(JSON.stringify(error).includes('fixture-'),false);
+      return true;
+    });
+  }
+  const malformed=dingtalkDirectory({...settings,transport:async path=>path.endsWith('listsub')?result([])
+    :result({list:[{...person('a'),name:''}],has_more:false})});
+  await assert.rejects(()=>malformed.snapshot(AbortSignal.timeout(1000)),error=>{
+    assert.ok(error instanceof DirectoryProviderError);assert.deepEqual(error.diagnostic,{stage:'MEMBER_RECORD'});return true;
+  });
 });
 
 test('temporary directory timeouts retry while permission errors fail immediately',async()=>{

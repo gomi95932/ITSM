@@ -30,6 +30,8 @@ export async function attachmentRequest(url:string,method:'GET'|'PUT',headers:Re
   return response;
 }
 export const messages: Record<string,string> = {
+  DIRECTORY_SYNC_NOT_ENABLED:'人员同步尚未启用或配置不完整，请先核对应用配置。',
+  DIRECTORY_SYNC_BUSY:'人员正在同步，请稍后刷新状态，不必重复提交。',
   INVALID_AUTOMATIC_DISPATCH:'请填写有效的主备接单时限和变更原因，时限范围为 1 至 10080 自然分钟。',
   AUTOMATIC_DISPATCH_VERSION_CONFLICT:'派单规则已被其他管理员更新，请刷新后重试。',
   AUTOMATIC_DISPATCH_MAPPING_REQUIRED:'请先配置有效的服务、支持组与主责岗位映射，再启用自动派单。',
@@ -76,7 +78,7 @@ export const messages: Record<string,string> = {
   ATTACHMENT_TICKET_CLOSED:'此工单已结束，不能继续添加附件。',
   ATTACHMENT_QUOTA_EXCEEDED:'附件数量或容量已达上限，请联系服务台。',
   ATTACHMENT_BUSY:'附件服务正在处理其他文件，请稍后重试。',
-  DIRECTORY_ADMIN_REQUIRED:'仅平台管理员可查看人员同步状态。',
+  DIRECTORY_ADMIN_REQUIRED:'仅有效的平台管理员可查看和执行人员同步。',
   INVALID_REQUEST_VALIDITY:'请填写服务允许范围内的申请有效天数；报障无需填写此项。',
   APPROVAL_IDENTITY_UNAVAILABLE:'申请人或审批人尚未关联有效的企业钉钉账号，请联系服务台核对。',
   APPROVAL_MANAGER_MAPPING_UNAVAILABLE:'直线经理信息尚未核验或即将过期，请联系服务台更新后再提交。',

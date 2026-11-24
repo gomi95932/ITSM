@@ -42,15 +42,18 @@ async function applicationToken(signal:AbortSignal){
 const approvalProvider=liveApproval?dingtalkRequestApproval({corpId:process.env.DINGTALK_CORP_ID!,token:applicationToken}):undefined;
 const directoryConfig=directorySettings(process.env);
 if(directoryConfig&&(!process.env.DINGTALK_APP_KEY||!process.env.DINGTALK_APP_SECRET))throw new Error('DIRECTORY_CONFIG_INVALID');
-const directoryProvider=directoryConfig?dingtalkDirectory({roots:directoryConfig.roots,token:applicationToken}):undefined;
+const directoryProvider=directoryConfig?dingtalkDirectory({roots:directoryConfig.roots,token:async signal=>{
+  try{return await applicationToken(signal);}catch{throw new Error('DIRECTORY_TOKEN_UNAVAILABLE');}
+}}):undefined;
 let directoryNextAt=0;
 let directoryTask:Promise<void>|undefined;
 function scheduleDirectory(){
   if(!directoryConfig||!directoryProvider||directoryTask||Date.now()<directoryNextAt)return;
   // Directory paging must not stall notifications, SLA scans or the worker heartbeat.
-  directoryTask=synchronizeDirectory(db,directoryConfig,directoryProvider).then(result=>{
-    directoryNextAt=Date.now()+(result.state==='SUCCEEDED'?300000:60000);
-  }).catch(()=>{directoryNextAt=Date.now()+60000;}).finally(()=>{directoryTask=undefined;});
+  // The database decides the daily cadence. Frequent polling only picks up manual requests.
+  directoryNextAt=Date.now()+10000;
+  directoryTask=synchronizeDirectory(db,directoryConfig,directoryProvider,{scheduled:true})
+    .then(()=>{}).catch(()=>{directoryNextAt=Date.now()+60000;}).finally(()=>{directoryTask=undefined;});
 }
 const fulfillmentReminders={
   reviewMinutes:fulfillmentReminderMinutes(process.env.FULFILLMENT_REVIEW_REMINDER_MINUTES,1440),

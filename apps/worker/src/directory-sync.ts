@@ -2,6 +2,8 @@ import { createHash } from 'node:crypto';
 import type { Pool,PoolClient } from 'pg';
 import type { DirectoryProvider,DirectorySnapshot } from './directory-provider.js';
 import { dingtalkPilotUsers } from './dingtalk-pilot.js';
+import { DIRECTORY_AUTO_INTERVAL_MS } from '@itsm/contracts';
+import { DirectoryProviderError } from './directory-provider.js';
 
 export type DirectorySettings={corpId:string;roots:number[];retireMissing:boolean;maxRemovalPercent:number;pilotUserIds?:string[];timeoutMs?:number};
 export const directoryScope=(settings:DirectorySettings)=>createHash('sha256')
@@ -83,7 +85,7 @@ async function applySnapshot(client:PoolClient,runId:string,settings:DirectorySe
   return {created,updated,disabled,missing:missing.length,people:snapshot.people.length};
 }
 
-export async function synchronizeDirectory(pool:Pool,settings:DirectorySettings,provider:DirectoryProvider){
+export async function synchronizeDirectory(pool:Pool,settings:DirectorySettings,provider:DirectoryProvider,options:{scheduled?:boolean}={}){
   const client=await pool.connect();let locked=false,runId:string|undefined;
   try{
     locked=(await client.query('SELECT pg_try_advisory_lock(71820535) AS locked')).rows[0].locked;
@@ -91,8 +93,23 @@ export async function synchronizeDirectory(pool:Pool,settings:DirectorySettings,
     // Interrupted process runs never become authoritative snapshots.
     await client.query(`UPDATE directory_sync_runs SET state='FAILED',error_code='DIRECTORY_INTERRUPTED',completed_at=clock_timestamp()
       WHERE corp_id=$1 AND state='RUNNING'`,[settings.corpId]);
-    runId=(await client.query(`INSERT INTO directory_sync_runs(corp_id,scope_hash,state) VALUES($1,$2,'RUNNING') RETURNING id`,
-      [settings.corpId,directoryScope(settings)])).rows[0].id;
+    if(options.scheduled){
+      const queued=await client.query(`SELECT id FROM directory_sync_runs WHERE corp_id=$1 AND state='QUEUED'
+        ORDER BY requested_at,id LIMIT 1`,[settings.corpId]);
+      runId=queued.rows[0]?.id;
+      if(runId){
+        await client.query(`UPDATE directory_sync_runs SET state='RUNNING',scope_hash=$2,started_at=clock_timestamp() WHERE id=$1`,
+          [runId,directoryScope(settings)]);
+      }else{
+        const due=await client.query(`SELECT NOT EXISTS(SELECT 1 FROM directory_sync_runs WHERE corp_id=$1
+          AND trigger_source='AUTOMATIC' AND started_at>clock_timestamp()-($2::double precision*interval '1 millisecond')) AS due`,
+        [settings.corpId,DIRECTORY_AUTO_INTERVAL_MS]);
+        if(!due.rows[0].due)return {state:'NOT_DUE' as const};
+      }
+    }
+    if(!runId)runId=(await client.query(`INSERT INTO directory_sync_runs(corp_id,scope_hash,state,trigger_source)
+      VALUES($1,$2,'RUNNING',$3) RETURNING id`,
+    [settings.corpId,directoryScope(settings),options.scheduled?'AUTOMATIC':'MAINTENANCE'])).rows[0].id;
     const snapshot=restrictDirectory(await provider.snapshot(AbortSignal.timeout(settings.timeoutMs??120000)),settings.pilotUserIds);
     await client.query('BEGIN');
     try{
@@ -102,7 +119,8 @@ export async function synchronizeDirectory(pool:Pool,settings:DirectorySettings,
     }catch(error){await client.query('ROLLBACK');throw error;}
   }catch(error){
     const code=error instanceof Error&&safeErrors.has(error.message)?error.message:'DIRECTORY_SYNC_FAILED';
-    if(runId)await client.query(`UPDATE directory_sync_runs SET state='FAILED',error_code=$2,completed_at=clock_timestamp() WHERE id=$1`,[runId,code]);
+    if(runId)await client.query(`UPDATE directory_sync_runs SET state='FAILED',error_code=$2,error_details=$3,
+      completed_at=clock_timestamp() WHERE id=$1`,[runId,code,error instanceof DirectoryProviderError?JSON.stringify(error.diagnostic):null]);
     return {state:'FAILED' as const,errorCode:code};
   }finally{
     try{if(locked)await client.query('SELECT pg_advisory_unlock(71820535)');}

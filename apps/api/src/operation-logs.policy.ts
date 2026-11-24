@@ -20,6 +20,7 @@ export function operationLogFilters(input:Record<string,unknown>){
 }
 
 const ticketFields=new Set(['status','priority','initialPriority','ownerGroupId','assigneeId','pendingGroupId','pendingAssigneeId','version','serviceCode','requesterId','resolvedAt','closedAt']);
+const directoryFields=new Set(['state','triggerSource','peopleCount','createdCount','updatedCount','disabledCount','missingCount','errorDetails','stage','vendorCode','vendorSubcode']);
 const safeFields=new Set(`id code name title enabled active status state version kind groupId group_id employeeId employee_id roleCode role_code validFrom validTo valid_from valid_to duty domainId systemId positionId primaryPositionId collaboratingPositionIds serviceCode service_code domains systems positions appointments mappings catalog catalogChange published sortOrder path items config policy policyId fallbackGroupId receiveMinutes calendar timeZone startHour endHour days holidays workdays approved matrix targets response resolution criticalServices reviewMinutes COMPANY DEPARTMENT INDIVIDUAL HIGH MEDIUM LOW P1 P2 P3 P4 primary_minutes backup_minutes backup_position_ids backup_employee_ids primaryMinutes backupMinutes backupMinutes backupPositionIds backupEmployeeIds groupName employeeName members roles privileges description reason reviewReason administration_version fallback_group_id routing_version expectedGroupVersion expectedVersion siteEnforced sites employeeSites groupSites positionSites serviceSites siteRoutes slaTemplates serviceSlas siteIds siteId templateId priority peopleCount createdCount updatedCount disabledCount missingCount ownerGroupId assigneeId pendingGroupId pendingAssigneeId requesterId initialPriority resolvedAt closedAt category subcategory fields field type required options value label summary articleId publishedVersion currentVersion visibility`.split(/\s+/));
 for(const key of ['key','homeSiteId','visibleGroups','formVersion','required_fields','visible_groups','sort_order','form_version','maxValidityDays','max_validity_days','approval','steps','approverId','initialPublisherId','receive_minutes','member_ids','employee_ids','group','member','reviewed_by','requested_by','management_mode','source','created_at','reviewed_at','reason','review_reason','activeMembers','dispatchers','maxOpenTickets'])safeFields.add(key);
 export function redactLogText(value:string):string{return value.replace(/\b(?:sk-[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9_]{10,}|github_pat_[A-Za-z0-9_]+|Bearer\s+[^\s,;]+)/gi,'[已隐藏凭据]')
@@ -32,7 +33,7 @@ export function operationLogSnapshot(value:unknown,module:string,depth=0):unknow
   if(Array.isArray(value)){const items=value.slice(0,3000).map(v=>operationLogSnapshot(v,module,depth+1));
     if(value.length>3000)items.push('[仅展示前 3000 项]');return items;}
   if(typeof value!=='object')return null;
-  return Object.fromEntries(Object.entries(value).filter(([key])=>(module==='tickets'?ticketFields:safeFields).has(key))
+  return Object.fromEntries(Object.entries(value).filter(([key])=>(module==='tickets'?ticketFields:module==='directory'?directoryFields:safeFields).has(key))
     .map(([key,v])=>[key,operationLogSnapshot(v,module,depth+1)]));
 }
 export function operationLogChanges(before:unknown,after:unknown){
