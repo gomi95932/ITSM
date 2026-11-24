@@ -33,6 +33,8 @@ export const messages: Record<string,string> = {
   INVALID_AUTOMATIC_DISPATCH:'请填写有效的主备接单时限和变更原因，时限范围为 1 至 10080 自然分钟。',
   AUTOMATIC_DISPATCH_VERSION_CONFLICT:'派单规则已被其他管理员更新，请刷新后重试。',
   AUTOMATIC_DISPATCH_MAPPING_REQUIRED:'请先配置有效的服务、支持组与主责岗位映射，再启用自动派单。',
+  AUTOMATIC_DISPATCH_BACKUP_MAPPING_REQUIRED:'备用岗位须是该服务已配置、已启用且属于同一支持组的协办岗位，请刷新映射后重试。',
+  AUTOMATIC_DISPATCH_BACKUP_PERSON_REQUIRED:'指定备用人员须在所选备用岗位有效任职且属于当前支持组，请刷新人员及岗位配置后重试。',
   INVALID_OPERATIONS_CONFIG:'厂区或服务时限配置无效，请核对范围、路由及模板中的必填项。',
   OPERATIONS_REFERENCE_NOT_FOUND:'配置引用的人员、支持组、岗位或服务不存在，请刷新后重新选择。',
   OPERATIONS_INDEPENDENT_REVIEW_REQUIRED:'须由另一名有效平台管理员复核，且复核人不能更改本人的厂区权限。',
