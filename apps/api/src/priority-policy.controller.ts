@@ -26,7 +26,7 @@ export class PriorityPolicyController {
     return this.db.transaction(async client=>{
       await this.lock(client,actor.id);
       const current=await client.query('SELECT * FROM priority_policy_versions ORDER BY version DESC LIMIT 1');
-      const proposals=await client.query('SELECT * FROM priority_policy_proposals ORDER BY created_at DESC,id LIMIT 100');
+      const proposals=await client.query("SELECT * FROM priority_policy_proposals ORDER BY (status='PENDING') DESC,created_at DESC,id LIMIT 100");
       return {current:current.rows[0],proposals:proposals.rows};
     });
   }

@@ -3,8 +3,8 @@ import {computed,onBeforeUnmount,onMounted,ref,watch} from 'vue';
 import {Check,LoaderCircle,RefreshCw,Search,Undo2} from 'lucide-vue-next';
 import type {CatalogNavigationEntry,CatalogNavigationView} from '@itsm/contracts';
 import {api,errorText} from '../api';
-import {formatDate} from '../labels';
 import ContentBoundary from './ContentBoundary.vue';
+import OperationLogLink from './OperationLogLink.vue';
 const emit=defineEmits<{dirty:[value:boolean]}>();
 const data=ref<CatalogNavigationView>(),items=ref<CatalogNavigationEntry[]>([]),saved=ref('');
 const query=ref(''),reason=ref(''),safe=ref(false),busy=ref(false),error=ref(''),notice=ref('');
@@ -51,7 +51,7 @@ onBeforeUnmount(()=>{window.removeEventListener('beforeunload',beforeUnload);emi
     </tbody></table></div>
     <p v-if="data&&!visible.length" class="muted">没有匹配的服务</p>
     <form v-if="dirty" class="navigation-publish" @submit.prevent="save"><label>变更依据<textarea v-model="reason" maxlength="500" required rows="2" :disabled="busy"/></label><ContentBoundary v-model="safe"/><button class="primary" :disabled="busy||invalid||!safe||!reason.trim()"><LoaderCircle v-if="busy" :size="17" class="spin"/><Check v-else :size="17"/>保存目录展示</button></form>
-    <details v-if="data?.history.length" class="navigation-history"><summary>展示变更记录</summary><ul><li v-for="row in data.history" :key="row.version"><strong>版本 {{row.version}}</strong> · {{row.actorName??'系统初始化'}} · {{formatDate(row.createdAt)}}<p>{{row.reason}}</p></li></ul></details>
+    <OperationLogLink module="catalog-navigation" :disabled="dirty||busy"/>
   </section>
 </template>
 <style scoped>

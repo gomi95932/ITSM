@@ -5,6 +5,7 @@ import {EMPTY_OPERATIONS,DEFAULT_PRIORITY_POLICY,type OperationsConfig,type Sess
 import {api,errorText} from '../api';
 import {createRequestKey} from '../request-key';
 import ContentBoundary from './ContentBoundary.vue';
+import OperationLogLink from './OperationLogLink.vue';
 const props=defineProps<{user:SessionUser}>();
 type Option={id:string;name:string};
 type Proposal={id:string;config:OperationsConfig;reason:string;status:string;version:number;proposed_by:string};
@@ -13,6 +14,8 @@ const config=ref<OperationsConfig>(structuredClone(EMPTY_OPERATIONS)),version=re
 const groups=ref<Option[]>([]),positions=ref<Option[]>([]),people=ref<Option[]>([]),services=ref<Option[]>([]);
 const tab=ref<Section>('sites'),busy=ref(false),error=ref(''),reason=ref(''),safe=ref(false),reviewReason=ref(''),reviewSafe=ref(false);
 const requestId=ref(createRequestKey());
+const saved=ref('');
+const dirty=computed(()=>JSON.stringify(config.value)!==saved.value);
 watch([config,reason],()=>{requestId.value=createRequestKey();},{deep:true});
 const labels:Record<Section,string>={sites:'厂区',employeeSites:'人员范围',groupSites:'支持组范围',positionSites:'岗位范围',serviceSites:'服务范围',siteRoutes:'厂区派单',slaTemplates:'SLA 模板',serviceSlas:'服务 SLA'};
 const sections=Object.keys(labels) as Section[];
@@ -32,7 +35,7 @@ function toggleSite(row:Record<string,unknown>,site:string,event:Event){const va
   row.siteIds=(event.target as HTMLInputElement).checked?[...values,site]:values.filter(s=>s!==site);safe.value=false;}
 function remove(index:number){rows(tab.value).splice(index,1);safe.value=false;}
 async function load(){busy.value=true;error.value='';try{const r=await api<{current:{version:number;config:OperationsConfig};proposals:Proposal[];groups:Option[];positions:Option[];people:Option[];services:{code:string;name:string}[]}>('/admin/operations');
-  version.value=r.current.version;config.value=structuredClone(r.current.config);proposals.value=r.proposals;groups.value=r.groups;positions.value=r.positions;people.value=r.people;
+  version.value=r.current.version;config.value=structuredClone(r.current.config);saved.value=JSON.stringify(config.value);proposals.value=r.proposals;groups.value=r.groups;positions.value=r.positions;people.value=r.people;
   services.value=r.services.map(s=>({id:s.code,name:s.name}));safe.value=false;
 }catch(e){error.value=errorText(e);}finally{busy.value=false;}}
 async function propose(){if(!safe.value||busy.value)return;busy.value=true;error.value='';try{
@@ -47,6 +50,7 @@ onMounted(load);
 </script>
 <template>
   <section class="operations-panel"><div class="section-heading"><p class="muted">当前版本 {{version}}</p><button class="icon-button" title="刷新" aria-label="刷新" :disabled="busy" @click="load"><RefreshCw :size="18"/></button></div>
+    <OperationLogLink module="operations" :disabled="busy||dirty||!!reason||!!reviewReason"/>
     <p v-if="error" class="error-banner" role="alert">{{error}}</p>
     <nav class="section-tabs" aria-label="配置分类"><button v-for="s in sections" :key="s" :class="{selected:tab===s}" @click="tab=s">{{labels[s]}}</button></nav>
     <form @submit.prevent="propose"><fieldset :disabled="busy"><label class="check-row"><input v-model="config.siteEnforced" type="checkbox" @change="safe=false"/>启用厂区隔离</label>

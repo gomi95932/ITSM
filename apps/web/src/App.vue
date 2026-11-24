@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed,onBeforeUnmount,onMounted,ref,watch } from 'vue';
+import { computed,onBeforeUnmount,onMounted,provide,ref,watch } from 'vue';
 import * as dd from 'dingtalk-jsapi';
-import { Activity,BarChart3,Bell,BookOpen,ChevronLeft,ChevronRight,ClipboardList,Headphones,LayoutGrid,LoaderCircle,LogOut,Network,Plus,QrCode,RefreshCw,ShieldCheck,TriangleAlert,UserRound,Users } from 'lucide-vue-next';
+import { Activity,BarChart3,Bell,BookOpen,ChevronLeft,ChevronRight,ClipboardList,Headphones,LayoutGrid,LoaderCircle,LogOut,Network,Plus,QrCode,RefreshCw,ScrollText,ShieldCheck,TriangleAlert,UserRound,Users } from 'lucide-vue-next';
 import type { CatalogItem,SessionUser,TicketListResponse,TicketView,WorkQueue,WorkQueueCounts } from '@itsm/contracts';
 import EmployeeForm from './components/EmployeeForm.vue';
 import CatalogBrowser from './components/CatalogBrowser.vue';
@@ -20,12 +20,18 @@ import AppointmentsPanel from './components/AppointmentsPanel.vue';
 import WorkQueueTabs from './components/WorkQueueTabs.vue';
 import FulfillmentPanel from './components/FulfillmentPanel.vue';
 import DirectoryPanel from './components/DirectoryPanel.vue';
+import OperationLogsPanel from './components/OperationLogsPanel.vue';
+import {canReadOperationLogs,operationLogNavigation} from './operation-logs';
+import type {OperationLogFilter} from '@itsm/contracts';
 import { api,ApiError,devUser,errorText,setUser,useDevelopment } from './api';
 import { formatDate,statuses } from './labels';
 
-type View='mine'|'catalog'|'queue'|'notifications'|'delegations'|'knowledge'|'reports'|'roles'|'routing'|'routing-config'|'priority-config'|'service-structure'|'support-structure'|'fulfillments'|'directory'|'operations'|'appointments';
+type View='mine'|'catalog'|'queue'|'notifications'|'delegations'|'knowledge'|'reports'|'roles'|'routing'|'routing-config'|'priority-config'|'service-structure'|'support-structure'|'fulfillments'|'directory'|'operations'|'appointments'|'operation-logs';
 type Delivery={id:string;state:string;attempts:number;lastError:string|null;updatedAt:string;number:string;canRetry:boolean};
 const user=ref<SessionUser>(),booting=ref(true),error=ref(''),loading=ref(false),development=ref(false),identity=ref(devUser());
+const operationLogFilter=ref<OperationLogFilter>({});
+provide(canReadOperationLogs,()=>!!user.value?.canManageRouting);
+provide(operationLogNavigation,(filter)=>{operationLogFilter.value={...filter};navigate('operation-logs');});
 const enterpriseLogin=ref(false),dingtalkWebLogin=ref(false);
 const view=ref<View>('mine'),catalog=ref<CatalogItem[]>([]),tickets=ref<TicketView[]>([]),counts=ref<Record<string,number>>({}),total=ref(0),page=ref(1),filter=ref('');
 const workQueue=ref<WorkQueue>('all');
@@ -36,7 +42,7 @@ const pages=computed(()=>Math.max(1,Math.ceil(total.value/20)));
 const openCount=computed(()=>Object.entries(counts.value).filter(([status])=>!['CLOSED','CANCELLED','REJECTED'].includes(status)).reduce((sum,[,count])=>sum+count,0));
 const noticeLabels:Record<string,string>={PENDING:'待发送',DISPATCHING:'正在提交',SENDING:'平台受理，待确认',DELIVERED:'平台确认发送成功',SIMULATED:'开发模拟',DEAD:'失败待处理',SKIPPED:'已跳过',REVIEW_REQUIRED:'发送结果待核查'};
 const needsNoticeAttention=(item:Delivery)=>['DEAD','REVIEW_REQUIRED'].includes(item.state);
-const title=computed(()=>({mine:'我的工单',catalog:'服务目录',queue:'IT 工作台',notifications:'消息通知',delegations:'代报授权',knowledge:'知识库',reports:'服务报表',roles:'角色授权',routing:'路由告警','routing-config':'派单配置','priority-config':'分级与时限','service-structure':'服务组织','support-structure':'支持组',fulfillments:'交付与回收',directory:'人员同步',operations:'厂区与服务时限',appointments:'岗位任职'})[view.value]);
+const title=computed(()=>({mine:'我的工单',catalog:'服务目录',queue:'IT 工作台',notifications:'消息通知',delegations:'代报授权',knowledge:'知识库',reports:'服务报表',roles:'角色授权',routing:'路由告警','routing-config':'派单配置','priority-config':'分级与时限','service-structure':'服务组织','support-structure':'支持组',fulfillments:'交付与回收',directory:'人员同步',operations:'厂区与服务时限',appointments:'岗位任职','operation-logs':'操作日志'})[view.value]);
 let refreshTimer:ReturnType<typeof setInterval>|undefined;
 let generation=0;
 let bootGeneration=0;
@@ -85,7 +91,7 @@ async function load(quiet=false){
     }else if(view.value==='notifications'){
       const result=await api<{items:Delivery[];mode:string}>('/notifications');if(current!==generation)return;
       notices.value=result.items;notificationMode.value=result.mode;
-    }else if(!['catalog','delegations','knowledge','reports','roles','routing','routing-config','priority-config','service-structure','support-structure','fulfillments','directory'].includes(view.value)){
+    }else if(['mine','queue'].includes(view.value)){
       const result=await api<TicketListResponse>(`/tickets?mine=${view.value!=='queue'}&page=${page.value}&size=20${view.value==='queue'?`&queue=${workQueue.value}`:''}${filter.value?`&status=${filter.value}`:''}`);
       if(current!==generation)return;tickets.value=result.items;total.value=result.total;counts.value=result.counts;
       workQueues.value=result.workQueues??emptyWorkQueues();
@@ -119,6 +125,7 @@ onBeforeUnmount(()=>{window.removeEventListener('hashchange',syncHash);if(refres
       <button v-if="user.canManageRoles" :class="{active:view==='appointments'}" @click="navigate('appointments')"><Users :size="19"/>岗位任职</button>
       <button v-if="user.canManageRouting" :class="{active:view==='operations'}" @click="navigate('operations')"><Network :size="19"/>厂区与服务时限</button>
       <button v-if="user.canManageRouting" :class="{active:view==='directory'}" @click="navigate('directory')"><Users :size="19"/>人员同步</button>
+      <button v-if="user.canManageRouting" :class="{active:view==='operation-logs'}" @click="operationLogFilter={};navigate('operation-logs')"><ScrollText :size="19"/>操作日志</button>
       <button v-if="user.canManageRouting" :class="{active:view==='priority-config'}" @click="navigate('priority-config')"><ShieldCheck :size="19"/>分级与时限</button>
       <button v-if="user.groups.length" :class="{active:view==='fulfillments'}" @click="navigate('fulfillments')"><ClipboardList :size="19"/>交付与回收</button>
       <template v-if="user.canManageRouting"><button :class="{active:view==='service-structure'}" @click="navigate('service-structure')"><LayoutGrid :size="19"/>服务组织</button><button :class="{active:view==='routing-config'}" @click="navigate('routing-config')"><Network :size="19"/>派单配置</button></template>
@@ -128,13 +135,14 @@ onBeforeUnmount(()=>{window.removeEventListener('hashchange',syncHash);if(refres
         <EmployeeForm v-if="creating" :catalog="catalog" :initial-code="initialCode" @close="back" @created="openTicket"/>
         <TicketDetail v-else-if="selected" :key="`${user.id}:${selected}`" :id="selected" :user="user" @back="back" @changed="load(true)"/>
         <template v-else>
-          <div class="page-title"><div><p class="eyebrow">{{['queue','reports','routing','routing-config','priority-config','service-structure','support-structure','fulfillments','directory'].includes(view)?'SUPPORT OPERATIONS':'IT SERVICE DESK'}}</p><h1>{{title}}</h1></div><button v-if="view==='mine'||view==='catalog'" class="primary" @click="create()"><Plus :size="18"/>提交报障</button><button v-else-if="!['delegations','knowledge','reports','roles','routing','routing-config','priority-config','service-structure','support-structure','fulfillments','directory'].includes(view)" class="icon-button" title="刷新" aria-label="刷新列表" :disabled="loading" @click="load()"><RefreshCw :size="19" :class="{spin:loading}"/></button></div>
+          <div class="page-title"><div><p class="eyebrow">{{['queue','reports','routing','routing-config','priority-config','service-structure','support-structure','fulfillments','directory','operation-logs','operations','appointments'].includes(view)?'SUPPORT OPERATIONS':'IT SERVICE DESK'}}</p><h1>{{title}}</h1></div><button v-if="view==='mine'||view==='catalog'" class="primary" @click="create()"><Plus :size="18"/>提交报障</button><button v-else-if="view==='queue'||view==='notifications'" class="icon-button" title="刷新" aria-label="刷新列表" :disabled="loading" @click="load()"><RefreshCw :size="19" :class="{spin:loading}"/></button></div>
           <CatalogBrowser v-if="view==='catalog'" :catalog="catalog" @select="create"/>
           <DelegationsPanel v-else-if="view==='delegations'" :user="user"/>
           <FulfillmentPanel v-else-if="view==='fulfillments'" :key="user.id" @open="openTicket"/>
           <KnowledgePanel v-else-if="view==='knowledge'" :key="user.id" :user="user"/>
           <ReportsPanel v-else-if="view==='reports'" :key="user.id" :user="user" @open="openTicket"/>
           <RolesPanel v-else-if="view==='roles'" :key="user.id" :user="user"/>
+          <OperationLogsPanel v-else-if="view==='operation-logs'&&user.canManageRouting" :key="user.id" :initial="operationLogFilter"/>
           <DirectoryPanel v-else-if="view==='directory'&&user.canManageRouting" :key="user.id"/>
           <PriorityConfigPanel v-else-if="view==='priority-config'&&user.canManageRouting" :key="user.id" :user="user"/>
           <RoutingAlertsPanel v-else-if="view==='routing'" :key="user.id"/>

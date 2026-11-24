@@ -1,4 +1,6 @@
 import { Module } from '@nestjs/common';
+import {OperationLogsController} from './operation-logs.controller.js';
+import {OperationLogsService} from './operation-logs.service.js';
 import { HealthController } from './health.controller.js';
 import { TicketsController } from './tickets.controller.js';
 import { TicketsService } from './tickets.service.js';
@@ -39,5 +41,5 @@ import { DingtalkWebService } from './dingtalk-web.service.js';
 import { CatalogNavigationController } from './catalog-navigation.controller.js';
 import { CatalogNavigationService } from './catalog-navigation.service.js';
 
-@Module({ controllers: [CatalogNavigationController,DingtalkWebController,OperationsController,OidcController,SlaCalendarController,PriorityPolicyController,HealthController, TicketsController,AuthController,WorkspaceController,DelegationsController,RequestCatalogController,KnowledgeController,ReportsController,RolesController,RoutingConfigController,SupportController,ServiceStructureController,FulfillmentController,DirectoryController,AttachmentsController], providers: [CatalogNavigationService,Database,AuthService,DingtalkWebService,OidcService,TicketsService,SlaService,IntakePolicyService,RequestCatalogService,KnowledgeService,RolesService,RoutingConfigService,SupportService,ServiceStructureService,FulfillmentService,VoiceAsrService,IntakeInterpreterService,AttachmentsService] })
+@Module({ controllers: [OperationLogsController,CatalogNavigationController,DingtalkWebController,OperationsController,OidcController,SlaCalendarController,PriorityPolicyController,HealthController, TicketsController,AuthController,WorkspaceController,DelegationsController,RequestCatalogController,KnowledgeController,ReportsController,RolesController,RoutingConfigController,SupportController,ServiceStructureController,FulfillmentController,DirectoryController,AttachmentsController], providers: [OperationLogsService,CatalogNavigationService,Database,AuthService,DingtalkWebService,OidcService,TicketsService,SlaService,IntakePolicyService,RequestCatalogService,KnowledgeService,RolesService,RoutingConfigService,SupportService,ServiceStructureService,FulfillmentService,VoiceAsrService,IntakeInterpreterService,AttachmentsService] })
 export class AppModule {}

@@ -6,6 +6,7 @@ import { api,ApiError,errorText } from '../api';
 import { createRequestKey } from '../request-key';
 import { formatDate } from '../labels';
 import ContentBoundary from './ContentBoundary.vue';
+import OperationLogLink from './OperationLogLink.vue';
 import ServiceCatalogEditor from './ServiceCatalogEditor.vue';
 import ServiceCatalogSummary from './ServiceCatalogSummary.vue';
 import ServiceStructureTemplate from './ServiceStructureTemplate.vue';
@@ -17,7 +18,7 @@ type Tab=StructureTab|'catalog'|'changes'|'navigation';
 type Person={id:string;name:string;groups:string[];dingLinked:boolean};
 const empty=():ServiceStructure=>({domains:[],systems:[],positions:[],appointments:[],mappings:[]});
 const copy=<T,>(value:T):T=>JSON.parse(JSON.stringify(value)) as T;
-const labels:Record<Tab,string>={domains:'责任域',systems:'业务系统',positions:'岗位',appointments:'任职人员',catalog:'目录维护',navigation:'目录展示',mappings:'服务映射',changes:'变更记录'};
+const labels:Record<Tab,string>={domains:'责任域',systems:'业务系统',positions:'岗位',appointments:'任职人员',catalog:'目录维护',navigation:'目录展示',mappings:'服务映射',changes:'待处理审批'};
 const states:Record<string,string>={PENDING:'待独立复核',APPROVED:'已发布',REJECTED:'已拒绝'};
 const warningLabels:Record<string,string>={NO_CURRENT_APPOINTEE:'当前无有效任职人员',DING_ID_NOT_LINKED:'部分人员未绑定企业钉钉',CATALOG_NOT_PUBLISHED:'服务目录尚未发布'};
 const tab=ref<Tab>('domains'),draft=ref<ServiceStructure>(empty()),published=ref<ServiceStructure>(empty()),version=ref(1);
@@ -66,7 +67,7 @@ async function load(){
       api<{version:number;config:ServiceStructure;options:ServiceStructureOptions;items:ServiceStructureChange[]}>('/admin/service-structure'),
       api<{version:number;items:ServiceCatalogAdminItem[];hasMore:boolean}>('/admin/service-structure/catalog')]);
     if(result.version!==catalog.version)throw new Error('配置在加载期间已更新，请刷新。');
-    version.value=result.version;published.value=copy(result.config);draft.value=copy(result.config);options.value=result.options;items.value=result.items;
+    version.value=result.version;published.value=copy(result.config);draft.value=copy(result.config);options.value=result.options;items.value=result.items.filter(item=>item.status==='PENDING');
     catalogItems.value=catalog.items;catalogMore.value=catalog.hasMore;catalogChange.value=undefined;
     editing.value=false;templateOpen.value=false;preview.value=undefined;
   }catch(e){error.value=errorText(e);}finally{loading.value=false;}
@@ -171,6 +172,7 @@ onMounted(load);
   <div class="structure-panel" :aria-busy="loading||busy">
     <p v-if="error" class="error-banner" role="alert">{{error}}</p><p v-if="notice" class="success-banner" role="status">{{notice}}</p>
     <header class="section-heading"><span class="muted">已发布版本 {{version}} <span v-if="dirty">· 未提交修改</span></span><div class="structure-tools">
+      <OperationLogLink module="service-structure" :disabled="dirty||navigationDirty||busy||editing||templateOpen||!!inspecting"/>
       <button v-if="dirty&&!inspecting" class="icon-button" title="放弃未提交修改" aria-label="放弃未提交修改" :disabled="busy" @click="reset"><Undo2 :size="17"/></button>
       <button class="icon-button" title="刷新服务组织" aria-label="刷新服务组织" :disabled="busy||loading||dirty||navigationDirty||!!inspecting" @click="load"><RefreshCw :size="17" :class="{spin:loading}"/></button>
       <button v-if="!inspecting&&tab!=='navigation'" class="icon-button" title="初始组织模板" aria-label="初始组织模板" :disabled="busy||loading||editing" @click="templateOpen=!templateOpen"><ListPlus :size="17"/></button>

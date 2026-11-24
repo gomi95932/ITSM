@@ -1,18 +1,18 @@
 <script setup lang="ts">
 import { computed,onMounted,ref,watch } from 'vue';
-import { Check,History,LoaderCircle,Plus,RefreshCw,X } from 'lucide-vue-next';
+import { Check,LoaderCircle,Plus,RefreshCw,X } from 'lucide-vue-next';
 import type { SessionUser } from '@itsm/contracts';
 import { api,errorText } from '../api';
 import { createRequestKey } from '../request-key';
 import { formatDate } from '../labels';
 import ContentBoundary from './ContentBoundary.vue';
 import AutomaticDispatchPanel from './AutomaticDispatchPanel.vue';
+import OperationLogLink from './OperationLogLink.vue';
 
 type Group={id:string;name:string;fallbackGroupId:string|null;routingVersion:number};
 type Policy={id:string;groupId:string;priority:string;receiveMinutes:number;calendar:{startHour:number;endHour:number;holidays:string[];workdays:string[]};validFrom:string;validTo:string;approvedBy:string};
 type Proposal={id:string;kind:'ASSIGNMENT_POLICY'|'FALLBACK';groupId:string;priority:string|null;config:Record<string,unknown>;
   status:string;proposedBy:string;reviewedBy:string|null;reason:string;version:number;createdAt:string;reviewedAt:string|null};
-type Audit={actorId:string;action:string;reason:string;createdAt:string;beforeValue:unknown;afterValue:unknown};
 const props=defineProps<{user:SessionUser}>();
 const groups=ref<Group[]>([]),policies=ref<Policy[]>([]),proposals=ref<Proposal[]>([]);
 const busy=ref(false),loading=ref(true),error=ref(''),adding=ref(false);
@@ -21,7 +21,6 @@ const enabled=ref(true),receiveMinutes=ref(60),startHour=ref(9),endHour=ref(18),
 const holidays=ref(''),workdays=ref(''),fallbackGroupId=ref(''),reason=ref(''),safe=ref(false);
 const proposalId=ref(createRequestKey()),proposalDates=ref<{validFrom:string;validTo:string}>();
 const decision=ref<{item:Proposal;action:'APPROVE'|'REJECT'}>(),decisionReason=ref(''),decisionSafe=ref(false);
-const history=ref<{item:Proposal;events:Audit[]}>();
 const active=computed(()=>policies.value.find(p=>p.groupId===groupId.value&&p.priority===priority.value));
 const selected=computed(()=>groups.value.find(g=>g.id===groupId.value));
 watch([kind,groupId,priority,enabled,receiveMinutes,startHour,endHour,validDays,holidays,workdays,fallbackGroupId,reason],()=>{
@@ -33,7 +32,7 @@ async function load(){
   loading.value=true;error.value='';
   try{
     const result=await api<{groups:Group[];policies:Policy[];proposals:Proposal[]}>('/admin/routing-config');
-    groups.value=result.groups;policies.value=result.policies;proposals.value=result.proposals;
+    groups.value=result.groups;policies.value=result.policies;proposals.value=result.proposals.filter(item=>item.status==='PENDING');
     if(!groups.value.some(g=>g.id===groupId.value))groupId.value=groups.value[0]?.id??'';
   }catch(e){error.value=errorText(e);}finally{loading.value=false;}
 }
@@ -65,11 +64,6 @@ async function review(){
       expectedVersion:current.item.version,reason:decisionReason.value,contentClass:'GENERAL'}});
     decision.value=undefined;await load();
   }catch(e){decision.value=undefined;await load();error.value=errorText(e);}finally{busy.value=false;}
-}
-async function showHistory(item:Proposal){
-  busy.value=true;error.value='';
-  try{const result=await api<{items:Audit[]}>(`/admin/routing-config/${item.id}/history`);history.value={item,events:result.items};}
-  catch(e){error.value=errorText(e);}finally{busy.value=false;}
 }
 const label=(id:string)=>groups.value.find(g=>g.id===id)?.name??id;
 onMounted(load);
@@ -110,7 +104,7 @@ onMounted(load);
         <div class="form-footer"><button class="primary" :disabled="busy||!safe||!reason.trim()||!groupId"><Check :size="16"/>提交独立复核</button></div>
       </form>
     </section>
-    <section class="detail-section"><div class="section-heading"><h2>配置记录</h2><span class="muted">最近 200 条</span></div>
+    <section class="detail-section"><div class="section-heading"><h2>待处理审批</h2><OperationLogLink module="routing" :disabled="busy||adding||!!decision"/></div>
       <div class="table-wrap"><table><thead><tr><th>提交时间</th><th>配置范围</th><th>变更</th><th>状态</th><th>操作</th></tr></thead><tbody>
         <tr v-for="item in proposals" :key="item.id"><td>{{formatDate(item.createdAt)}}</td><td>{{label(item.groupId)}} {{item.priority??''}}</td>
           <td>{{item.kind==='FALLBACK'?`备用：${item.config.fallbackGroupId?label(String(item.config.fallbackGroupId)):'不设置'}`:item.config.enabled?`接收：${item.config.receiveMinutes} 分钟`:'停用接收时限'}}</td>
@@ -118,17 +112,13 @@ onMounted(load);
           <td><div class="tools"><template v-if="item.status==='PENDING'&&item.proposedBy!==props.user.id">
             <button class="icon-button" title="批准配置" aria-label="批准配置" :disabled="busy" @click="decision={item,action:'APPROVE'};decisionReason='';decisionSafe=false"><Check :size="17"/></button>
             <button class="icon-button" title="拒绝配置" aria-label="拒绝配置" :disabled="busy" @click="decision={item,action:'REJECT'};decisionReason='';decisionSafe=false"><X :size="17"/></button></template>
-            <button class="icon-button" title="配置审计" aria-label="配置审计" :disabled="busy" @click="showHistory(item)"><History :size="17"/></button></div></td></tr>
-      </tbody></table><p v-if="!proposals.length" class="empty-state">暂无配置记录</p></div>
+            <OperationLogLink module="routing" :object="item.groupId" :disabled="busy||adding||!!decision"/></div></td></tr>
+      </tbody></table><p v-if="!proposals.length" class="empty-state">暂无待处理审批</p></div>
     </section>
     <div v-if="decision" class="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="routing-review-title">
       <div class="section-heading"><h2 id="routing-review-title">{{decision.action==='APPROVE'?'批准配置':'拒绝配置'}}</h2><button class="icon-button" title="关闭" aria-label="关闭" :disabled="busy" @click="decision=undefined"><X :size="17"/></button></div>
       <p>{{label(decision.item.groupId)}} {{decision.item.priority??''}} · {{decision.item.reason}}</p>
       <form class="action-form" @submit.prevent="review"><label>复核依据<textarea v-model="decisionReason" required maxlength="500" rows="3"/></label><ContentBoundary v-model="decisionSafe"/><div class="form-footer"><button class="primary" :disabled="busy||!decisionSafe||!decisionReason.trim()"><Check :size="16"/>确认提交</button></div></form>
-    </section></div>
-    <div v-if="history" class="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="routing-history-title">
-      <div class="section-heading"><h2 id="routing-history-title">配置审计</h2><button class="icon-button" title="关闭" aria-label="关闭" @click="history=undefined"><X :size="17"/></button></div>
-      <p>{{label(history.item.groupId)}} {{history.item.priority??''}}</p><ol class="audit-list"><li v-for="(event,index) in history.events" :key="index"><strong>{{event.action}}</strong><small class="muted">{{event.actorId}} · {{formatDate(event.createdAt)}}</small><p>{{event.reason}}</p></li></ol>
     </section></div>
   </div>
 </template>

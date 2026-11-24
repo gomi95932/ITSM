@@ -55,6 +55,8 @@ jobs:
         run: node tests/integration/admin-handoff.mjs
       - name: Verify direct administrator configuration and atomic rollback in an isolated database
         run: node tests/integration/admin-configuration.mjs
+      - name: Verify centralized operation logs, permissions and ticket timeline preservation
+        run: node tests/integration/operation-logs.mjs
       - name: Verify catalog navigation isolation and visibility in a disposable database
         run: node tests/integration/catalog-navigation.mjs
       - name: Verify automatic primary-backup dispatch, escalation and concurrent scheduler safety

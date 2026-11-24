@@ -45,7 +45,7 @@ export class RolesService {
     const access=await this.access(this.db.pool,actor.id);
     const result=await this.db.pool.query(`SELECT ${fields} FROM role_bindings r JOIN employees e ON e.id=r.employee_id
       LEFT JOIN support_groups g ON g.id=r.group_id WHERE $1 OR r.group_id=ANY($2::text[])
-      ORDER BY r.created_at DESC,r.id DESC LIMIT 200`,[access.admin,access.groups]);
+      ORDER BY (r.status IN ('PENDING','ACTIVE')) DESC,r.created_at DESC,r.id DESC LIMIT 200`,[access.admin,access.groups]);
     return {items:result.rows,canReview:access.admin};
   }
 
