@@ -35,9 +35,9 @@ async function structure(appointments=[primary,backup]){
   structureVersion++;await pool.query('INSERT INTO service_structure_versions(version,config) VALUES($1,$2)',[structureVersion,JSON.stringify({...config,appointments})]);
   await pool.query('UPDATE service_structure_current SET version=$1',[structureVersion]);
 }
-async function policy(enabled=true,minutes=2){
+async function policy(enabled=true,minutes=2,backupPositionIds=[],backupEmployeeIds=[]){
   const current=(await routing.automatic(admin)).items.find(x=>x.code==='INC-BIZ');
-  return routing.saveAutomatic(admin,{serviceCode:'INC-BIZ',expectedVersion:current.version,enabled,primaryMinutes:minutes,backupMinutes:3,
+  return routing.saveAutomatic(admin,{serviceCode:'INC-BIZ',expectedVersion:current.version,enabled,primaryMinutes:minutes,backupMinutes:3,backupPositionIds,backupEmployeeIds,
     reason:'Disposable automatic dispatch acceptance',contentClass:'GENERAL'});
 }
 async function expire(id){await pool.query("UPDATE tickets SET assignment_due_at=clock_timestamp()-interval '1 second' WHERE id=$1",[id]);}
@@ -155,10 +155,86 @@ try{
     await pool.query("UPDATE tickets SET status='IN_PROGRESS' WHERE id=$1",[t.id]);
     await maintainAutomaticDispatch(pool);assert.equal((await get(t.id)).pending_assignee_id,'agent-1');
   });
+  await check('Pre-migration pending offers and policy snapshots retain same-position backup behavior',async()=>{
+    const t=await create();await pool.query("UPDATE automatic_dispatch_runs SET snapshot=snapshot-'backupPositionIds' WHERE ticket_id=$1",[t.id]);
+    await pool.query('UPDATE automatic_dispatch_attempts SET position_id=NULL WHERE run_id=$1',[(await run(t.id)).id]);
+    await maintainAutomaticDispatch(pool);assert.equal((await get(t.id)).pending_assignee_id,'agent-1');
+    await expire(t.id);await maintainAutomaticDispatch(pool);assert.equal((await get(t.id)).pending_assignee_id,'agent-3');
+    await action(t.id,'agent-3','ACCEPT_OFFER',{comment:'Legacy offer backup accepts'});await close(t.id,'agent-3');
+  });
+  const crossBackup={...backup,id:randomUUID(),positionId:'auto-backup-position',duty:'PRIMARY'};
+  config.positions.push({id:'auto-backup-position',name:'Cross-position backup',domainId:'auto-domain',groupId:'service-desk',enabled:true});
+  config.mappings[0].collaboratingPositionIds.push('auto-backup-position');
+  await check('Collaborating position is never implicitly a backup without explicit configuration',async()=>{
+    await structure([primary,crossBackup]);await policy();
+    const t=await create();await expire(t.id);await maintainAutomaticDispatch(pool);
+    assert.equal((await run(t.id)).state,'ESCALATED');assert.equal((await attempts(t.id)).length,1);
+    await action(t.id,'employee-1','CANCEL',{reason:'Synthetic cleanup'});
+  });
+  await check('Configured collaborating-position primary receives backup offer after timeout, concurrent scans and closes',async()=>{
+    await policy(true,2,['auto-backup-position']);
+    const settings=(await routing.automatic(admin)).items.find(x=>x.code==='INC-BIZ');
+    assert.deepEqual(settings.backupPositionIds,['auto-backup-position']);assert.equal(settings.backupPositions[0].id,'auto-backup-position');
+    const t=await create();await expire(t.id);
+    await Promise.all(Array.from({length:12},()=>maintainAutomaticDispatch(pool)));
+    assert.equal((await get(t.id)).pending_assignee_id,'agent-3');
+    const offered=(await attempts(t.id))[1];assert.equal(offered.duty,'BACKUP');assert.equal(offered.position_id,'auto-backup-position');
+    assert.equal(new Date(offered.due_at)-new Date(offered.offered_at),180000);
+    await maintainAutomaticDispatch(pool);assert.equal((await attempts(t.id)).length,2);
+    const event=(await pool.query("SELECT id FROM ticket_events WHERE ticket_id=$1 AND action='ASSIGN_OFFER' ORDER BY created_at DESC LIMIT 1",[t.id])).rows[0];
+    const client=await pool.connect();try{assert.ok((await notificationRecipients(client,event.id)).includes('agent-3'));}finally{client.release();}
+    await assert.rejects(action(t.id,'agent-1','ACCEPT_OFFER',{comment:'Late primary'}));
+    await action(t.id,'agent-3','ACCEPT_OFFER',{comment:'Cross-position backup accepts'});await close(t.id,'agent-3');
+  });
+  await check('Cross-position backup follows rejection; both failures escalate once and retain history',async()=>{
+    const t=await create();await action(t.id,'agent-1','DECLINE_OFFER',{reason:'Primary unavailable'});
+    assert.equal((await get(t.id)).pending_assignee_id,'agent-3');
+    await expire(t.id);await maintainAutomaticDispatch(pool);await maintainAutomaticDispatch(pool);
+    assert.equal((await run(t.id)).state,'ESCALATED');assert.deepEqual((await attempts(t.id)).map(a=>a.state),['DECLINED','EXPIRED']);
+    assert.equal((await pool.query("SELECT count(*)::int n FROM ticket_events WHERE ticket_id=$1 AND action='OWNERSHIP_ESCALATION_REQUIRED'",[t.id])).rows[0].n,1);
+    await action(t.id,'employee-1','CANCEL',{reason:'Synthetic cleanup'});
+  });
+  await check('Backup appointment revocation invalidates outstanding offer and cannot bypass authorization',async()=>{
+    const t=await create();await action(t.id,'agent-1','DECLINE_OFFER',{reason:'Primary unavailable'});
+    await structure([primary,{...crossBackup,enabled:false}]);await maintainAutomaticDispatch(pool);
+    assert.equal((await run(t.id)).state,'ESCALATED');assert.equal((await attempts(t.id))[1].state,'INVALIDATED');
+    await assert.rejects(action(t.id,'agent-3','ACCEPT_OFFER',{comment:'Revoked appointment'}));
+    await action(t.id,'employee-1','CANCEL',{reason:'Synthetic cleanup'});await structure([primary,crossBackup]);
+  });
+  await check('Backup configuration is snapshotted and duplicate people are invited only once across positions',async()=>{
+    const t=await create();await policy(true,7,[]);await expire(t.id);await maintainAutomaticDispatch(pool);
+    assert.equal((await get(t.id)).pending_assignee_id,'agent-3');
+    await action(t.id,'employee-1','CANCEL',{reason:'Synthetic cleanup'});
+    await structure([primary,{...crossBackup,employeeId:'agent-1'}]);await policy(true,2,['auto-backup-position']);
+    const duplicate=await create();await expire(duplicate.id);await maintainAutomaticDispatch(pool);
+    assert.equal((await run(duplicate.id)).state,'ESCALATED');assert.equal((await attempts(duplicate.id)).length,1);
+    await action(duplicate.id,'employee-1','CANCEL',{reason:'Synthetic cleanup'});
+    await policy();await structure([primary,crossBackup]);
+  });
+  await check('Explicit backup person wins over an earlier appointment in the same backup position',async()=>{
+    const other={...crossBackup,id:randomUUID(),employeeId:'agent-2',validFrom:'2019-01-01T00:00:00Z'};
+    await pool.query("INSERT INTO group_memberships(employee_id,group_id) VALUES('agent-2','service-desk') ON CONFLICT DO NOTHING");
+    await structure([primary,other,crossBackup]);await policy(true,2,['auto-backup-position'],['agent-3']);
+    const settings=(await routing.automatic(admin)).items.find(x=>x.code==='INC-BIZ');
+    assert.deepEqual(settings.backupEmployeeIds,['agent-3']);assert.ok(settings.backupEmployees.some(e=>e.id==='agent-3'));
+    const t=await create();await policy(true,2,['auto-backup-position'],['agent-2']);
+    await expire(t.id);await Promise.all(Array.from({length:12},()=>maintainAutomaticDispatch(pool)));
+    assert.equal((await get(t.id)).pending_assignee_id,'agent-3');
+    await action(t.id,'agent-3','DECLINE_OFFER',{reason:'Selected backup unavailable'});
+    assert.equal((await run(t.id)).state,'ESCALATED');assert.equal((await attempts(t.id)).length,2);
+    await action(t.id,'employee-1','CANCEL',{reason:'Synthetic cleanup'});
+    await policy();config.positions.pop();config.mappings[0].collaboratingPositionIds=[];await structure();
+  });
   await check('Admin-only configuration, optimistic concurrency, immutable history and audit/outbox integrity',async()=>{
     const current=(await routing.automatic(admin)).items.find(x=>x.code==='INC-BIZ');
     const input={serviceCode:'INC-BIZ',expectedVersion:current.version,enabled:true,primaryMinutes:2,backupMinutes:3,reason:'Concurrent config test',contentClass:'GENERAL'};
     await assert.rejects(routing.saveAutomatic(requester,input));await assert.rejects(routing.saveAutomatic(admin,{...input,primaryMinutes:0}));
+    await assert.rejects(routing.saveAutomatic(admin,{...input,backupPositionIds:['auto-position']}));
+    await assert.rejects(routing.saveAutomatic(admin,{...input,backupPositionIds:['missing']}));
+    await assert.rejects(routing.saveAutomatic(admin,{...input,backupPositionIds:['missing','missing']}));
+    await assert.rejects(routing.saveAutomatic(admin,{...input,backupEmployeeIds:['agent-1']}));
+    await assert.rejects(routing.saveAutomatic(admin,{...input,backupEmployeeIds:['agent-3','agent-3']}));
+    await assert.rejects(routing.saveAutomatic(admin,{...input,backupEmployeeIds:['ding:'+ 'a'.repeat(64)]}),e=>e.getResponse().code==='AUTOMATIC_DISPATCH_BACKUP_PERSON_REQUIRED');
     const saved=await Promise.allSettled([routing.saveAutomatic(admin,input),routing.saveAutomatic(admin,input)]);
     assert.equal(saved.filter(x=>x.status==='fulfilled').length,1);
     assert.equal(saved.find(x=>x.status==='rejected').reason.getResponse().code,'AUTOMATIC_DISPATCH_VERSION_CONFLICT');

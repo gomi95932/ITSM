@@ -1,7 +1,7 @@
 import {randomUUID} from 'node:crypto';
 import type {Pool,PoolClient} from 'pg';
 
-type Snapshot={serviceCode:string;policyVersion:number;primaryMinutes:number;backupMinutes:number;positionId:string|null;groupId:string};
+type Snapshot={serviceCode:string;policyVersion:number;primaryMinutes:number;backupMinutes:number;positionId:string|null;groupId:string;backupPositionIds?:string[];backupEmployeeIds?:string[]};
 type Run={id:string;state:string;snapshot:Snapshot};
 const terminal=(status:string)=>['CLOSED','CANCELLED','REJECTED','PENDING_CONFIRMATION'].includes(status);
 
@@ -32,7 +32,8 @@ export async function initializeAutomaticDispatch(client:PoolClient,ticketId:str
     ORDER BY version DESC LIMIT 1`,[row.service_code])).rows[0];
   if(!policy?.enabled)return;
   const snapshot:Snapshot={serviceCode:row.service_code,policyVersion:policy.version,primaryMinutes:policy.primary_minutes,
-    backupMinutes:policy.backup_minutes,positionId:row.service_routing_snapshot?.primaryPositionId??null,groupId:row.owner_group_id};
+    backupMinutes:policy.backup_minutes,positionId:row.service_routing_snapshot?.primaryPositionId??null,groupId:row.owner_group_id,
+    backupPositionIds:policy.backup_position_ids,backupEmployeeIds:policy.backup_employee_ids};
   await client.query(`INSERT INTO automatic_dispatch_runs(ticket_id,snapshot,state) VALUES($1,$2,'WAITING')
     ON CONFLICT(ticket_id) DO NOTHING`,[ticketId,JSON.stringify(snapshot)]);
   await advanceAutomaticDispatch(client,ticketId);
@@ -82,10 +83,14 @@ export async function advanceAutomaticDispatch(client:PoolClient,ticketId:string
         JOIN support_groups g ON g.id=p."groupId" AND g.enabled
         JOIN employees e ON e.id=a."employeeId" AND e.active
         JOIN group_memberships m ON m.employee_id=e.id AND m.group_id=p."groupId"
-        WHERE a."positionId"=$4 AND a."employeeId"=$2 AND a.duty=$5 AND a.enabled AND p.enabled AND d.enabled
+        WHERE a."positionId"=$4 AND a."employeeId"=$2
+          AND (CASE WHEN a."positionId"=$7 THEN a.duty ELSE 'BACKUP' END)=$5
+          AND a.duty IN ('PRIMARY','BACKUP') AND a.enabled AND p.enabled AND d.enabled
+          AND service_position_eligible(jsonb_set($1::jsonb,'{positions}',
+            jsonb_build_array(jsonb_build_object('id',p.id,'groupId',p."groupId"))),e.id,p."groupId")
           AND p."groupId"=$3 AND a."validFrom"<=clock_timestamp() AND (a."validTo" IS NULL OR a."validTo">clock_timestamp())) AS valid,
       $6::timestamptz<=clock_timestamp() AS expired`,[JSON.stringify(row.service_routing_snapshot),pending.employee_id,
-        row.owner_group_id,run.snapshot.positionId,pending.duty,row.assignment_due_at])).rows[0];
+        row.owner_group_id,pending.position_id??run.snapshot.positionId,pending.duty,row.assignment_due_at,run.snapshot.positionId])).rows[0];
     if(validity.valid&&!validity.expired)return true;
     const previous=row,state=validity.valid?'EXPIRED':'INVALIDATED';
     row=(await client.query(`UPDATE tickets SET pending_assignee_id=NULL,pending_group_id=NULL,assignment_kind=NULL,
@@ -99,17 +104,26 @@ export async function advanceAutomaticDispatch(client:PoolClient,ticketId:string
     // An unrecognized manual clear must never silently start another invitation.
     await finish(client,run,'MANUAL','CANCELLED');return false;
   }
-  const candidate=(await client.query(`SELECT a."employeeId" AS employee_id,a.duty FROM position_appointments a
+  const candidate=(await client.query(`WITH candidates AS (SELECT a."employeeId" AS employee_id,a."positionId" AS position_id,
+      CASE WHEN a."positionId"=$1 THEN a.duty ELSE 'BACKUP' END AS duty,a."validFrom",a.id,
+      CASE WHEN a."positionId"=$1 AND a.duty='PRIMARY' THEN 0 WHEN a."positionId"=$1 THEN 1 ELSE 2 END AS tier,
+      array_position($5::text[],a."positionId") AS backup_order,a.duty AS appointment_duty
+    FROM position_appointments a
     JOIN support_positions p ON p.id=a."positionId" JOIN service_domains d ON d.id=p."domainId"
     JOIN support_groups g ON g.id=p."groupId" AND g.enabled JOIN employees e ON e.id=a."employeeId" AND e.active
     JOIN group_memberships m ON m.employee_id=e.id AND m.group_id=g.id
-    WHERE a."positionId"=$1 AND p."groupId"=$2 AND a.enabled AND p.enabled AND d.enabled
+    WHERE (a."positionId"=$1 OR a."positionId"=ANY($5::text[])) AND p."groupId"=$2 AND a.enabled AND p.enabled AND d.enabled
       AND a.duty IN ('PRIMARY','BACKUP') AND a."validFrom"<=clock_timestamp() AND (a."validTo" IS NULL OR a."validTo">clock_timestamp())
-      AND service_position_eligible($3,e.id,g.id)
+      AND service_position_eligible(jsonb_set($3::jsonb,'{positions}',
+        jsonb_build_array(jsonb_build_object('id',p.id,'groupId',g.id))),e.id,g.id)
+      AND EXISTS(SELECT 1 FROM jsonb_array_elements($3::jsonb->'positions') s WHERE s->>'id'=p.id AND s->>'groupId'=g.id)
       AND NOT EXISTS(SELECT 1 FROM automatic_dispatch_attempts v WHERE v.run_id=$4 AND v.employee_id=e.id)
-      AND (a.duty='BACKUP' OR NOT EXISTS(SELECT 1 FROM automatic_dispatch_attempts v WHERE v.run_id=$4 AND v.duty='BACKUP'))
-    ORDER BY CASE a.duty WHEN 'PRIMARY' THEN 0 ELSE 1 END,a."validFrom",a.id,e.id LIMIT 1`,
-    [run.snapshot.positionId,row.owner_group_id,JSON.stringify(row.service_routing_snapshot),run.id])).rows[0];
+      AND (a."positionId"<>$1 OR a.duty='BACKUP' OR NOT EXISTS(
+        SELECT 1 FROM automatic_dispatch_attempts v WHERE v.run_id=$4 AND v.duty='BACKUP')))
+    SELECT * FROM candidates WHERE tier=0 OR cardinality($6::text[])=0 OR employee_id=ANY($6::text[])
+    ORDER BY tier,CASE WHEN tier>0 THEN array_position($6::text[],employee_id) END,backup_order,CASE appointment_duty WHEN 'PRIMARY' THEN 0 ELSE 1 END,
+      "validFrom",id,employee_id LIMIT 1`,
+    [run.snapshot.positionId,row.owner_group_id,JSON.stringify(row.service_routing_snapshot),run.id,run.snapshot.backupPositionIds??[],run.snapshot.backupEmployeeIds??[]])).rows[0];
   if(!candidate){
     await finish(client,run,'ESCALATED','CANCELLED');
     const previous=row;
@@ -125,12 +139,12 @@ export async function advanceAutomaticDispatch(client:PoolClient,ticketId:string
   row=(await client.query(`UPDATE tickets SET pending_group_id=owner_group_id,pending_assignee_id=$2,assignment_kind='OFFER',
     assignment_state='PENDING',assignment_offered_at=clock_timestamp(),assignment_due_at=clock_timestamp()+$3*interval '1 minute',
     assignment_policy_version_id=NULL,version=version+1,updated_at=clock_timestamp() WHERE id=$1 RETURNING *`,[ticketId,candidate.employee_id,minutes])).rows[0];
-  await client.query(`INSERT INTO automatic_dispatch_attempts(run_id,employee_id,duty,state,offered_at,due_at)
-    SELECT $1,$2,$3,'PENDING',assignment_offered_at,assignment_due_at FROM tickets WHERE id=$4`,
-    [run.id,candidate.employee_id,candidate.duty,ticketId]);
+  await client.query(`INSERT INTO automatic_dispatch_attempts(run_id,employee_id,duty,state,offered_at,due_at,position_id)
+    SELECT $1,$2,$3,'PENDING',assignment_offered_at,assignment_due_at,$5 FROM tickets WHERE id=$4`,
+    [run.id,candidate.employee_id,candidate.duty,ticketId,candidate.position_id]);
   await client.query("UPDATE automatic_dispatch_runs SET state='OFFERED' WHERE id=$1",[run.id]);
   await record(client,row,'ASSIGN_OFFER',{automatic:true,runId:run.id,duty:candidate.duty,policyVersion:run.snapshot.policyVersion,
-    receiveMinutes:minutes,targetGroupId:row.pending_group_id,targetAssigneeId:row.pending_assignee_id,
+    receiveMinutes:minutes,targetPositionId:candidate.position_id,targetGroupId:row.pending_group_id,targetAssigneeId:row.pending_assignee_id,
     assignmentVersion:row.version,assignmentDueAt:row.assignment_due_at},previous);
   return true;
 }

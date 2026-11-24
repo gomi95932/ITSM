@@ -1,6 +1,6 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import type { PoolClient, QueryResult } from 'pg';
-import { type ServiceCalendar } from '@itsm/contracts';
+import { type ServiceCalendar,validEmployeeId } from '@itsm/contracts';
 import { Database } from './database.service.js';
 import type { Identity } from './auth.service.js';
 import { IntakePolicyService } from './intake-policy.service.js';
@@ -79,29 +79,51 @@ export class RoutingConfigService {
     const items=(await client.query(`SELECT c.code,c.name,c.published,COALESCE(p.version,0) AS version,
       COALESCE(p.enabled,false) AS enabled,COALESCE(p.primary_minutes,15) AS "primaryMinutes",
       COALESCE(p.backup_minutes,15) AS "backupMinutes",
+      COALESCE(p.backup_position_ids,'{}') AS "backupPositionIds",
+      COALESCE(p.backup_employee_ids,'{}') AS "backupEmployeeIds",
+      COALESCE((SELECT jsonb_agg(jsonb_build_object('id',e.id,'name',e.display_name,'positionId',s.id,'positionName',s.name) ORDER BY e.display_name,s.name,a.id)
+        FROM service_position_routes r JOIN support_positions s ON
+          (r."collaboratingPositionIds" ? s.id OR r."primaryPositionId"=s.id)
+        JOIN service_domains d ON d.id=s."domainId" AND d.enabled
+        JOIN position_appointments a ON a."positionId"=s.id AND a.enabled
+        JOIN employees e ON e.id=a."employeeId" AND e.active
+        JOIN group_memberships m ON m.employee_id=e.id AND m.group_id=s."groupId"
+        WHERE r."serviceCode"=c.code AND r.enabled AND s.enabled AND s."groupId"=c.group_id
+          AND (s.id<>r."primaryPositionId" OR a.duty='BACKUP')
+          AND a."validFrom"<=clock_timestamp() AND (a."validTo" IS NULL OR a."validTo">clock_timestamp())),'[]') AS "backupEmployees",
+      COALESCE((SELECT jsonb_agg(jsonb_build_object('id',s.id,'name',s.name) ORDER BY s.name,s.id)
+        FROM service_position_routes r JOIN support_positions s ON r."collaboratingPositionIds" ? s.id
+        JOIN service_domains d ON d.id=s."domainId" AND d.enabled
+        WHERE r."serviceCode"=c.code AND r.enabled AND s.enabled AND s."groupId"=c.group_id),'[]') AS "backupPositions",
       EXISTS(SELECT 1 FROM service_position_routes r JOIN support_positions s ON s.id=r."primaryPositionId"
         JOIN service_domains d ON d.id=s."domainId" AND d.enabled JOIN support_groups g ON g.id=s."groupId" AND g.enabled
         WHERE r."serviceCode"=c.code AND r.enabled AND s.enabled AND s."groupId"=c.group_id) AS mapped
       FROM service_catalog c LEFT JOIN LATERAL(SELECT * FROM automatic_dispatch_policies p
         WHERE p.service_code=c.code ORDER BY version DESC LIMIT 1) p ON true ORDER BY c.sort_order,c.code`)).rows;
     const history=(await client.query(`SELECT p.service_code AS "serviceCode",p.version,p.enabled,
-      p.primary_minutes AS "primaryMinutes",p.backup_minutes AS "backupMinutes",e.display_name AS "actorName",
+      p.primary_minutes AS "primaryMinutes",p.backup_minutes AS "backupMinutes",p.backup_position_ids AS "backupPositionIds",p.backup_employee_ids AS "backupEmployeeIds",e.display_name AS "actorName",
       p.reason,p.created_at AS "createdAt" FROM automatic_dispatch_policies p JOIN employees e ON e.id=p.actor_id
       ORDER BY p.created_at DESC,p.service_code LIMIT 50`)).rows;
     return {items,history};
   });}
 
   async saveAutomatic(actor:Identity,body:unknown){
-    if(!object(body)||!only(body,['serviceCode','expectedVersion','enabled','primaryMinutes','backupMinutes','reason','contentClass'])
+    if(!object(body)||!only(body,['serviceCode','expectedVersion','enabled','primaryMinutes','backupMinutes','backupPositionIds','backupEmployeeIds','reason','contentClass'])
       ||body.contentClass!=='GENERAL'||!name(body.serviceCode)||!Number.isInteger(body.expectedVersion)||(body.expectedVersion as number)<0
       ||typeof body.enabled!=='boolean'||!reason(body.reason)
+      ||(body.backupPositionIds!==undefined&&(!Array.isArray(body.backupPositionIds)||body.backupPositionIds.length>20
+        ||!body.backupPositionIds.every(name)||new Set(body.backupPositionIds).size!==body.backupPositionIds.length))
+      ||(body.backupEmployeeIds!==undefined&&(!Array.isArray(body.backupEmployeeIds)||body.backupEmployeeIds.length>50
+        ||!body.backupEmployeeIds.every(validEmployeeId)||new Set(body.backupEmployeeIds).size!==body.backupEmployeeIds.length))
       ||![body.primaryMinutes,body.backupMinutes].every(v=>Number.isInteger(v)&&(v as number)>=1&&(v as number)<=10080))
       throw new BadRequestException({code:'INVALID_AUTOMATIC_DISPATCH'});
     const why=body.reason.trim();
     await this.intake.requireGeneral(actor.id,body,'routing-config');
     return this.db.transaction(async client=>{
       await this.writeAdmin(client,actor.id);
-      const current=(await client.query('SELECT version FROM automatic_dispatch_policies WHERE service_code=$1 ORDER BY version DESC LIMIT 1',[body.serviceCode])).rows[0];
+      const current=(await client.query('SELECT version,backup_position_ids,backup_employee_ids FROM automatic_dispatch_policies WHERE service_code=$1 ORDER BY version DESC LIMIT 1',[body.serviceCode])).rows[0];
+      const backupPositions=(body.backupPositionIds as string[]|undefined)??current?.backup_position_ids??[];
+      const backupEmployees=(body.backupEmployeeIds as string[]|undefined)??current?.backup_employee_ids??[];
       if((current?.version??0)!==body.expectedVersion)throw new ConflictException({code:'AUTOMATIC_DISPATCH_VERSION_CONFLICT'});
       if(!(await client.query('SELECT 1 FROM service_catalog WHERE code=$1 FOR SHARE',[body.serviceCode])).rowCount)throw new NotFoundException();
       if(body.enabled&&!(await client.query(`SELECT 1 FROM service_position_routes r JOIN support_positions p ON p.id=r."primaryPositionId"
@@ -109,9 +131,31 @@ export class RoutingConfigService {
         JOIN service_catalog c ON c.code=r."serviceCode" AND c.group_id=g.id
         WHERE r."serviceCode"=$1 AND r.enabled AND p.enabled`,[body.serviceCode])).rowCount)
         throw new ConflictException({code:'AUTOMATIC_DISPATCH_MAPPING_REQUIRED'});
+      if(body.enabled&&backupPositions.length){
+        const allowed=await client.query(`SELECT p.id FROM service_position_routes r
+          JOIN support_positions p ON r."collaboratingPositionIds" ? p.id
+          JOIN service_domains d ON d.id=p."domainId" AND d.enabled
+          JOIN service_catalog c ON c.code=r."serviceCode" AND c.group_id=p."groupId"
+          WHERE r."serviceCode"=$1 AND r.enabled AND p.enabled AND p.id=ANY($2::text[])`,[body.serviceCode,backupPositions]);
+        if(allowed.rowCount!==backupPositions.length)throw new ConflictException({code:'AUTOMATIC_DISPATCH_BACKUP_MAPPING_REQUIRED'});
+      }
+      if(body.enabled&&backupEmployees.length){
+        const allowed=await client.query(`SELECT DISTINCT e.id FROM service_position_routes r
+          JOIN support_positions p ON (p.id=r."primaryPositionId" OR r."collaboratingPositionIds" ? p.id)
+          JOIN service_domains d ON d.id=p."domainId" AND d.enabled
+          JOIN service_catalog c ON c.code=r."serviceCode" AND c.group_id=p."groupId"
+          JOIN position_appointments a ON a."positionId"=p.id AND a.enabled
+          JOIN employees e ON e.id=a."employeeId" AND e.active
+          JOIN group_memberships m ON m.employee_id=e.id AND m.group_id=p."groupId"
+          WHERE r."serviceCode"=$1 AND r.enabled AND p.enabled AND e.id=ANY($3::text[])
+            AND ((p.id=r."primaryPositionId" AND a.duty='BACKUP') OR p.id=ANY($2::text[]))
+            AND a."validFrom"<=clock_timestamp() AND (a."validTo" IS NULL OR a."validTo">clock_timestamp())`,
+          [body.serviceCode,backupPositions,backupEmployees]);
+        if(allowed.rowCount!==backupEmployees.length)throw new ConflictException({code:'AUTOMATIC_DISPATCH_BACKUP_PERSON_REQUIRED'});
+      }
       const version=(current?.version??0)+1;
-      await client.query(`INSERT INTO automatic_dispatch_policies(service_code,version,enabled,primary_minutes,backup_minutes,actor_id,reason)
-        VALUES($1,$2,$3,$4,$5,$6,$7)`,[body.serviceCode,version,body.enabled,body.primaryMinutes,body.backupMinutes,actor.id,why]);
+      await client.query(`INSERT INTO automatic_dispatch_policies(service_code,version,enabled,primary_minutes,backup_minutes,actor_id,reason,backup_position_ids,backup_employee_ids)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`,[body.serviceCode,version,body.enabled,body.primaryMinutes,body.backupMinutes,actor.id,why,backupPositions,backupEmployees]);
       await client.query(`INSERT INTO operational_audits(actor_id,action,target_id) VALUES($1,'AUTOMATIC_DISPATCH_CONFIGURED',$2)`,[actor.id,body.serviceCode]);
       return {version};
     });
