@@ -1,0 +1,2 @@
+export const DIRECTORY_AUTO_INTERVAL_MS = 24 * 60 * 60 * 1000;
+export const DIRECTORY_STALE_AFTER_MS = 26 * 60 * 60 * 1000;

@@ -57,6 +57,8 @@ jobs:
         run: node tests/integration/admin-configuration.mjs
       - name: Verify centralized operation logs, permissions and ticket timeline preservation
         run: node tests/integration/operation-logs.mjs
+      - name: Verify durable daily directory scheduling and administrator manual synchronization
+        run: node tests/integration/directory-scheduling.mjs
       - name: Verify catalog navigation isolation and visibility in a disposable database
         run: node tests/integration/catalog-navigation.mjs
       - name: Verify automatic primary-backup dispatch, escalation and concurrent scheduler safety
