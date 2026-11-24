@@ -2,8 +2,8 @@
 import {computed,onMounted,ref} from 'vue';
 import {Save,RefreshCw} from 'lucide-vue-next';
 import {api,errorText} from '../api';
-import {formatDate} from '../labels';
 import ContentBoundary from './ContentBoundary.vue';
+import OperationLogLink from './OperationLogLink.vue';
 type Policy={code:string;name:string;published:boolean;version:number;enabled:boolean;primaryMinutes:number;backupMinutes:number;mapped:boolean;
   backupPositionIds:string[];backupPositions:{id:string;name:string}[];backupEmployeeIds:string[];
   backupEmployees:{id:string;name:string;positionId:string;positionName:string}[]};
@@ -55,9 +55,7 @@ onMounted(load);
       <label>变更依据<textarea v-model="reason" required maxlength="500" rows="2"/></label><ContentBoundary v-model="safe"/>
       <div class="form-footer"><button type="button" :disabled="busy" @click="selected=undefined">取消</button><button class="primary" :disabled="busy||!safe||!reason.trim()"><Save :size="16"/>保存并生效</button></div>
     </form>
-    <details v-if="history.length"><summary>变更记录</summary><div class="table-wrap"><table><thead><tr><th>服务</th><th>版本</th><th>状态</th><th>操作人</th><th>依据</th><th>时间</th></tr></thead><tbody>
-      <tr v-for="item in history" :key="`${item.serviceCode}:${item.version}`"><td>{{items.find(s=>s.code===item.serviceCode)?.name??item.serviceCode}}</td><td>{{item.version}}</td><td>{{item.enabled?'启用':'停用'}}</td><td>{{item.actorName}}</td><td>{{item.reason}}</td><td>{{formatDate(item.createdAt)}}</td></tr>
-    </tbody></table></div></details>
+    <OperationLogLink module="automatic-dispatch" :disabled="busy||!!selected"/>
   </section>
 </template>
 <style scoped>

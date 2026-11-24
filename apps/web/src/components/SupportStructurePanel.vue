@@ -1,29 +1,29 @@
 <script setup lang="ts">
-import { computed,onBeforeUnmount,onMounted,ref,watch } from 'vue';
-import { Check,ChevronLeft,ChevronRight,History,LoaderCircle,Pencil,Plus,Power,RotateCcw,RefreshCw,Search,UserMinus,UserPlus,X } from 'lucide-vue-next';
-import type { SessionUser,SupportAuditView,SupportChangeInput,SupportChangeKind,SupportChangeView,SupportDependenciesView,SupportGroupView,SupportMembersView,SupportPeopleView,SupportStructureView } from '@itsm/contracts';
+import { computed,nextTick,onBeforeUnmount,onMounted,ref,watch } from 'vue';
+import { Check,ChevronLeft,ChevronRight,LoaderCircle,Pencil,Plus,Power,RotateCcw,RefreshCw,Search,UserMinus,UserPlus,X } from 'lucide-vue-next';
+import type { SessionUser,SupportChangeInput,SupportChangeKind,SupportChangeView,SupportDependenciesView,SupportGroupView,SupportMembersView,SupportPeopleView,SupportStructureView } from '@itsm/contracts';
 import { api,errorText } from '../api';
 import { createRequestKey } from '../request-key';
 import { formatDate } from '../labels';
 import ContentBoundary from './ContentBoundary.vue';
 import SupportDependencyList from './SupportDependencyList.vue';
+import OperationLogLink from './OperationLogLink.vue';
 
 const props=defineProps<{user:SessionUser}>();
 const kinds:Record<SupportChangeKind,string>={GROUP_CREATE:'新增支持组',GROUP_UPDATE:'修改支持组',GROUP_DISABLE:'停用支持组',GROUP_RESTORE:'恢复支持组',MEMBER_ADD:'增加成员',MEMBER_REMOVE:'移除成员'};
 const states={PENDING:'待独立复核',APPROVED:'已批准',REJECTED:'已拒绝'};
 const roles:Record<string,string>={PLATFORM_ADMIN:'平台管理员',GROUP_LEAD:'支持组长',DISPATCHER:'调度员'};
 const privileges:Record<string,string>={P1_REVIEW:'P1 复核',KNOWLEDGE_EDIT:'知识编辑',KNOWLEDGE_REVIEW:'知识审校',CATALOG_PUBLISH:'目录发布'};
-const events:Record<string,string>={PROPOSED:'提交提案',APPROVED:'批准',REJECTED:'拒绝'};
 const base='/admin/support-structure';
 const tab=ref<'groups'|'changes'>('groups'),groups=ref<SupportGroupView[]>([]),items=ref<SupportChangeView[]>([]);
 const groupsMore=ref(false),proposalsMore=ref(false),canManageGroups=ref(false),canReview=ref(false);
 const selected=ref(''),memberQuery=ref(''),appliedQuery=ref(''),members=ref<SupportMembersView>(),membersLoading=ref(false);
 const loading=ref(true),busy=ref(false),error=ref(''),notice=ref('');
+const editor=ref<HTMLElement>();
 const editing=ref<{kind:SupportChangeKind;groupId:string;expectedGroupVersion:number|null;employeeId?:string;employeeName?:string}>();
 const groupCode=ref(''),name=ref(''),description=ref(''),reason=ref(''),safe=ref(false),proposalId=ref(createRequestKey());
 const query=ref(''),people=ref<SupportPeopleView>({items:[],hasMore:false}),searched=ref(false),peopleLoading=ref(false),employeeId=ref('');
 const decision=ref<{item:SupportChangeView;action:'APPROVE'|'REJECT'}>(),decisionReason=ref(''),decisionSafe=ref(false);
-const history=ref<{item:SupportChangeView;events:SupportAuditView[]}>();
 const dependencies=ref<SupportDependenciesView>(),dependencyLoading=ref(false);
 const selectedGroup=computed(()=>groups.value.find(group=>group.id===selected.value));
 const groupEdit=computed(()=>editing.value?.kind==='GROUP_CREATE'||editing.value?.kind==='GROUP_UPDATE');
@@ -52,7 +52,7 @@ async function load(){
   loading.value=true;error.value='';
   try{
     const result=await api<SupportStructureView>(base);if(!alive)return;
-    groups.value=result.groups;items.value=result.items;groupsMore.value=result.groupsHasMore;proposalsMore.value=result.proposalsHasMore;
+    groups.value=result.groups;items.value=result.items.filter(item=>item.status==='PENDING');groupsMore.value=result.groupsHasMore;proposalsMore.value=result.proposalsHasMore;
     canManageGroups.value=result.canManageGroups;canReview.value=result.canReview;
     if(!groups.value.some(group=>group.id===selected.value)){selected.value=groups.value[0]?.id??'';memberQuery.value='';appliedQuery.value='';}
     members.value=undefined;if(selected.value)await loadMembers();
@@ -62,7 +62,7 @@ async function selectGroup(){
   members.value=undefined;memberQuery.value='';appliedQuery.value='';notice.value='';await loadMembers();
 }
 async function searchMembers(){appliedQuery.value=memberQuery.value.trim();await loadMembers();}
-function open(kind:SupportChangeKind,employee?:{id:string;name:string}){
+async function open(kind:SupportChangeKind,employee?:{id:string;name:string}){
   const group=selectedGroup.value;if(kind!=='GROUP_CREATE'&&!group)return;
   editing.value={kind,groupId:kind==='GROUP_CREATE'?'':group!.id,expectedGroupVersion:kind==='GROUP_CREATE'?null:group!.version,
     ...(employee?{employeeId:employee.id,employeeName:employee.name}:{})};
@@ -71,6 +71,10 @@ function open(kind:SupportChangeKind,employee?:{id:string;name:string}){
   query.value='';employeeId.value='';people.value={items:[],hasMore:false};searched.value=false;error.value='';notice.value='';
   dependencies.value=undefined;++dependencyGeneration;dependencyLoading.value=false;
   if(kind==='GROUP_DISABLE')void loadDependencies(group!.id);
+  await nextTick();
+  if(!alive||!editing.value)return;
+  editor.value?.scrollIntoView({block:'start'});
+  editor.value?.querySelector<HTMLInputElement|HTMLTextAreaElement>('input,textarea')?.focus({preventScroll:true});
 }
 function closeEditor(){editing.value=undefined;++peopleGeneration;peopleLoading.value=false;++dependencyGeneration;dependencyLoading.value=false;}
 async function loadDependencies(group:string){
@@ -119,30 +123,26 @@ async function decide(){
     decision.value=undefined;await load();notice.value=current.action==='APPROVE'?'变更已批准并生效。':'提案已拒绝，当前配置未改变。';
   }catch(e){if(alive)error.value=errorText(e);}finally{if(alive)busy.value=false;}
 }
-async function showHistory(item:SupportChangeView){
-  if(busy.value)return;busy.value=true;error.value='';
-  try{const result=await api<{items:SupportAuditView[]}>(`${base}/${item.id}/history`);if(alive)history.value={item,events:result.items};}
-  catch(e){if(alive)error.value=errorText(e);}finally{if(alive)busy.value=false;}
-}
 onMounted(load);
 onBeforeUnmount(()=>{alive=false;++memberGeneration;++peopleGeneration;++dependencyGeneration;});
 </script>
 
 <template>
   <div class="support-panel">
-    <p v-if="error&&!decision" class="error-banner" role="alert">{{error}}</p>
+    <p v-if="error&&!decision&&!editing" class="error-banner" role="alert">{{error}}</p>
     <p v-if="notice" class="support-notice" role="status">{{notice}}</p>
     <div class="section-heading"><div class="support-tabs" role="tablist" aria-label="支持组管理视图">
       <button role="tab" :aria-selected="tab==='groups'" :disabled="!!editing||busy" @click="tab='groups'">支持组与成员</button>
-      <button role="tab" :aria-selected="tab==='changes'" :disabled="!!editing||busy" @click="tab='changes'">成员及组变更</button>
+      <button role="tab" :aria-selected="tab==='changes'" :disabled="!!editing||busy" @click="tab='changes'">待处理审批</button>
     </div><div class="support-tools">
       <button class="icon-button" title="刷新支持组" aria-label="刷新支持组" :disabled="busy||loading||!!editing||!!decision" @click="load"><RefreshCw :size="17" :class="{spin:loading}"/></button>
       <button v-if="canManageGroups&&tab==='groups'" class="primary" :disabled="busy||loading||!!editing" @click="open('GROUP_CREATE')"><Plus :size="17"/>新增支持组</button>
     </div></div>
     <p v-if="groupsMore" class="danger-text">支持组仅显示前 200 条，清单尚未完整。</p>
 
-    <section v-if="editing" class="detail-section support-editor" :aria-label="kinds[editing.kind]">
+    <section v-if="editing" ref="editor" class="detail-section support-editor" :aria-label="kinds[editing.kind]">
       <div class="section-heading"><h2>{{kinds[editing.kind]}}</h2><button class="icon-button" title="取消编辑" aria-label="取消编辑" :disabled="busy" @click="closeEditor"><X :size="17"/></button></div>
+      <p v-if="error" class="error-banner" role="alert">{{error}}</p>
       <form class="action-form" @submit.prevent="propose"><fieldset :disabled="busy" class="support-fields">
         <div v-if="groupEdit" class="form-grid">
           <label>支持组编码<input v-model="groupCode" required pattern="[a-zA-Z0-9_-]+" maxlength="100" :readonly="editing.kind==='GROUP_UPDATE'"/></label>
@@ -185,8 +185,8 @@ onBeforeUnmount(()=>{alive=false;++memberGeneration;++peopleGeneration;++depende
         <footer v-if="members" class="pagination"><span>共 {{members.total}} 人</span><div><button class="icon-button" title="上一页成员" aria-label="上一页成员" :disabled="busy||membersLoading||!!editing||members.page<=1" @click="loadMembers(members.page-1)"><ChevronLeft :size="17"/></button><span>{{members.page}} / {{pages}}</span><button class="icon-button" title="下一页成员" aria-label="下一页成员" :disabled="busy||membersLoading||!!editing||members.page>=pages" @click="loadMembers(members.page+1)"><ChevronRight :size="17"/></button></div></footer>
       </section>
     </template>
-    <section v-else class="detail-section" aria-label="支持组变更记录">
-      <div class="section-heading"><h2>变更记录</h2><span class="muted">最近 200 条</span></div><p v-if="proposalsMore" class="danger-text">变更记录未完整，当前仅显示最近 200 条。</p>
+    <section v-else class="detail-section" aria-label="支持组待处理审批">
+      <div class="section-heading"><h2>待处理审批</h2></div><p v-if="proposalsMore" class="danger-text">当前列表未完整，请完成审批后刷新。</p>
       <ul class="support-change-list"><li v-for="item in items" :key="item.id" :aria-label="`${kinds[item.kind]} ${item.reason}`">
         <div><strong>{{kinds[item.kind]}}</strong><p>{{changeName(item)}}<span v-if="item.employeeId"> · {{item.employeeName??item.employeeId}}</span></p><p class="mono muted">{{item.groupId}}</p></div>
         <div><span class="status">{{states[item.status]}}</span><p>{{item.reason}}</p><p v-if="'description' in item.config" class="muted multiline">{{item.config.description}}</p><p v-if="item.reviewReason" class="muted">{{item.reviewReason}}</p></div>
@@ -194,8 +194,8 @@ onBeforeUnmount(()=>{alive=false;++memberGeneration;++peopleGeneration;++depende
         <div class="support-tools"><template v-if="canDecide(item)">
           <button class="icon-button" title="批准变更" aria-label="批准变更" :disabled="busy" @click="review(item,'APPROVE')"><Check :size="17"/></button>
           <button class="icon-button" title="拒绝变更" aria-label="拒绝变更" :disabled="busy" @click="review(item,'REJECT')"><X :size="17"/></button>
-        </template><button class="icon-button" title="变更审计" aria-label="变更审计" :disabled="busy" @click="showHistory(item)"><History :size="17"/></button></div>
-      </li></ul><p v-if="!items.length" class="support-empty muted">暂无支持组变更记录</p>
+        </template></div>
+      </li></ul><p v-if="!items.length" class="support-empty muted">暂无待处理审批</p>
     </section>
 
     <div v-if="decision" class="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="support-review-title">
@@ -207,11 +207,7 @@ onBeforeUnmount(()=>{alive=false;++memberGeneration;++peopleGeneration;++depende
       <p v-if="decision.item.kind==='GROUP_RESTORE'&&decision.action==='APPROVE'" class="muted">恢复后成员、岗位任职及权限仍需重新任命。</p>
       <form class="action-form" @submit.prevent="decide"><fieldset class="support-fields" :disabled="busy"><label>复核依据<textarea v-model="decisionReason" required maxlength="500" rows="3"/></label><ContentBoundary v-model="decisionSafe"/><div class="form-footer"><button class="primary" :disabled="!decisionSafe||!decisionReason.trim()||(decision.item.kind==='GROUP_DISABLE'&&decision.action==='APPROVE'&&(!dependencies||dependencies.total>0||dependencyLoading))"><LoaderCircle v-if="busy" class="spin" :size="16"/><Check v-else :size="16"/>确认复核</button></div></fieldset></form>
     </section></div>
-    <div v-if="history" class="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="support-history-title">
-      <div class="section-heading"><h2 id="support-history-title">支持组变更审计</h2><button class="icon-button" title="关闭审计" aria-label="关闭审计" @click="history=undefined"><X :size="17"/></button></div>
-      <p>{{kinds[history.item.kind]}} · {{changeName(history.item)}}</p>
-      <ol class="support-audit"><li v-for="(event,index) in history.events" :key="index"><strong>{{events[event.action]??event.action}}</strong><p class="mono muted">{{event.actorId}} · {{formatDate(event.createdAt)}}</p><p>{{event.reason}}</p><details><summary>变更快照</summary><pre>{{JSON.stringify({before:event.beforeValue,after:event.afterValue},null,2)}}</pre></details></li></ol>
-    </section></div>
+    <OperationLogLink module="support" :object="selected||undefined" :disabled="busy||!!editing||!!decision"/>
   </div>
 </template>
 

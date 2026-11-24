@@ -193,7 +193,7 @@ export class RoutingConfigService {
       this.db.pool.query(`SELECT id,group_id AS "groupId",priority,receive_minutes AS "receiveMinutes",calendar_snapshot AS calendar,
         valid_from AS "validFrom",valid_to AS "validTo",approved_by AS "approvedBy"
         FROM assignment_policy_versions WHERE active ORDER BY group_id,priority`),
-      this.db.pool.query<Proposal>(`SELECT ${columns} FROM routing_config_proposals ORDER BY created_at DESC,id DESC LIMIT 200`),
+      this.db.pool.query<Proposal>(`SELECT ${columns} FROM routing_config_proposals ORDER BY (status='PENDING') DESC,created_at DESC,id DESC LIMIT 200`),
     ]);
     return {groups:groups.rows,policies:policies.rows,proposals:proposals.rows};
   }

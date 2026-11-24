@@ -1,7 +1,9 @@
 import { test,expect } from './fixtures';
+import {recordedOperation} from './operation-log-helpers';
 
 test('administrator directly configures and revokes a scoped role on desktop and mobile',async({page})=>{
   test.setTimeout(60000);
+  const suffix=Date.now(),grantReason=`E2E 值班调度授权 ${suffix}`,revokeReason=`值班调度结束，撤销本次授权 ${suffix}`;
   await page.setViewportSize({width:1440,height:1000});await page.goto('/');
   await expect(page.getByRole('button',{name:'角色授权',exact:true})).toHaveCount(0);
   await page.getByRole('combobox',{name:'开发身份'}).selectOption('demo-admin-1');
@@ -12,7 +14,7 @@ test('administrator directly configures and revokes a scoped role on desktop and
   await form.getByRole('combobox',{name:'支持组'}).selectOption('service-desk');
   await form.getByRole('combobox',{name:'授权人员'}).selectOption('agent-3');
   await form.getByRole('spinbutton',{name:'有效天数'}).fill('7');
-  await form.getByRole('textbox',{name:'授权原因'}).fill('E2E 值班调度授权');
+  await form.getByRole('textbox',{name:'授权原因'}).fill(grantReason);
   await form.getByRole('checkbox',{name:'本次内容不含密码、密钥及安全事件证据'}).check();
   await expect(form.getByRole('combobox',{name:'授权人员'}).locator('option[value="demo-admin-1"]')).toHaveCount(1);
   await form.getByRole('button',{name:'保存并生效'}).click();
@@ -26,14 +28,18 @@ test('administrator directly configures and revokes a scoped role on desktop and
   await page.screenshot({path:'test-results/roles-approved-mobile.png',fullPage:true});
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
   await row.getByRole('button',{name:'撤销授权'}).click();
-  await dialog.getByRole('textbox',{name:'处理依据'}).fill('值班调度结束，撤销本次授权');
+  await dialog.getByRole('textbox',{name:'处理依据'}).fill(revokeReason);
   await dialog.getByRole('checkbox',{name:'本次内容不含密码、密钥及安全事件证据'}).check();
   await dialog.getByRole('button',{name:'确认提交'}).click();
-  await expect(row).toContainText('已撤销');
-  await row.getByRole('button',{name:'授权审计'}).click();
-  await expect(dialog.getByText('提交提案',{exact:true})).toHaveCount(0);
-  await expect(dialog.getByText('批准',{exact:true})).toBeVisible();
-  await expect(dialog.getByText('撤销',{exact:true})).toBeVisible();
+  await expect(row).toHaveCount(0);
+  const granted=await recordedOperation(page,'roles',grantReason);
+  await expect(granted).toContainText('保存并生效');
+  const revoked=await recordedOperation(page,'roles',revokeReason);
+  await expect(revoked).toContainText('撤销');
+  await revoked.getByRole('button',{name:/^查看日志 /}).click();
+  await expect(dialog.getByText(revokeReason,{exact:true})).toBeVisible();
+  await expect(dialog).toContainText('role_binding_audits');
+  await expect(dialog).toContainText('服务台协作工程师 / DISPATCHER');
   await page.screenshot({path:'test-results/roles-audit-mobile.png',fullPage:true});
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
 });

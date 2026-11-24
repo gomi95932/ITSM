@@ -1,4 +1,5 @@
 import { test,expect } from './fixtures';
+import {operationLogRows,recordedOperation} from './operation-log-helpers';
 
 test('administrators directly maintain support groups and members with continuity checks and mobile audit',async({page})=>{
   test.setTimeout(180000);
@@ -17,18 +18,16 @@ test('administrators directly maintain support groups and members with continuit
     await form.getByRole('checkbox',{name:'本次内容不含密码、密钥及安全事件证据'}).check();
     await form.getByRole('button',{name:'保存并生效'}).click();
     await expect(page.getByRole('status')).toContainText('已保存并生效');
-    await page.getByRole('tab',{name:'成员及组变更',exact:true}).click();
-    const row=page.getByRole('listitem',{name:`${kind} ${reason}`,exact:true});
-    await expect(row).toContainText('已批准');
-    await expect(row.getByRole('button',{name:'批准变更'})).toHaveCount(0);
+    await recorded(kind,reason);
+    await page.getByRole('button',{name:'支持组',exact:true}).click();
   }
   async function recorded(kind:string,reason:string){
-    await page.getByRole('tab',{name:'成员及组变更',exact:true}).click();
-    const row=page.getByRole('listitem',{name:`${kind} ${reason}`,exact:true});
-    await expect(row.getByRole('button',{name:'批准变更',exact:true})).toHaveCount(0);
+    const row=await recordedOperation(page,'support',reason,id);
+    await expect(row).toContainText(`${kind} · 保存并生效`);
     return row;
   }
   async function selectGroup(){
+    await page.getByRole('button',{name:'支持组',exact:true}).click();
     await page.getByRole('tab',{name:'支持组与成员',exact:true}).click();
     await page.getByRole('combobox',{name:'当前支持组'}).selectOption(id);
     await expect(page.getByRole('region',{name:'组内成员'}).getByRole('heading',{level:2})).toContainText('研发现场支持组');
@@ -44,7 +43,7 @@ test('administrators directly maintain support groups and members with continuit
   await page.getByRole('tab',{name:'支持组与成员',exact:true}).click();
   await expect(page.getByRole('combobox',{name:'当前支持组'}).locator(`option[value="${id}"]`)).toHaveCount(1);
   await as('demo-admin-2');
-  await expect(await recorded('新增支持组',`创建 ${id}`)).toContainText('已批准');
+  await expect(await recorded('新增支持组',`创建 ${id}`)).toContainText('已生效');
   await selectGroup();await expect(page.getByText('此组暂无成员',{exact:true})).toBeVisible();
 
   await as('demo-admin-1');await selectGroup();
@@ -53,7 +52,7 @@ test('administrators directly maintain support groups and members with continuit
   await expect(edit.getByRole('textbox',{name:'支持组编码'})).toHaveAttribute('readonly','');
   await edit.getByRole('textbox',{name:'支持组名称'}).fill(renamed);
   await submit(`调整 ${id}`,'修改支持组');
-  await as('demo-admin-2');await expect(await recorded('修改支持组',`调整 ${id}`)).toContainText('已批准');
+  await as('demo-admin-2');await expect(await recorded('修改支持组',`调整 ${id}`)).toContainText('已生效');
 
   for(const employee of ['agent-1','agent-2']){
     await as('demo-admin-1');await selectGroup();
@@ -63,7 +62,7 @@ test('administrators directly maintain support groups and members with continuit
     await add.getByRole('button',{name:'搜索员工',exact:true}).click();
     await add.getByRole('combobox',{name:'任职员工'}).selectOption(employee);
     await submit(`加入 ${id} ${employee}`,'增加成员');
-    await as('demo-admin-2');await expect(await recorded('增加成员',`加入 ${id} ${employee}`)).toContainText('已批准');
+    await as('demo-admin-2');await expect(await recorded('增加成员',`加入 ${id} ${employee}`)).toContainText('已生效');
   }
   await selectGroup();
   const members=page.getByRole('region',{name:'组内成员'});
@@ -80,7 +79,7 @@ test('administrators directly maintain support groups and members with continuit
   await as('demo-admin-1');await selectGroup();
   await members.getByRole('button',{name:'移除服务台工程师',exact:true}).click();
   await submit(`移出 ${id} agent-1`,'移除成员');
-  await as('demo-admin-2');await expect(await recorded('移除成员',`移出 ${id} agent-1`)).toContainText('已批准');
+  await as('demo-admin-2');await expect(await recorded('移除成员',`移出 ${id} agent-1`)).toContainText('已生效');
   await selectGroup();await expect(members.getByRole('listitem')).toHaveCount(1);
 
   await as('demo-admin-1');await selectGroup();
@@ -92,18 +91,19 @@ test('administrators directly maintain support groups and members with continuit
   await removing.getByRole('button',{name:'保存并生效'}).click();
   await expect(page.getByRole('alert')).toContainText('至少保留一名有效成员');
   await page.getByRole('button',{name:'取消编辑',exact:true}).click();
+  await expect(await operationLogRows(page,'support',blocked,id)).toHaveCount(0);
   const row=await recorded('移除成员',`移出 ${id} agent-1`);
-  await expect(page.getByRole('listitem',{name:`移除成员 ${blocked}`,exact:true})).toHaveCount(0);
   await page.setViewportSize({width:390,height:844});
   await page.screenshot({path:'test-results/support-structure-mobile.png',fullPage:true});
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
-  await row.getByRole('button',{name:'变更审计'}).click();
-  const dialog=page.getByRole('dialog');
-  await expect(dialog.getByText('提交提案',{exact:true})).toBeVisible();
-  await expect(dialog.getByText('批准',{exact:true})).toBeVisible();
+  await row.getByRole('button',{name:/^查看日志 /}).click();
+  const dialog=page.getByRole('dialog',{name:'操作日志详情'});
+  await expect(dialog).toContainText('support_structure_audits');
+  await expect(dialog).toContainText('demo-admin-1');
+  await expect(dialog).toContainText('agent-1');
   await page.screenshot({path:'test-results/support-audit-mobile.png',fullPage:true});
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
-  await dialog.getByRole('button',{name:'关闭审计'}).click();
+  await dialog.getByRole('button',{name:'关闭日志详情'}).click();
   await selectGroup();await expect(members.getByRole('listitem')).toHaveCount(1);
 
   await page.setViewportSize({width:1440,height:1000});
@@ -113,7 +113,8 @@ test('administrators directly maintain support groups and members with continuit
   await expect(retiring.getByText('无阻塞依赖',{exact:true})).toBeVisible();
   await page.screenshot({path:'test-results/support-lifecycle-desktop.png',fullPage:true});
   await submit(`停用 ${id}`,'停用支持组');
-  await as('demo-admin-2');await expect(await recorded('停用支持组',`停用 ${id}`)).toContainText('已批准');
+  await as('demo-admin-2');await expect(await recorded('停用支持组',`停用 ${id}`)).toContainText('已生效');
+  await page.getByRole('button',{name:'支持组',exact:true}).click();
   await page.getByRole('tab',{name:'支持组与成员',exact:true}).click();
   await page.getByRole('combobox',{name:'当前支持组'}).selectOption(id);
   await expect(page.getByRole('button',{name:'增加成员',exact:true})).toBeDisabled();
@@ -127,7 +128,7 @@ test('administrators directly maintain support groups and members with continuit
   await page.getByRole('combobox',{name:'当前支持组'}).selectOption(id);
   await page.getByRole('button',{name:'恢复支持组',exact:true}).click();
   await submit(`恢复 ${id}`,'恢复支持组');
-  await as('demo-admin-2');await expect(await recorded('恢复支持组',`恢复 ${id}`)).toContainText('已批准');
+  await as('demo-admin-2');await expect(await recorded('恢复支持组',`恢复 ${id}`)).toContainText('已生效');
   await selectGroup();await expect(members.getByText('此组暂无成员',{exact:true})).toBeVisible();
 
   await as('demo-admin-1');

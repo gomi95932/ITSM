@@ -36,6 +36,7 @@ export const messages: Record<string,string> = {
   AUTOMATIC_DISPATCH_BACKUP_MAPPING_REQUIRED:'备用岗位须是该服务已配置、已启用且属于同一支持组的协办岗位，请刷新映射后重试。',
   AUTOMATIC_DISPATCH_BACKUP_PERSON_REQUIRED:'指定备用人员须在所选备用岗位有效任职且属于当前支持组，请刷新人员及岗位配置后重试。',
   INVALID_OPERATIONS_CONFIG:'厂区或服务时限配置无效，请核对范围、路由及模板中的必填项。',
+  INVALID_OPERATION_LOG_FILTER:'日志筛选条件无效，请检查时间范围、模块与分页。',
   OPERATIONS_REFERENCE_NOT_FOUND:'配置引用的人员、支持组、岗位或服务不存在，请刷新后重新选择。',
   OPERATIONS_INDEPENDENT_REVIEW_REQUIRED:'须由另一名有效平台管理员复核，且复核人不能更改本人的厂区权限。',
   SITE_ISOLATION_CANNOT_BE_DISABLED:'厂区隔离启用后不能关闭，请按批准的范围调整配置。',

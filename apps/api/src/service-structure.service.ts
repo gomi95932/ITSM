@@ -117,7 +117,7 @@ export class ServiceStructureService {
       await client.query('SELECT pg_advisory_xact_lock_shared($1)',[ROLE_AUTHORIZATION_LOCK]);
       await this.admin(client,actor.id);
       const current=await this.current(client),options=await this.options(client);
-      const changes=await client.query<ServiceStructureChange>(`SELECT ${columns} FROM service_structure_proposals ORDER BY created_at DESC,id DESC LIMIT 101`);
+      const changes=await client.query<ServiceStructureChange>(`SELECT ${columns} FROM service_structure_proposals ORDER BY (status='PENDING') DESC,created_at DESC,id DESC LIMIT 101`);
       options.people=(await client.query(`SELECT e.id,e.display_name AS name,e.active,
         ARRAY(SELECT m.group_id FROM group_memberships m WHERE m.employee_id=e.id) AS groups,
         EXISTS(SELECT 1 FROM identity_links l WHERE l.employee_id=e.id AND l.corp_id=$2) AS "dingLinked"

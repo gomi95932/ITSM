@@ -1,21 +1,23 @@
 <script setup lang="ts">
-import {onMounted,ref,watch} from 'vue';
+import {computed,onMounted,ref,watch} from 'vue';
 import {Check,Plus,RefreshCw,Send,Trash2,X} from 'lucide-vue-next';
 import {DEFAULT_CALENDAR,type ServiceCalendar,type SessionUser} from '@itsm/contracts';
 import {api,errorText} from '../api';
 import {createRequestKey} from '../request-key';
 import ContentBoundary from './ContentBoundary.vue';
+import OperationLogLink from './OperationLogLink.vue';
 type Version={version:number;config:ServiceCalendar;approved:boolean;created_at:string;created_by:string|null};
 type Proposal={id:string;expected_version:number;config:ServiceCalendar;proposed_by:string;reason:string;status:string;version:number;review_reason:string|null};
 defineProps<{user:SessionUser}>();
-const config=ref<ServiceCalendar>(structuredClone(DEFAULT_CALENDAR)),version=ref(1),approved=ref(false),proposals=ref<Proposal[]>([]),history=ref<Version[]>([]);
+const config=ref<ServiceCalendar>(structuredClone(DEFAULT_CALENDAR)),version=ref(1),approved=ref(false),proposals=ref<Proposal[]>([]);
+const saved=ref(''),dirty=computed(()=>JSON.stringify(config.value)!==saved.value);
 const busy=ref(false),error=ref(''),reason=ref(''),safe=ref(false),reviewReason=ref(''),reviewSafe=ref(false),id=ref(createRequestKey());
 const holiday=ref(''),workday=ref('');
 watch([config,reason],()=>{safe.value=false;id.value=createRequestKey();},{deep:true});
 watch(reviewReason,()=>{reviewSafe.value=false;});
 async function load(){busy.value=true;error.value='';try{
   const result=await api<{current:Version;proposals:Proposal[];history:Version[]}>('/admin/sla-calendar');
-  config.value=structuredClone(result.current.config);version.value=result.current.version;approved.value=result.current.approved;proposals.value=result.proposals;history.value=result.history;
+  config.value=structuredClone(result.current.config);saved.value=JSON.stringify(config.value);version.value=result.current.version;approved.value=result.current.approved;proposals.value=result.proposals.filter(p=>p.status==='PENDING');
 }catch(e){error.value=errorText(e);}finally{busy.value=false;}}
 function addDate(kind:'holidays'|'workdays'){
   const date=kind==='holidays'?holiday.value:workday.value;
@@ -45,13 +47,13 @@ onMounted(load);
       <label>日历变更原因<textarea v-model="reason" required maxlength="500" rows="2"/></label><ContentBoundary v-model="safe"/>
       <button class="primary" :disabled="busy||!safe||!reason.trim()"><Send :size="16"/>提交日历审批</button>
     </form>
-    <div class="detail-section"><h3>日历审批记录</h3><label>日历复核意见<textarea v-model="reviewReason" maxlength="500" rows="2"/></label><ContentBoundary v-model="reviewSafe"/>
+    <OperationLogLink module="calendar" :disabled="busy||dirty||!!reason||!!reviewReason"/>
+    <div v-if="proposals.length" class="detail-section"><h3>待处理日历审批</h3><label>日历复核意见<textarea v-model="reviewReason" maxlength="500" rows="2"/></label><ContentBoundary v-model="reviewSafe"/>
       <div v-for="p in proposals" :key="p.id" class="detail-section"><strong>{{p.status==='PENDING'?'待复核':p.status==='APPROVED'?'已批准':'已拒绝'}} · 基于 V{{p.expected_version}}</strong><p>{{p.reason}}</p>
         <details><summary>查看日历提案</summary><p>{{p.config.startHour}}:00–{{p.config.endHour}}:00 · {{p.config.timeZone}}</p><p class="dates">节假日：{{p.config.holidays.join('、')||'无'}}</p><p class="dates">调休工作日：{{p.config.workdays.join('、')||'无'}}</p></details><p v-if="p.review_reason">{{p.review_reason}}</p>
         <div v-if="p.status==='PENDING'&&p.proposed_by!==user.id" class="form-footer"><button class="secondary" :disabled="busy||!reviewSafe||!reviewReason.trim()" @click="review(p,'REJECT')"><X :size="16"/>拒绝日历</button><button class="primary" :disabled="busy||!reviewSafe||!reviewReason.trim()" @click="review(p,'APPROVE')"><Check :size="16"/>批准日历</button></div>
       </div><p v-if="!proposals.length" class="muted">暂无日历变更</p>
     </div>
-    <details class="detail-section"><summary>已生效日历历史</summary><div v-for="v in history" :key="v.version" class="detail-section"><strong>V{{v.version}} · {{v.approved?'已批准':'试行'}}</strong><p>{{v.config.startHour}}:00–{{v.config.endHour}}:00 · {{v.config.timeZone}}</p><p class="dates">节假日：{{v.config.holidays.join('、')||'无'}}</p><p class="dates">调休工作日：{{v.config.workdays.join('、')||'无'}}</p></div></details>
   </section>
 </template>
 <style scoped>

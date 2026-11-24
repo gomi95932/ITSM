@@ -1,14 +1,16 @@
 <script setup lang="ts">
-import {onMounted,ref,watch} from 'vue';
+import {computed,onMounted,ref,watch} from 'vue';
 import {Check,RefreshCw,Send,X} from 'lucide-vue-next';
 import {DEFAULT_PRIORITY_POLICY,PRIORITIES,PRIORITY_LABELS,type PriorityPolicy,type SessionUser,type CatalogItem} from '@itsm/contracts';
 import {api,errorText} from '../api';
 import {createRequestKey} from '../request-key';
 import ContentBoundary from './ContentBoundary.vue';
+import OperationLogLink from './OperationLogLink.vue';
 import SlaCalendarPanel from './SlaCalendarPanel.vue';
 type Proposal={id:string;config:PriorityPolicy;reason:string;proposed_by:string;status:string;review_reason:string|null;version:number;expected_version:number};
 const props=defineProps<{user:SessionUser}>();
 const config=ref<PriorityPolicy>(structuredClone(DEFAULT_PRIORITY_POLICY)),version=ref(1),approved=ref(false),proposals=ref<Proposal[]>([]),services=ref<CatalogItem[]>([]);
+const saved=ref(''),dirty=computed(()=>JSON.stringify(config.value)!==saved.value);
 const busy=ref(false),error=ref(''),reason=ref(''),safe=ref(false),reviewReason=ref(''),reviewSafe=ref(false),id=ref(createRequestKey());
 const impacts=[{code:'COMPANY' as const,name:'全公司 / 核心生产'},{code:'DEPARTMENT' as const,name:'部门 / 多人'},{code:'INDIVIDUAL' as const,name:'单人'}];
 const urgencies=[{code:'HIGH' as const,name:'工作中断'},{code:'MEDIUM' as const,name:'明显影响'},{code:'LOW' as const,name:'轻微 / 可计划'}];
@@ -16,7 +18,7 @@ watch([config,reason],()=>{safe.value=false;id.value=createRequestKey();},{deep:
 watch(reviewReason,()=>{reviewSafe.value=false;});
 async function load(){busy.value=true;error.value='';try{
   const result=await api<{current:{config:PriorityPolicy;version:number;approved:boolean};proposals:Proposal[]}>('/admin/priority-policy');
-  config.value=structuredClone(result.current.config);version.value=result.current.version;approved.value=result.current.approved;proposals.value=result.proposals;
+  config.value=structuredClone(result.current.config);saved.value=JSON.stringify(config.value);version.value=result.current.version;approved.value=result.current.approved;proposals.value=result.proposals.filter(p=>p.status==='PENDING');
   services.value=(await api<{items:CatalogItem[]}>('/catalog')).items;
 }catch(e){error.value=errorText(e);}finally{busy.value=false;}}
 async function propose(){if(!safe.value||busy.value)return;busy.value=true;error.value='';try{
@@ -42,7 +44,8 @@ onMounted(load);
       <label>变更原因<textarea v-model="reason" maxlength="500" required rows="2"/></label><ContentBoundary v-model="safe"/>
       <button class="primary" :disabled="busy||!safe||!reason.trim()"><Send :size="16"/>提交配置审批</button>
     </form>
-    <section class="detail-section"><h2>配置审批记录</h2><label>复核意见<textarea v-model="reviewReason" maxlength="500" rows="2"/></label><ContentBoundary v-model="reviewSafe"/>
+    <OperationLogLink module="priority" :disabled="busy||dirty||!!reason||!!reviewReason"/>
+    <section v-if="proposals.length" class="detail-section"><h2>待处理配置审批</h2><label>复核意见<textarea v-model="reviewReason" maxlength="500" rows="2"/></label><ContentBoundary v-model="reviewSafe"/>
       <div v-for="p in proposals" :key="p.id" class="detail-section"><strong>{{p.status==='PENDING'?'待复核':p.status==='APPROVED'?'已批准':'已拒绝'}} · 基于 V{{p.expected_version}}</strong><p>{{p.reason}}</p><details><summary>查看提交配置</summary><div class="table-wrap"><table><thead><tr><th>影响范围</th><th v-for="u in urgencies" :key="u.code">{{u.name}}</th></tr></thead><tbody><tr v-for="i in impacts" :key="i.code"><th>{{i.name}}</th><td v-for="u in urgencies" :key="u.code">{{p.config.matrix[i.code][u.code]}}</td></tr></tbody></table><table><tbody><tr v-for="v in PRIORITIES" :key="v"><th>{{v}}</th><td>响应 {{p.config.targets[v].response}} 分 / 解决 {{p.config.targets[v].resolution}} 分</td></tr></tbody></table><p>关键服务：{{p.config.criticalServices.join('、')||'无'}} · 提醒 {{p.config.reviewMinutes}} 分钟</p></div></details><p v-if="p.review_reason">{{p.review_reason}}</p>
         <div v-if="p.status==='PENDING'&&p.proposed_by!==user.id" class="form-footer"><button class="secondary" :disabled="busy||!reviewSafe||!reviewReason.trim()" @click="review(p,'REJECT')"><X :size="16"/>拒绝</button><button class="primary" :disabled="busy||!reviewSafe||!reviewReason.trim()" @click="review(p,'APPROVE')"><Check :size="16"/>批准</button></div>
       </div><p v-if="!proposals.length" class="muted">暂无配置变更</p>

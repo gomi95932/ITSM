@@ -6,6 +6,7 @@ import {api,errorText} from '../api';
 import {createRequestKey} from '../request-key';
 import {formatDate} from '../labels';
 import ContentBoundary from './ContentBoundary.vue';
+import OperationLogLink from './OperationLogLink.vue';
 type Appointment=ServiceStructure['appointments'][number];
 type Person={id:string;name:string;groups:string[]};
 type Data={version:number;canApply:boolean;positions:ServiceStructure['positions'];items:Appointment[];people:Person[];proposals:{id:string;status:string;reason:string;reviewReason:string|null}[]};
@@ -52,7 +53,7 @@ onMounted(load);
       <div class="actions"><button class="primary" :disabled="!safe||!reason.trim()"><Send :size="16"/>{{data.canApply?'保存并生效':'提交独立复核'}}</button><button v-if="data.items.some(a=>a.id===draft!.id&&a.enabled)" type="button" class="secondary" :disabled="!safe||!reason.trim()" @click="revoke"><Ban :size="16"/>立即撤销任职</button><button type="button" class="text-button" @click="draft=undefined">取消</button></div>
     </fieldset></form>
     <div v-if="data" class="table-wrap"><table><thead><tr><th>岗位</th><th>人员</th><th>值守角色</th><th>有效期</th><th>状态</th><th>操作</th></tr></thead><tbody><tr v-for="a in data.items" :key="a.id"><td>{{positionName(a.positionId)}}</td><td>{{personName(a.employeeId)}}</td><td>{{a.duty==='PRIMARY'?'主责':'备岗'}}</td><td>{{formatDate(a.validFrom,true)}} 至 {{a.validTo===null?'长期有效':formatDate(a.validTo,true)}}</td><td>{{a.enabled?'启用':'停用'}}</td><td><button class="text-button" :disabled="busy" @click="edit(a)">维护</button></td></tr></tbody></table></div>
-    <section v-if="data?.proposals.length" class="review-history"><h2>我的变更记录</h2><p v-for="p in data.proposals" :key="p.id">{{statuses[p.status]??p.status}} · {{p.reason}}<span v-if="p.reviewReason"> · {{p.reviewReason}}</span></p></section>
+    <OperationLogLink module="service-structure" :disabled="busy||!!draft"/>
   </section>
 </template>
 <style scoped>

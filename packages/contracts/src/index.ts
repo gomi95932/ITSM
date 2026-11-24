@@ -164,3 +164,4 @@ export interface TicketReceipt {
 }
 export * from './fulfillment.js';
 export * from './operations.js';
+export * from './operation-logs.js';

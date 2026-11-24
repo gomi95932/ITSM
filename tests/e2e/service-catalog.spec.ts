@@ -1,4 +1,5 @@
 import { test,expect } from './fixtures';
+import {recordedOperation} from './operation-log-helpers';
 
 test('administrators configure a new service domain through actual employee intake without changing code',async({page})=>{
   test.setTimeout(120000);
@@ -53,7 +54,7 @@ test('administrators configure a new service domain through actual employee inta
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
   await form.getByRole('button',{name:'确认目录草稿',exact:true}).click();
 
-  async function publish(reason:string){
+  async function publish(reason:string,published=true){
     const publishing=page.getByRole('region',{name:'配置发布'});
     await publishing.getByRole('textbox',{name:'变更依据'}).fill(reason);
     await publishing.getByRole('checkbox',{name:'本次内容不含密码、密钥及安全事件证据'}).check();
@@ -61,13 +62,14 @@ test('administrators configure a new service domain through actual employee inta
     await expect(publishing).toContainText('服务台工程师');
     await publishing.getByRole('button',{name:'保存并生效',exact:true}).click();
     await expect(page.getByRole('status')).toContainText('配置已保存并生效');
-    await page.getByRole('tab',{name:'变更记录',exact:true}).click();
-    await page.getByRole('row').filter({hasText:reason}).getByRole('button',{name:'查看完整配置',exact:true}).click();
-    const reviewing=page.getByRole('region',{name:'配置复核'});
-    await expect(reviewing.getByRole('region',{name:'服务目录变更明细'})).toContainText(code);
-    await expect(reviewing).toContainText('设备编码');
+    const row=await recordedOperation(page,'service-structure',reason);
+    await row.getByRole('button',{name:/^查看日志 /}).click();
+    const reviewing=page.getByRole('dialog',{name:'操作日志详情'});
+    await expect(reviewing).toContainText(code);
+    await expect(reviewing).toContainText(published?'设备编码':'published');
     await page.screenshot({path:'test-results/service-catalog-review-mobile.png',fullPage:true});
     await expect(reviewing.getByRole('button',{name:'批准发布',exact:true})).toHaveCount(0);
+    await reviewing.getByRole('button',{name:'关闭日志详情'}).click();
   }
   await publish(`发布试验设备服务 ${suffix}`);
   await page.getByRole('combobox',{name:'开发身份'}).selectOption('employee-1');
@@ -89,7 +91,7 @@ test('administrators configure a new service domain through actual employee inta
   form=page.getByRole('region',{name:'编辑服务项'});
   await form.getByRole('checkbox',{name:'发布服务项',exact:true}).uncheck();
   await form.getByRole('button',{name:'确认目录草稿',exact:true}).click();
-  await publish(`停用试验设备服务 ${suffix}`);
+  await publish(`停用试验设备服务 ${suffix}`,false);
   await page.getByRole('combobox',{name:'开发身份'}).selectOption('employee-1');
   await page.getByRole('button',{name:'服务目录',exact:true}).click();
   await expect(page.getByRole('button',{name:new RegExp(name)})).toHaveCount(0);

@@ -50,7 +50,7 @@ export class OperationsController {
   @Get() async list(@Headers() h:H){const actor=await this.identity.identity(auth(h));return this.db.transaction(async c=>{
     await c.query('SELECT pg_advisory_xact_lock_shared($1)',[ROLE_AUTHORIZATION_LOCK]);await this.admin(c,actor.id);
     return {current:(await c.query('SELECT * FROM operations_current')).rows[0],
-      proposals:(await c.query('SELECT * FROM operations_proposals ORDER BY created_at DESC,id LIMIT 100')).rows,
+      proposals:(await c.query("SELECT * FROM operations_proposals ORDER BY (status='PENDING') DESC,created_at DESC,id LIMIT 100")).rows,
       history:(await c.query('SELECT version,created_at,created_by FROM operations_versions ORDER BY version DESC LIMIT 100')).rows,
       groups:(await c.query('SELECT id,name FROM support_groups WHERE enabled ORDER BY name')).rows,
       positions:(await c.query('SELECT id,name,"groupId" FROM support_positions WHERE enabled ORDER BY name')).rows,

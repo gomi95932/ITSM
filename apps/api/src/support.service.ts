@@ -51,7 +51,7 @@ export class SupportService {
     const groups=await this.db.pool.query<SupportGroupView>(`SELECT ${groupColumns} FROM support_groups g
       WHERE $1 OR g.id=ANY($2::text[]) ORDER BY g.name,g.id LIMIT 201`,[access.admin,access.groups]);
     const proposals=await this.db.pool.query<SupportChangeView>(`SELECT ${columns} FROM support_structure_proposals p LEFT JOIN employees e ON e.id=p.employee_id
-      WHERE $1 OR p.group_id=ANY($2::text[]) ORDER BY p.created_at DESC,p.id DESC LIMIT 201`,[access.admin,access.groups]);
+      WHERE $1 OR p.group_id=ANY($2::text[]) ORDER BY (p.status='PENDING') DESC,p.created_at DESC,p.id DESC LIMIT 201`,[access.admin,access.groups]);
     return {groups:groups.rows.slice(0,200),groupsHasMore:groups.rows.length>200,items:proposals.rows.slice(0,200),
       proposalsHasMore:proposals.rows.length>200,canManageGroups:access.admin,canReview:access.admin};
   }

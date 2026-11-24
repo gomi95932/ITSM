@@ -1,23 +1,21 @@
 <script setup lang="ts">
 import { computed,onMounted,ref,watch } from 'vue';
-import { Ban,Check,History,LoaderCircle,Plus,RefreshCw,Search,X } from 'lucide-vue-next';
+import { Ban,Check,LoaderCircle,Plus,RefreshCw,Search,X } from 'lucide-vue-next';
 import type { ManagedRoleCode,RoleBindingView,SessionUser } from '@itsm/contracts';
 import { api,errorText } from '../api';
 import { createRequestKey } from '../request-key';
 import { formatDate } from '../labels';
 import ContentBoundary from './ContentBoundary.vue';
+import OperationLogLink from './OperationLogLink.vue';
 
 const props=defineProps<{user:SessionUser}>();
 type Options={groups:{id:string;name:string}[];people:{id:string;name:string;groups:string[]}[];hasMore:boolean;roleCodes:ManagedRoleCode[]};
-type Audit={actorId:string|null;executionPrincipal?:string;authorityRef?:string;action:string;reason:string;createdAt:string};
 const roles:Record<ManagedRoleCode,string>={PLATFORM_ADMIN:'平台管理员',DISPATCHER:'调度员',GROUP_LEAD:'支持组长'};
 const states:Record<string,string>={PENDING:'待独立复核',ACTIVE:'已批准',REJECTED:'已拒绝',REVOKED:'已撤销'};
-const events:Record<string,string>={PROPOSED:'提交提案',APPROVED:'批准',REJECTED:'拒绝',REVOKED:'撤销',BOOTSTRAPPED:'受控初始化',HANDED_OFF:'管理员交接',HANDOFF_REVOKED:'交接撤销演示权限'};
 const items=ref<RoleBindingView[]>([]),options=ref<Options>({groups:[],people:[],hasMore:false,roleCodes:[]}),canReview=ref(false);
 const busy=ref(false),loading=ref(true),error=ref(''),adding=ref(false),query=ref('');
 const role=ref<ManagedRoleCode>('DISPATCHER'),group=ref(''),employee=ref(''),days=ref(30),reason=ref(''),safe=ref(false),proposalId=ref(createRequestKey());
 const decision=ref<{item:RoleBindingView;action:'APPROVE'|'REJECT'|'REVOKE'}>(),decisionReason=ref(''),decisionSafe=ref(false);
-const history=ref<{item:RoleBindingView;events:Audit[]}>();
 let grantDates:{validFrom:string;validTo:string}|undefined;
 const people=computed(()=>options.value.people.filter(person=>canReview.value||role.value==='PLATFORM_ADMIN'||person.groups.includes(group.value)));
 watch([role,group],()=>{employee.value='';});
@@ -25,7 +23,7 @@ watch([role,group,employee,days,reason],()=>{safe.value=false;proposalId.value=c
 watch(decisionReason,()=>{decisionSafe.value=false;});
 async function load(){
   loading.value=true;error.value='';
-  try{const result=await api<{items:RoleBindingView[];canReview:boolean}>('/admin/role-bindings');items.value=result.items;canReview.value=result.canReview;}
+  try{const result=await api<{items:RoleBindingView[];canReview:boolean}>('/admin/role-bindings');items.value=result.items.filter(item=>['ACTIVE','PENDING'].includes(item.status));canReview.value=result.canReview;}
   catch(e){error.value=errorText(e);}finally{loading.value=false;}
 }
 async function search(){
@@ -59,18 +57,13 @@ async function decide(){
   }catch(e){error.value=errorText(e);decision.value=undefined;await load();error.value=errorText(e);}
   finally{busy.value=false;}
 }
-async function showHistory(item:RoleBindingView){
-  busy.value=true;error.value='';
-  try{const result=await api<{items:Audit[]}>(`/admin/role-bindings/${item.id}/history`);history.value={item,events:result.items};}
-  catch(e){error.value=errorText(e);}finally{busy.value=false;}
-}
 onMounted(load);
 </script>
 
 <template>
   <div class="roles-panel">
     <p v-if="error" class="error-banner" role="alert">{{error}}</p>
-    <div class="section-heading"><span class="muted">最近 200 条授权记录</span><div class="role-tools">
+    <div class="section-heading"><span class="muted">角色人员配置</span><div class="role-tools"><OperationLogLink module="roles" :disabled="busy||adding||!!decision"/>
       <button class="icon-button" title="刷新角色授权" aria-label="刷新角色授权" :disabled="busy||loading" @click="load"><RefreshCw :size="17" :class="{spin:loading}"/></button>
       <button class="primary" :disabled="busy" @click="openGrant"><Plus :size="17"/>新增角色人员</button>
     </div></div>
@@ -103,7 +96,7 @@ onMounted(load);
             <button class="icon-button" title="拒绝授权" aria-label="拒绝授权" :disabled="busy" @click="review(item,'REJECT')"><X :size="17"/></button>
           </template>
           <button v-if="canReview&&['PENDING','ACTIVE'].includes(item.status)" class="icon-button" title="撤销授权" aria-label="撤销授权" :disabled="busy" @click="review(item,'REVOKE')"><Ban :size="17"/></button>
-          <button class="icon-button" title="授权审计" aria-label="授权审计" :disabled="busy" @click="showHistory(item)"><History :size="17"/></button>
+          <OperationLogLink module="roles" :object="item.id" :disabled="busy||adding||!!decision"/>
         </div>
       </li>
     </ul>
@@ -113,11 +106,6 @@ onMounted(load);
       <p>{{decision.item.employeeName}} · {{roles[decision.item.roleCode]}} · {{decision.item.groupName??'全局配置范围'}}</p>
       <p v-if="decision.action==='REVOKE'&&decision.item.employeeId===user.id" class="danger-text">正在撤销自己的授权，提交后对应管理权限将立即失效。</p>
       <form class="action-form" @submit.prevent="decide"><label>处理依据<textarea v-model="decisionReason" required maxlength="1000" rows="3"/></label><ContentBoundary v-model="decisionSafe"/><div class="form-footer"><button class="primary" :disabled="busy||!decisionSafe||!decisionReason.trim()"><Check :size="16"/>确认提交</button></div></form>
-    </section></div>
-    <div v-if="history" class="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="role-history-title">
-      <div class="section-heading"><h2 id="role-history-title">授权审计</h2><button class="icon-button" title="关闭" aria-label="关闭" @click="history=undefined"><X :size="17"/></button></div>
-      <p>{{history.item.employeeName}} · {{roles[history.item.roleCode]}}</p>
-      <ol class="role-history"><li v-for="(event,index) in history.events" :key="index"><strong>{{events[event.action]??event.action}}</strong><p class="muted">{{event.actorId??event.executionPrincipal}} · {{formatDate(event.createdAt)}}</p><p v-if="event.authorityRef" class="muted">{{event.authorityRef}}</p><p>{{event.reason}}</p></li></ol>
     </section></div>
   </div>
 </template>
