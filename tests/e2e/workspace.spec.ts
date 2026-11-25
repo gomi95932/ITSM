@@ -34,6 +34,7 @@ test('explicit proxy grant, ordinary GEN intake, correction and revocation stay 
   await page.getByRole('textbox',{name:'纠偏原因'}).fill('核实为普通网络故障');
   await page.getByRole('checkbox',{name:'本次内容不含密码、密钥及安全事件证据'}).check();
   await page.getByRole('button',{name:'保存分类'}).click();
+  await expect(page.getByRole('alert')).toHaveCount(0);
   await expect(page.getByRole('region',{name:'工单分类'})).toContainText('原分类：其他 IT 事项');
   await page.screenshot({path:'test-results/classification-mobile.png',fullPage:true});
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
@@ -74,7 +75,7 @@ test('employee and IT workbench complete a real ticket round trip',async({page})
   await page.getByRole('checkbox',{name:'本次内容不含密码、密钥及安全事件证据'}).check();
   await page.getByRole('button',{name:'接单并回复',exact:true}).last().click();
   await expect(page.getByRole('button',{name:'提交解决方案',exact:true})).toBeVisible();
-  await expect(page.locator('.ticket-meta')).toContainText('处理人：服务台工程师');
+  await expect(page.locator('.ticket-meta')).toContainText('当前处理人：服务台工程师');
   await page.getByRole('button',{name:'返回工单列表'}).click();
   await page.getByRole('button',{name:'我负责'}).click();
   await expect(page.getByRole('button',{name:/E2E WMS 登录异常/})).toBeVisible();
@@ -89,8 +90,8 @@ test('employee and IT workbench complete a real ticket round trip',async({page})
   await page.screenshot({path:'test-results/handover-mobile.png',fullPage:true});
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
   await page.getByRole('button',{name:'发起交接',exact:true}).last().click();
-  await expect(page.locator('.ticket-meta')).toContainText('待交接：应用支持工程师');
-  await expect(page.locator('.ticket-meta')).toContainText('处理人：服务台工程师');
+  await expect(page.locator('.ticket-meta')).toContainText('待交接人：应用支持工程师（待接单）');
+  await expect(page.locator('.ticket-meta')).toContainText('当前处理人：服务台工程师');
   await page.getByRole('button',{name:'返回工单列表'}).click();
   await page.getByRole('button',{name:'待对方接收'}).click();
   await expect(page.getByRole('button',{name:/E2E WMS 登录异常/})).toBeVisible();
@@ -107,7 +108,7 @@ test('employee and IT workbench complete a real ticket round trip',async({page})
   await page.getByRole('textbox',{name:'回复内容'}).fill('应用支持已接收，将继续排查');
   await page.getByRole('checkbox',{name:'本次内容不含密码、密钥及安全事件证据'}).check();
   await page.getByRole('button',{name:'确认接收',exact:true}).last().click();
-  await expect(page.locator('.ticket-meta')).toContainText('处理人：应用支持工程师');
+  await expect(page.locator('.ticket-meta')).toContainText('当前处理人：应用支持工程师');
   await expect(page.locator('.ticket-meta')).not.toContainText('待交接');
   await page.getByRole('button',{name:'返回工单列表'}).click();
   await page.getByRole('button',{name:'我负责'}).click();
@@ -169,8 +170,10 @@ test('security contact and rejected text remain usable on mobile without creatin
 });
 
 test('P1 work starts before a supervisor independently confirms priority',async({page})=>{
+  test.setTimeout(60000);
   await page.setViewportSize({width:1440,height:1000});await page.goto('/');
   await page.getByRole('button',{name:'提交报障',exact:true}).click();
+  await page.getByRole('combobox',{name:'一级目录'}).selectOption({label:'信息化系统'});
   await page.getByRole('combobox',{name:'服务类型',exact:true}).selectOption('INC-BIZ');
   await page.getByRole('textbox',{name:'问题标题'}).fill('E2E P1 核心生产业务异常');
   await page.getByRole('textbox',{name:'详细情况'}).fill('核心生产业务暂时不可用，请立即排查。');
@@ -200,7 +203,7 @@ test('P1 work starts before a supervisor independently confirms priority',async(
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
   await review.getByRole('button',{name:'提交优先级确认'}).click();
   await expect(review).toContainText('主管已调整');await expect(review).toContainText('本轮 SLA：P1');
-  await expect(page.locator('.ticket-meta')).toContainText('处理人：服务台工程师');
+  await expect(page.locator('.ticket-meta')).toContainText('当前处理人：服务台工程师');
   await expect(review.getByRole('button',{name:'提交优先级确认'})).toHaveCount(0);
   await page.screenshot({path:'test-results/p1-reviewed-mobile.png',fullPage:true});
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);

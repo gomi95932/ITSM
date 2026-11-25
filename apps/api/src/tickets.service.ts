@@ -737,14 +737,19 @@ export class TicketsService {
       await client.query('SELECT pg_advisory_xact_lock_shared($1)',[ROLE_AUTHORIZATION_LOCK]);
       await this.requireActive(client,actor);
       const ticket=await this.accessible(client,actor,id);
-      if(ticket.assignee_id!==actor.id||ticket.pending_assignee_id)
+      const queuedDispatcher=!ticket.assignee_id&&ticket.status==='QUEUED'
+        &&!!(await client.query('SELECT 1 FROM group_memberships WHERE employee_id=$1 AND group_id=$2 FOR SHARE',
+          [actor.id,ticket.owner_group_id])).rowCount
+        &&await canDispatch(client,actor.id,ticket.owner_group_id);
+      if((ticket.assignee_id!==actor.id&&!queuedDispatcher)||ticket.pending_assignee_id)
         throw new ForbiddenException({code:'CLASSIFICATION_OWNER_REQUIRED'});
-      await this.requireProcessing(client,ticket,actor.id);
+      if(ticket.assignee_id)await this.requireProcessing(client,ticket,actor.id);
       if(!['QUEUED','IN_PROGRESS','WAITING_USER','WAITING_VENDOR'].includes(ticket.status))
         throw new ConflictException({code:'CLASSIFICATION_NOT_ALLOWED'});
       if(input.serviceCode===ticket.service_code)throw new ConflictException({code:'CLASSIFICATION_UNCHANGED'});
       const service=await this.catalogFor(client,actor.id,ticket.requester_id,input.serviceCode,input.formVersion,input.fields,false,true);
       if(service.group_id===ticket.owner_group_id)return {groupId:service.group_id,crossGroup:false,items:[]};
+      if(queuedDispatcher)throw new ConflictException({code:'CLASSIFICATION_OWNER_MUST_CLAIM'});
       if(ticket.service_type!=='INC'||service.type!=='INC')throw new BadRequestException({code:'CROSS_GROUP_CLASSIFICATION_INC_ONLY'});
       if((service.routingSnapshot.site?.id??null)!==((ticket.service_routing_snapshot.site as {id?:string}|undefined)?.id??null))
         throw new ConflictException({code:'CLASSIFICATION_SITE_CHANGED'});

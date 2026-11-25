@@ -33,7 +33,8 @@ try{
   const tickets=new TicketsService(db,{},new SlaService(),intake);
   const navigation=new CatalogNavigationService(db,intake);
   await pool.query(`INSERT INTO service_catalog(code,type,form_version,published,group_id,name,required_fields,field_schema)
-    VALUES('INC-ERP','INC',1,true,'applications','ERP故障','[]','[]')`);
+    VALUES('INC-ERP','INC',1,true,'applications','ERP故障','[]','[]'),
+    ('INC-DESK','INC',1,true,'service-desk','服务台故障','[]','[]')`);
   await pool.query(`INSERT INTO assignment_policy_versions(group_id,priority,receive_minutes,calendar_snapshot,valid_from,valid_to,
     proposed_by,approved_by,approved_at,active) VALUES('applications','P3',60,
     '{"timeZone":"Asia/Shanghai","startHour":9,"endHour":18,"holidays":[],"workdays":[]}',
@@ -45,6 +46,7 @@ try{
     positions:[{id:'desk-position',name:'Helpdesk',domainId:'desk-domain',groupId:'service-desk',enabled:true},
       {id:'erp-position',name:'ERP engineer',domainId:'app-domain',groupId:'applications',enabled:true}],appointments,
     mappings:[{serviceCode:'INC-BIZ',domainId:'desk-domain',primaryPositionId:'desk-position',collaboratingPositionIds:[],enabled:true},
+      {serviceCode:'INC-DESK',domainId:'desk-domain',primaryPositionId:'desk-position',collaboratingPositionIds:[],enabled:true},
       {serviceCode:'INC-ERP',domainId:'app-domain',systemId:'erp-system',primaryPositionId:'erp-position',collaboratingPositionIds:[],enabled:true}]};
   await pool.query('INSERT INTO service_structure_versions(version,config) VALUES(2,$1)',[JSON.stringify(config)]);
   await pool.query('UPDATE service_structure_current SET version=2');
@@ -66,6 +68,15 @@ try{
     contentClass:'GENERAL',...extra},randomUUID(),randomUUID());
   const offer=async()=>{const ticket=await create();await action(ticket.id,desk.id,'ACCEPT',{comment:'Triage started'});
     const before=await row(ticket.id);await classify(ticket.id);return {id:ticket.id,before};};
+  const queued=await create();
+  await assert.rejects(tickets.classificationCandidates(engineer,queued.id,{serviceCode:'INC-DESK',formVersion:1,fields:{}}),
+    error=>error.getResponse().code==='CLASSIFICATION_OWNER_REQUIRED');
+  const sameGroup=await tickets.classificationCandidates(desk,queued.id,{serviceCode:'INC-DESK',formVersion:1,fields:{}});
+  assert.equal(sameGroup.crossGroup,false);
+  await tickets.classify(desk,queued.id,{expectedVersion:(await row(queued.id)).version,serviceCode:'INC-DESK',
+    formVersion:1,fields:{},reason:'Queued desk triage',contentClass:'GENERAL'},randomUUID(),randomUUID());
+  assert.equal((await row(queued.id)).service_code,'INC-DESK');
+  assert.equal((await row(queued.id)).assignee_id,null);
   const workspace=new WorkspaceController(db,{identity:async()=>requester},{},{},{});
   const beforeDisable=await create();
   const current=await navigation.tree(admin);
