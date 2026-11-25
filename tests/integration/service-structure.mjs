@@ -70,6 +70,19 @@ assert.deepEqual((await ok(request(`${path}/${proposal.id}/history`))).items.map
 assert.notEqual(await sql(`UPDATE service_structure_versions SET config='{}' WHERE version=${original.version+1}`,false),0);
 assert.notEqual(await sql(`DELETE FROM service_structure_audits WHERE proposal_id=${quote(proposal.id)}`,false),0);
 
+// The new system route must be reflected in the published directory before employee intake.
+const tree=await ok(request('/admin/catalog-navigation/tree'));
+const information=tree.nodes.find(node=>node.kind==='CATEGORY'&&node.parentId===null&&node.name==='信息化系统');
+const leaf=tree.nodes.find(node=>node.kind==='SERVICE'&&node.serviceCode==='INC-PC');
+assert.ok(information&&leaf);
+const systemNode={id:`system-${randomUUID()}`,parentId:information.id,kind:'SYSTEM',name:'自定义试验系统',
+  enabled:true,sortOrder:900,systemId:system,serviceCode:null};
+const nodes=tree.nodes.map(node=>node.id===leaf.id?{...node,parentId:systemNode.id}:node).concat(systemNode);
+const directoryChange={expectedVersion:tree.version,navigationVersion:tree.navigationVersion,
+  structureVersion:tree.structureVersion,nodes,reason:'CI align test service directory with the new system route'};
+await ok(request('/admin/catalog-navigation/tree/preview','demo-admin-1',directoryChange));
+await ok(request('/admin/catalog-navigation/tree','demo-admin-1',directoryChange));
+
 const ticket=await create();
 const snapshot=await sql(`SELECT service_routing_snapshot::text FROM tickets WHERE id=${quote(ticket.id)}`);
 assert.equal(JSON.parse(snapshot).primaryPositionId,position);
