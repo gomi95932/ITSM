@@ -70,13 +70,13 @@ export class WorkspaceController {
       JOIN group_memberships m ON m.employee_id=e.id WHERE m.group_id=$1 AND e.active ORDER BY e.display_name,e.id`,[id])).rows };
   }
   @Get('notifications') async notifications(@Headers() h: H) {
-    const actor = await this.identity.identity(auth(h)); if (!actor.groups.length) throw new NotFoundException();
+    const actor = await this.identity.identity(auth(h)); if (!actor.groups.length&&!actor.canManageRouting) throw new NotFoundException();
     const result = await this.db.pool.query(`SELECT d.id,d.state,d.attempts,d.last_error AS "lastError",d.updated_at AS "updatedAt",t.number,
       (d.state='DEAD' AND EXISTS(SELECT 1 FROM role_bindings r WHERE r.employee_id=$2 AND r.group_id=t.owner_group_id
         AND r.role_code IN ('DISPATCHER','GROUP_LEAD') AND ${ROLE_EFFECTIVE_SQL})) AS "canRetry"
       FROM notification_deliveries d JOIN outbox_events o ON o.id=d.outbox_id JOIN tickets t ON t.id=o.ticket_id
-      WHERE t.owner_group_id=ANY($1::text[]) AND staff_site_access(t.service_routing_snapshot,$2,t.owner_group_id)
-      ORDER BY (d.state='REVIEW_REQUIRED') DESC,d.updated_at DESC,d.id LIMIT 100`,[actor.groups,actor.id]);
+      WHERE ($3::boolean OR t.owner_group_id=ANY($1::text[])) AND ($3::boolean OR staff_site_access(t.service_routing_snapshot,$2,t.owner_group_id))
+      ORDER BY (d.state='REVIEW_REQUIRED') DESC,d.updated_at DESC,d.id LIMIT 100`,[actor.groups,actor.id,!!actor.canManageRouting]);
     return { mode: process.env.NOTIFICATION_MODE ?? 'disabled', items:result.rows };
   }
   @Get('routing-alerts') async routingAlerts(@Headers() h: H) {

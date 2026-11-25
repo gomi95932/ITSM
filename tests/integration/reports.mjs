@@ -55,6 +55,10 @@ await sql(`UPDATE tickets SET status='CLOSED',owner_group_id='service-desk',crea
 
 assert.equal((await request(`/reports/summary${window}`, 'employee-1')).status, 404);
 assert.equal((await request(`/reports/summary${window}`, 'agent-2')).status, 404);
+assert.equal((await request('/support-groups','demo-admin-1')).status,200);
+assert.equal((await request(`/reports/summary${window}`, 'demo-admin-1')).status,200,'platform administrator can view reports without joining a support group');
+assert.equal((await request(`/reports/responsibility-history${window}`, 'demo-admin-1')).status,200);
+assert.equal((await request(`/reports/notifications${window}`, 'demo-admin-1')).status,200);
 assert.equal((await request(`/reports/summary${window}&serviceType=REQ`, 'employee-1')).status, 404);
 assert.equal((await request(`/reports/summary${window}&serviceType=REQ`, 'agent-2')).status, 404);
 for (const filter of ['ALL', '', 'INC&serviceType=REQ'])

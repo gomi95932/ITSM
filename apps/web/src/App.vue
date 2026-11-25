@@ -40,7 +40,7 @@ const workQueues=ref<WorkQueueCounts>(emptyWorkQueues());
 const selected=ref(''),creating=ref(false),initialCode=ref(''),notices=ref<Delivery[]>([]),notificationMode=ref('disabled'),retrying=ref('');
 const pages=computed(()=>Math.max(1,Math.ceil(total.value/20)));
 const canWorkTickets=computed(()=>!!user.value&&(user.value.groups.length>0||!!user.value.canManageRouting));
-const canManageSystem=computed(()=>!!user.value&&(!!user.value.canManageRoles||!!user.value.canManageRouting));
+const canManageSystem=computed(()=>!!user.value?.canManageRouting);
 const openCount=computed(()=>Object.entries(counts.value).filter(([status])=>!['CLOSED','CANCELLED','REJECTED'].includes(status)).reduce((sum,[,count])=>sum+count,0));
 const noticeLabels:Record<string,string>={PENDING:'待发送',DISPATCHING:'正在提交',SENDING:'平台受理，待确认',DELIVERED:'平台确认发送成功',SIMULATED:'开发模拟',DEAD:'失败待处理',SKIPPED:'已跳过',REVIEW_REQUIRED:'发送结果待核查'};
 const needsNoticeAttention=(item:Delivery)=>['DEAD','REVIEW_REQUIRED'].includes(item.state);
@@ -104,7 +104,7 @@ function navigate(value:View){view.value=value;filter.value='';workQueue.value='
 function selectWorkQueue(value:WorkQueue){if(value===workQueue.value)return;workQueue.value=value;filter.value='';page.value=1;void load();}
 function openTicket(id:string){creating.value=false;location.hash=`/tickets/${id}`;}
 function syncHash(){
-  if(location.hash==='#/fulfillments'){view.value=user.value?.groups.length?'fulfillments':'mine';selected.value='';creating.value=false;return;}
+  if(location.hash==='#/fulfillments'){view.value=user.value?.groups.length||user.value?.canManageRouting?'fulfillments':'mine';selected.value='';creating.value=false;return;}
   if(location.hash==='#/routing-alerts'){view.value=user.value?.canManageRoles?'routing':'mine';selected.value='';return;}
   const match=/^#\/tickets\/([a-f0-9-]{36})$/.exec(location.hash);selected.value=match?.[1]??'';
 }
@@ -132,10 +132,13 @@ onBeforeUnmount(()=>{window.removeEventListener('hashchange',syncHash);if(refres
         </section>
         <section v-if="canWorkTickets" class="nav-group" aria-label="工单处理"><h2 class="nav-caption">工单处理</h2>
           <button :class="{active:view==='queue'}" @click="navigate('queue')"><Activity :size="19"/>IT 工作台</button>
-          <button v-if="user.groups.length" :class="{active:view==='reports'}" @click="navigate('reports')"><BarChart3 :size="19"/>服务报表</button>
-          <button v-if="user.groups.length" :class="{active:view==='notifications'}" @click="navigate('notifications')"><Bell :size="19"/>消息通知</button>
-          <button v-if="user.groups.length" :class="{active:view==='fulfillments'}" @click="navigate('fulfillments')"><ClipboardList :size="19"/>交付与回收</button>
+          <button v-if="user.groups.length||user.canManageRouting" :class="{active:view==='reports'}" @click="navigate('reports')"><BarChart3 :size="19"/>服务报表</button>
+          <button v-if="user.groups.length||user.canManageRouting" :class="{active:view==='notifications'}" @click="navigate('notifications')"><Bell :size="19"/>消息通知</button>
+          <button v-if="user.groups.length||user.canManageRouting" :class="{active:view==='fulfillments'}" @click="navigate('fulfillments')"><ClipboardList :size="19"/>交付与回收</button>
           <button v-if="user.canManageRoles" :class="{active:view==='routing'}" @click="navigate('routing')"><TriangleAlert :size="19"/>路由告警</button>
+          <button v-if="user.canManageRoles&&!user.canManageRouting" :class="{active:view==='roles'}" @click="navigate('roles')"><ShieldCheck :size="19"/>角色授权</button>
+          <button v-if="user.canManageRoles&&!user.canManageRouting" :class="{active:view==='support-structure'}" @click="navigate('support-structure')"><Users :size="19"/>支持组</button>
+          <button v-if="user.canManageRoles&&!user.canManageRouting" :class="{active:view==='appointments'}" @click="navigate('appointments')"><Users :size="19"/>岗位任职</button>
         </section>
         <section v-if="canManageSystem" class="nav-group" aria-label="系统管理"><h2 class="nav-caption">系统管理</h2>
           <button v-if="user.canManageRoles" :class="{active:view==='roles'}" @click="navigate('roles')"><ShieldCheck :size="19"/>角色授权</button>

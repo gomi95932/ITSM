@@ -18,6 +18,10 @@ assert.equal((await ok(request('/fulfillments/intake'))).enabled,false,'manual d
 const gated=await request(`/fulfillments/intake/${f.approvalId}/prepare`,'agent-2',{expectedVersion:0,contentClass:'GENERAL'});
 assert.equal(gated.status,503);assert.equal(gated.data.code,'REQUEST_DELIVERY_DISABLED');
 const initial=await ok(get(f));
+const adminView=await ok(get(f,'demo-admin-1'));
+assert.equal(adminView.canReview,false,'read access must not grant the administrator an operator action');
+assert.equal((await ok(request(`/fulfillments?group=${f.groupId}`,'demo-admin-1'))).groups.some(g=>g.id===f.groupId),true);
+assert.equal((await action(f,'review','demo-admin-1',initial.version)).status,404,'administrator is not automatically a fulfillment operator');
 assert.equal(initial.canReview,true);assert.equal(initial.canRevoke,true);
 assert.equal(JSON.stringify(initial).includes(f.internalMarker),false,'internal OA fields must not enter the workspace');
 for(const user of ['agent-1','employee-1','agent-3']){

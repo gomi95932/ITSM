@@ -69,7 +69,8 @@ async function load() {
 onMounted(async () => {
   try {
     const response = await api<{items:{id:string;name:string}[]}>('/support-groups');
-    groups.value = response.items.filter(g => props.user.groups.includes(g.id));
+    groups.value = response.items.filter(g => props.user.canManageRouting || props.user.groups.includes(g.id));
+    if(!groupId.value)groupId.value=groups.value[0]?.id??'';
     await load();
   } catch (e) { error.value = errorText(e); }
 });
