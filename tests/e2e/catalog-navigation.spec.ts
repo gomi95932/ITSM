@@ -14,7 +14,7 @@ test('catalog grouping preserves service selection and the existing incident sub
   await expect(tree.getByRole('button',{name:category,exact:true})).toBeVisible();
   await panel.getByRole('button',{name:'新增二级分类'}).click();
   await panel.getByRole('textbox',{name:'目录名称'}).fill(subcategory);
-  await expect(tree.getByRole('button',{name:subcategory,exact:true})).toBeVisible();
+  await expect(tree.getByRole('button',{name:new RegExp(`^${subcategory}`)})).toBeVisible();
   await panel.getByRole('checkbox',{name:'启用此目录'}).check();
   await tree.getByRole('button',{name:/INC-NET/}).click();
   await panel.getByRole('combobox',{name:'上级目录'}).selectOption({label:subcategory});

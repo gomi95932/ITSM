@@ -39,6 +39,8 @@ const emptyWorkQueues=():WorkQueueCounts=>({all:0,assigned:0,incoming:0,outgoing
 const workQueues=ref<WorkQueueCounts>(emptyWorkQueues());
 const selected=ref(''),creating=ref(false),initialCode=ref(''),notices=ref<Delivery[]>([]),notificationMode=ref('disabled'),retrying=ref('');
 const pages=computed(()=>Math.max(1,Math.ceil(total.value/20)));
+const canWorkTickets=computed(()=>!!user.value&&(user.value.groups.length>0||!!user.value.canManageRouting));
+const canManageSystem=computed(()=>!!user.value&&(!!user.value.canManageRoles||!!user.value.canManageRouting));
 const openCount=computed(()=>Object.entries(counts.value).filter(([status])=>!['CLOSED','CANCELLED','REJECTED'].includes(status)).reduce((sum,[,count])=>sum+count,0));
 const noticeLabels:Record<string,string>={PENDING:'待发送',DISPATCHING:'正在提交',SENDING:'平台受理，待确认',DELIVERED:'平台确认发送成功',SIMULATED:'开发模拟',DEAD:'失败待处理',SKIPPED:'已跳过',REVIEW_REQUIRED:'发送结果待核查'};
 const needsNoticeAttention=(item:Delivery)=>['DEAD','REVIEW_REQUIRED'].includes(item.state);
@@ -103,7 +105,7 @@ function selectWorkQueue(value:WorkQueue){if(value===workQueue.value)return;work
 function openTicket(id:string){creating.value=false;location.hash=`/tickets/${id}`;}
 function syncHash(){
   if(location.hash==='#/fulfillments'){view.value=user.value?.groups.length?'fulfillments':'mine';selected.value='';creating.value=false;return;}
-  if(location.hash==='#/routing-alerts'){view.value='routing';selected.value='';return;}
+  if(location.hash==='#/routing-alerts'){view.value=user.value?.canManageRoles?'routing':'mine';selected.value='';return;}
   const match=/^#\/tickets\/([a-f0-9-]{36})$/.exec(location.hash);selected.value=match?.[1]??'';
 }
 function back(){selected.value='';creating.value=false;history.replaceState(null,'',location.pathname+location.search);void load();}
@@ -120,16 +122,33 @@ onBeforeUnmount(()=>{window.removeEventListener('hashchange',syncHash);if(refres
   <div v-if="booting" class="boot-state"><Headphones :size="32"/><LoaderCircle class="spin" :size="20"/><p>正在打开 IT 服务台</p></div>
   <div v-else-if="!user" class="boot-state"><Headphones :size="36"/><h1>IT 服务台</h1><p role="alert">{{error}}</p><a v-if="dingtalkWebLogin" class="primary enterprise-login" href="/api/v1/auth/dingtalk-web/start"><QrCode :size="18"/>钉钉扫码登录</a><a v-if="enterpriseLogin" class="primary enterprise-login" href="/api/v1/auth/oidc/start"><ShieldCheck :size="17"/>企业账号登录</a><button :class="dingtalkWebLogin||enterpriseLogin?'text-button':'primary'" @click="boot"><RefreshCw :size="17"/>重新进入</button></div>
   <div v-else class="app-shell">
-    <aside class="sidebar"><a class="brand" href="#" @click.prevent="navigate('mine')"><span class="brand-icon"><Headphones :size="23"/></span><span>IT 服务台<small>祥承科技</small></span></a><p class="nav-caption">员工服务</p><nav aria-label="主要导航"><button :class="{active:view==='mine'}" @click="navigate('mine')"><ClipboardList :size="19"/>我的工单</button><button :class="{active:view==='catalog'}" @click="navigate('catalog')"><LayoutGrid :size="19"/>服务目录</button><button :class="{active:view==='knowledge'}" @click="navigate('knowledge')"><BookOpen :size="19"/>知识库</button><button :class="{active:view==='delegations'}" @click="navigate('delegations')"><UserRound :size="19"/>代报授权</button><template v-if="user.groups.length"><p class="nav-caption">支持中心</p><button :class="{active:view==='queue'}" @click="navigate('queue')"><Activity :size="19"/>IT 工作台</button><button :class="{active:view==='reports'}" @click="navigate('reports')"><BarChart3 :size="19"/>服务报表</button><button :class="{active:view==='notifications'}" @click="navigate('notifications')"><Bell :size="19"/>消息通知</button></template><template v-if="user.canManageRoles"><button :class="{active:view==='routing'}" @click="navigate('routing')"><TriangleAlert :size="19"/>路由告警</button><button :class="{active:view==='roles'}" @click="navigate('roles')"><ShieldCheck :size="19"/>角色授权</button></template>
-      <button v-if="user.canManageRoles" :class="{active:view==='support-structure'}" @click="navigate('support-structure')"><Users :size="19"/>支持组</button>
-      <button v-if="user.canManageRoles" :class="{active:view==='appointments'}" @click="navigate('appointments')"><Users :size="19"/>岗位任职</button>
-      <button v-if="user.canManageRouting" :class="{active:view==='operations'}" @click="navigate('operations')"><Network :size="19"/>厂区与服务时限</button>
-      <button v-if="user.canManageRouting" :class="{active:view==='directory'}" @click="navigate('directory')"><Users :size="19"/>人员同步</button>
-      <button v-if="user.canManageRouting" :class="{active:view==='operation-logs'}" @click="operationLogFilter={};navigate('operation-logs')"><ScrollText :size="19"/>操作日志</button>
-      <button v-if="user.canManageRouting" :class="{active:view==='priority-config'}" @click="navigate('priority-config')"><ShieldCheck :size="19"/>分级与时限</button>
-      <button v-if="user.groups.length" :class="{active:view==='fulfillments'}" @click="navigate('fulfillments')"><ClipboardList :size="19"/>交付与回收</button>
-      <template v-if="user.canManageRouting"><button :class="{active:view==='service-structure'}" @click="navigate('service-structure')"><LayoutGrid :size="19"/>服务组织</button><button :class="{active:view==='routing-config'}" @click="navigate('routing-config')"><Network :size="19"/>派单配置</button></template>
-      </nav><div class="sidebar-bottom"><span class="avatar"><UserRound :size="18"/></span><div><strong>{{user.name}}</strong><small>{{user.groups.length?'IT 支持人员':'员工'}}</small></div><button v-if="!development" class="icon-button" title="退出登录" aria-label="退出登录" @click="logout"><LogOut :size="17"/></button></div></aside>
+    <aside class="sidebar"><a class="brand" href="#" @click.prevent="navigate('mine')"><span class="brand-icon"><Headphones :size="23"/></span><span>IT 服务台<small>祥承科技</small></span></a>
+      <nav aria-label="主要导航">
+        <section class="nav-group" aria-label="员工服务"><h2 class="nav-caption">员工服务</h2>
+          <button :class="{active:view==='mine'}" @click="navigate('mine')"><ClipboardList :size="19"/>我的工单</button>
+          <button :class="{active:view==='catalog'}" @click="navigate('catalog')"><LayoutGrid :size="19"/>服务目录</button>
+          <button :class="{active:view==='knowledge'}" @click="navigate('knowledge')"><BookOpen :size="19"/>知识库</button>
+          <button :class="{active:view==='delegations'}" @click="navigate('delegations')"><UserRound :size="19"/>代报授权</button>
+        </section>
+        <section v-if="canWorkTickets" class="nav-group" aria-label="工单处理"><h2 class="nav-caption">工单处理</h2>
+          <button :class="{active:view==='queue'}" @click="navigate('queue')"><Activity :size="19"/>IT 工作台</button>
+          <button v-if="user.groups.length" :class="{active:view==='reports'}" @click="navigate('reports')"><BarChart3 :size="19"/>服务报表</button>
+          <button v-if="user.groups.length" :class="{active:view==='notifications'}" @click="navigate('notifications')"><Bell :size="19"/>消息通知</button>
+          <button v-if="user.groups.length" :class="{active:view==='fulfillments'}" @click="navigate('fulfillments')"><ClipboardList :size="19"/>交付与回收</button>
+          <button v-if="user.canManageRoles" :class="{active:view==='routing'}" @click="navigate('routing')"><TriangleAlert :size="19"/>路由告警</button>
+        </section>
+        <section v-if="canManageSystem" class="nav-group" aria-label="系统管理"><h2 class="nav-caption">系统管理</h2>
+          <button v-if="user.canManageRoles" :class="{active:view==='roles'}" @click="navigate('roles')"><ShieldCheck :size="19"/>角色授权</button>
+          <button v-if="user.canManageRoles" :class="{active:view==='support-structure'}" @click="navigate('support-structure')"><Users :size="19"/>支持组</button>
+          <button v-if="user.canManageRoles" :class="{active:view==='appointments'}" @click="navigate('appointments')"><Users :size="19"/>岗位任职</button>
+          <button v-if="user.canManageRouting" :class="{active:view==='operations'}" @click="navigate('operations')"><Network :size="19"/>厂区与服务时限</button>
+          <button v-if="user.canManageRouting" :class="{active:view==='directory'}" @click="navigate('directory')"><Users :size="19"/>人员同步</button>
+          <button v-if="user.canManageRouting" :class="{active:view==='operation-logs'}" @click="operationLogFilter={};navigate('operation-logs')"><ScrollText :size="19"/>操作日志</button>
+          <button v-if="user.canManageRouting" :class="{active:view==='priority-config'}" @click="navigate('priority-config')"><ShieldCheck :size="19"/>分级与时限</button>
+          <button v-if="user.canManageRouting" :class="{active:view==='service-structure'}" @click="navigate('service-structure')"><LayoutGrid :size="19"/>服务组织</button>
+          <button v-if="user.canManageRouting" :class="{active:view==='routing-config'}" @click="navigate('routing-config')"><Network :size="19"/>派单配置</button>
+        </section>
+      </nav><div class="sidebar-bottom"><span class="avatar"><UserRound :size="18"/></span><div><strong>{{user.name}}</strong><small>{{user.canManageRouting?'平台管理员':user.groups.length?'IT 支持人员':'员工'}}</small></div><button v-if="!development" class="icon-button" title="退出登录" aria-label="退出登录" @click="logout"><LogOut :size="17"/></button></div></aside>
     <div class="main-shell"><header class="topbar"><span class="breadcrumb">服务中心 <ChevronRight :size="14"/> {{title}}</span><label v-if="development" class="dev-switch">开发身份<select v-model="identity" aria-label="开发身份" @change="switchIdentity"><option value="employee-1">演示员工一</option><option value="employee-2">演示员工二</option><option value="agent-1">服务台工程师</option><option value="agent-2">应用支持工程师</option><option value="agent-3">服务台值班主管（演示）</option><option value="demo-admin-1">演示配置管理员一</option><option value="demo-admin-2">演示配置管理员二</option></select></label><span v-else class="connection-state"><span></span>企业账号已连接</span></header>
       <main class="content"><p v-if="error" class="error-banner" role="alert">{{error}}<button class="text-button" @click="load()">重试</button></p>
         <EmployeeForm v-if="creating" :catalog="catalog" :initial-code="initialCode" @close="back" @created="openTicket"/>
@@ -203,6 +222,8 @@ onBeforeUnmount(()=>{window.removeEventListener('hashchange',syncHash);if(refres
 <style scoped>
 .enterprise-login{display:inline-flex;align-items:center;gap:8px;text-decoration:none;padding:10px 16px;border-radius:6px;background:#087f8c;color:white}
 @media(min-width:761px){.sidebar nav{min-height:0;overflow-y:auto}.sidebar-bottom{flex-shrink:0}}
+.nav-group{display:grid;gap:6px}.nav-group .nav-caption{margin:18px 12px 4px;font-size:11px;font-weight:600}.nav-group:first-child .nav-caption{margin-top:0}
+@media(max-width:760px){.nav-group{display:flex;flex:0 0 auto;align-items:center;gap:0;border-right:1px solid #dfe5e8}.nav-group .nav-caption{display:block;white-space:nowrap;margin:0 8px 0 12px;font-size:10px}.nav-group:first-child .nav-caption{margin-left:4px}}
 .ticket-ownership{display:flex;flex-wrap:wrap;gap:4px 10px;max-width:100%;margin-top:7px;color:#61727b;font-size:11px;line-height:1.5;overflow-wrap:anywhere}
 .ticket-ownership span{min-width:0;overflow-wrap:anywhere}
 @media(max-width:760px){.ticket-ownership{display:grid;gap:2px;font-size:10px}}
