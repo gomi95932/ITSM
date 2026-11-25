@@ -7,7 +7,9 @@ const base='http://127.0.0.1:8088/api/v1',path='/admin/service-structure';
 async function request(url,user='demo-admin-1',body){
   const response=await fetch(base+url,{method:body?'POST':'GET',headers:{'Content-Type':'application/json','X-Dev-User':user,'Idempotency-Key':randomUUID()},
     body:body?JSON.stringify({contentClass:'GENERAL',...body}):undefined});
-  return {status:response.status,data:await response.json()};
+  const text=await response.text();
+  try{return {status:response.status,data:JSON.parse(text)};}
+  catch{throw new Error(`NON_JSON_RESPONSE ${url}: HTTP ${response.status}, content-type=${response.headers.get('content-type')}, body=${text.slice(0,300)}`);}
 }
 async function sql(query,success=true){
   return new Promise((resolve,reject)=>{

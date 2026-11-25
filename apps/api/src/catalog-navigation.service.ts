@@ -117,17 +117,24 @@ export class CatalogNavigationService {
   }
 
   private async treeReadiness(client:PoolClient,input:ReturnType<typeof catalogTreeInput>,view:CatalogTreeView){
+    const candidatesByService=new Map<string,{id:string;name:string;duty:string}[]>();
+    const candidates=(await client.query<{serviceCode:string;id:string;name:string;duty:string}>(`SELECT DISTINCT
+        r."serviceCode",e.id,e.display_name AS name,a.duty FROM service_position_routes r
+        JOIN service_catalog c ON c.code=r."serviceCode"
+        JOIN support_positions p ON p.id=r."primaryPositionId" JOIN position_appointments a ON a."positionId"=p.id
+        JOIN employees e ON e.id=a."employeeId" AND e.active
+        WHERE r.enabled AND a.enabled AND a."validFrom"<=clock_timestamp()
+          AND (a."validTo" IS NULL OR a."validTo">clock_timestamp()) AND service_position_eligible(
+            jsonb_build_object('version',r.version,'domainId',r."domainId",'systemId',r."systemId",'primaryPositionId',r."primaryPositionId",
+              'positions',jsonb_build_array(jsonb_build_object('id',p.id,'name',p.name,'groupId',p."groupId"))),e.id,c.group_id)
+        ORDER BY r."serviceCode",a.duty,e.id`)).rows;
+    for(const {serviceCode,...person} of candidates){
+      const people=candidatesByService.get(serviceCode)??[];people.push(person);candidatesByService.set(serviceCode,people);
+    }
     const rows=[];
     for(const service of view.services){
       const state=directoryState({version:view.version+1,nodes:input.nodes},service.code,service.systemId);
-      const candidates=(await client.query(`SELECT DISTINCT e.id,e.display_name AS name,a.duty FROM service_position_routes r
-        JOIN support_positions p ON p.id=r."primaryPositionId" JOIN position_appointments a ON a."positionId"=p.id
-        JOIN employees e ON e.id=a."employeeId" AND e.active
-        WHERE r."serviceCode"=$1 AND r.enabled AND a.enabled AND a."validFrom"<=clock_timestamp()
-          AND (a."validTo" IS NULL OR a."validTo">clock_timestamp()) AND service_position_eligible(
-            jsonb_build_object('version',r.version,'domainId',r."domainId",'systemId',r."systemId",'primaryPositionId',r."primaryPositionId",
-              'positions',jsonb_build_array(jsonb_build_object('id',p.id,'name',p.name,'groupId',p."groupId"))),e.id,$2)
-        ORDER BY a.duty,e.id`,[service.code,service.groupId])).rows;
+      const candidates=candidatesByService.get(service.code)??[];
       rows.push({serviceCode:service.code,path:state.navigation?.path??[],groupId:service.groupId,candidates,
         warnings:[...(!service.published?['UNPUBLISHED']:[]),...(state.reason?[state.reason]:[]),...(!service.mapped?['ROUTE_UNAVAILABLE']:[]),...(!candidates.length?['NO_ACTIVE_ENGINEER']:[])]});
     }
