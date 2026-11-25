@@ -8,10 +8,13 @@ test('catalog grouping preserves service selection and the existing incident sub
   await page.getByRole('tab',{name:'目录展示',exact:true}).click();
   const panel=page.getByRole('region',{name:'目录展示配置'});
   const tree=panel.getByRole('navigation',{name:'服务目录树'});
+  await expect(panel.getByRole('alert')).toHaveCount(0);
   await tree.getByRole('button',{name:'网络与远程访问',exact:true}).click();
   await panel.getByRole('textbox',{name:'目录名称'}).fill(category);
+  await expect(tree.getByRole('button',{name:category,exact:true})).toBeVisible();
   await panel.getByRole('button',{name:'新增二级分类'}).click();
   await panel.getByRole('textbox',{name:'目录名称'}).fill(subcategory);
+  await expect(tree.getByRole('button',{name:subcategory,exact:true})).toBeVisible();
   await panel.getByRole('checkbox',{name:'启用此目录'}).check();
   await tree.getByRole('button',{name:/INC-NET/}).click();
   await panel.getByRole('combobox',{name:'上级目录'}).selectOption({label:subcategory});

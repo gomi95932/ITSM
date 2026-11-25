@@ -61,7 +61,7 @@ onBeforeUnmount(()=>{window.removeEventListener('beforeunload',beforeUnload);emi
 <template>
   <section class="navigation-panel" aria-label="目录展示配置" :aria-busy="busy">
     <p v-if="error" role="alert" class="error-banner">{{error}}</p><p v-if="notice" role="status" class="success-banner">{{notice}}</p>
-    <p v-if="invalid" role="alert" class="error-banner">目录信息不完整，请检查：{{invalidNodes.map(item=>item.name||'未命名目录').slice(0,5).join('、')}}</p>
+    <p v-if="invalid" role="alert" class="error-banner">目录信息不完整，请检查：{{invalidNodes.map(item=>item.name?.trim()||item.serviceCode||item.id).slice(0,5).join('、')}}</p>
     <div class="section-heading"><span class="muted">目录版本 {{data?.version??'—'}}<span v-if="data?.version===0"> · 待首次启用</span></span><div class="navigation-tools"><button class="icon-button" aria-label="放弃目录展示修改" title="放弃目录展示修改" :disabled="busy||!dirty" @click="reset"><Undo2 :size="17"/></button><button class="icon-button" aria-label="刷新目录展示" title="刷新目录展示" :disabled="busy||dirty" @click="load"><RefreshCw :size="17" :class="{spin:busy}"/></button></div></div>
     <div class="tree-layout">
       <div class="tree-list"><label class="navigation-search"><Search :size="17"/><input v-model="query" type="search" aria-label="查找目录服务" placeholder="查找服务或分类"/></label>
