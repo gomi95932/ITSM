@@ -188,7 +188,8 @@ test('P1 work starts before a supervisor independently confirms priority',async(
   await page.getByRole('combobox',{name:'开发身份'}).selectOption('agent-1');await page.goto('/'+hash);
   await page.getByRole('button',{name:'接单并回复',exact:true}).click();
   await page.getByRole('textbox',{name:'回复内容'}).fill('生产故障优先响应中');
-  await page.getByRole('checkbox',{name:'本次内容不含密码、密钥及安全事件证据'}).check();
+  await page.locator('form.action-form').filter({has:page.getByRole('textbox',{name:'回复内容'})})
+    .getByRole('checkbox',{name:'本次内容不含密码、密钥及安全事件证据'}).check();
   await page.getByRole('button',{name:'接单并回复',exact:true}).last().click();
   await expect(page.locator('.ticket-meta')).toContainText('处理中');
   await expect(page.getByRole('button',{name:'提交优先级确认'})).toHaveCount(0);

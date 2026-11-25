@@ -223,7 +223,7 @@ onBeforeUnmount(()=>{window.removeEventListener('hashchange',syncHash);if(refres
 .enterprise-login{display:inline-flex;align-items:center;gap:8px;text-decoration:none;padding:10px 16px;border-radius:6px;background:#087f8c;color:white}
 @media(min-width:761px){.sidebar nav{min-height:0;overflow-y:auto}.sidebar-bottom{flex-shrink:0}}
 .nav-group{display:grid;gap:6px}.nav-group .nav-caption{margin:18px 12px 4px;font-size:11px;font-weight:600}.nav-group:first-child .nav-caption{margin-top:0}
-@media(max-width:760px){.nav-group{display:flex;flex:0 0 auto;align-items:center;gap:0;border-right:1px solid #dfe5e8}.nav-group .nav-caption{display:block;white-space:nowrap;margin:0 8px 0 12px;font-size:10px}.nav-group:first-child .nav-caption{margin-left:4px}}
+@media(max-width:760px){.nav-group{display:flex;flex:0 0 100%;min-width:0;align-items:center;gap:0;overflow-x:auto;overflow-y:hidden;border-bottom:1px solid #edf0f2}.nav-group:last-child{border-bottom:0}.nav-group .nav-caption{display:block;flex:0 0 auto;white-space:nowrap;margin:0 8px 0 4px;font-size:10px}}
 .ticket-ownership{display:flex;flex-wrap:wrap;gap:4px 10px;max-width:100%;margin-top:7px;color:#61727b;font-size:11px;line-height:1.5;overflow-wrap:anywhere}
 .ticket-ownership span{min-width:0;overflow-wrap:anywhere}
 @media(max-width:760px){.ticket-ownership{display:grid;gap:2px;font-size:10px}}
