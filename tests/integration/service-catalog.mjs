@@ -23,6 +23,23 @@ const current=()=>ok(request(path));
 const review=(item,user='demo-admin-2',decision='APPROVE')=>request(`${path}/${item.id}/review`,user,{expectedVersion:item.version,decision,reason:'Independent catalog and routing review'});
 async function body(config,catalogChange){return {id:randomUUID(),expectedVersion:(await current()).version,config,catalogChange,reason:'CI catalog and routing bundle'};}
 async function publish(config,change){const item=await ok(request(path,'demo-admin-1',await body(config,change)));await ok(review(item));return item;}
+async function publishDirectory(code,name,systemId){
+  const tree=await ok(request('/admin/catalog-navigation/tree'));
+  const root=tree.nodes.find(node=>node.kind==='CATEGORY'&&node.parentId===null&&node.name==='信息化系统');
+  assert.ok(root,'the information systems category must exist');
+  const nodes=structuredClone(tree.nodes);
+  let parent=nodes.find(node=>node.kind==='SYSTEM'&&node.systemId===systemId);
+  if(!parent){
+    parent={id:`system-${randomUUID()}`,parentId:root.id,kind:'SYSTEM',name:`试验系统 ${systemId}`,
+      enabled:true,sortOrder:900,systemId,serviceCode:null};
+    nodes.push(parent);
+  }
+  nodes.push({id:`service-${randomUUID()}`,parentId:parent.id,kind:'SERVICE',name,enabled:true,
+    sortOrder:900,systemId:null,serviceCode:code});
+  await ok(request('/admin/catalog-navigation/tree','demo-admin-1',{expectedVersion:tree.version,
+    navigationVersion:tree.navigationVersion,structureVersion:tree.structureVersion,nodes,
+    reason:'Place the CI laboratory service in the published directory before intake'}));
+}
 const suffix=randomUUID().replaceAll('-','').slice(0,10).toUpperCase(),code=`INC-LAB-${suffix}`,reqCode=`REQ-LAB-${suffix}`;
 const domain=`domain-${suffix}`,system=`system-${suffix}`,position=`position-${suffix}`,appointment=randomUUID();
 const initial=await current(),config=structuredClone(initial.config);
@@ -50,6 +67,7 @@ assert.equal((await ok(request(`${path}/catalog`))).items.find(i=>i.code===code)
 assert.equal(await sql(`SELECT count(*) FROM service_catalog_revisions WHERE service_code=${quote(code)}`),'1');
 assert.notEqual(await sql(`DELETE FROM service_catalog_revisions WHERE service_code=${quote(code)}`,false),0);
 assert.notEqual(await sql(`UPDATE service_catalog_revisions SET snapshot='{}' WHERE service_code=${quote(code)}`,false),0);
+await publishDirectory(code,change.name,system);
 
 const create=(version=1,fields={device:'LAB-01'})=>request('/tickets','employee-1',{serviceCode:code,formVersion:version,subject:'Experimental device unavailable',
   description:'Device cannot finish routine operations',impact:'INDIVIDUAL',urgency:'LOW',fields});
@@ -92,6 +110,7 @@ await sql("DELETE FROM group_memberships WHERE employee_id='demo-admin-1' AND gr
 assert.equal((await request(path,'demo-admin-1',await body(next,req))).data.code,'CATALOG_INITIAL_PUBLISHER_REQUIRED');
 await sql("INSERT INTO group_memberships(employee_id,group_id) VALUES('demo-admin-1','service-desk') ON CONFLICT DO NOTHING");
 await publish(next,req);
+await publishDirectory(reqCode,req.name,system);
 assert.equal(await sql(`SELECT count(*) FROM request_catalog_publishers WHERE service_code=${quote(reqCode)} AND employee_id='demo-admin-1'`),'1');
 assert.equal(await sql(`SELECT snapshot->'approval'->>'templateId' FROM request_catalog_versions WHERE service_code=${quote(reqCode)} AND form_version=1`),'CI-LAB-OA');
 const reqChange={...req,expectedVersion:1,initialPublisherId:null};

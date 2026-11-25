@@ -121,5 +121,15 @@ try{
   }
   console.log('PASS member privileges: scoped admin grants, atomic validation, retries, concurrency, immediate revoke, P1 independence, knowledge workflow and immutable central logs');
 }finally{
-  await pool?.end();await control.query(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);await control.end();
+  try{
+    await pool?.end();
+    // Let PostgreSQL observe the closed pool sockets before dropping the isolated database.
+    for(let attempt=0;attempt<50;attempt++){
+      const {rows}=await control.query('SELECT count(*)::integer AS active FROM pg_stat_activity WHERE datname=$1',[name]);
+      if(rows[0].active===0)break;
+      if(attempt===49)throw new Error('MEMBER_PRIVILEGES_DATABASE_CONNECTIONS_REMAIN');
+      await new Promise(resolve=>setTimeout(resolve,100));
+    }
+    await control.query(`DROP DATABASE IF EXISTS ${name}`);
+  }finally{await control.end();}
 }
