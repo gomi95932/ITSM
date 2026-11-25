@@ -72,6 +72,25 @@ test('administrators configure a new service domain through actual employee inta
     await reviewing.getByRole('button',{name:'关闭日志详情'}).click();
   }
   await publish(`发布试验设备服务 ${suffix}`);
+  await page.getByRole('tab',{name:'目录展示',exact:true}).click();
+  const directory=page.getByRole('region',{name:'目录展示配置'});
+  await directory.getByRole('navigation',{name:'服务目录树'}).getByRole('button',{name:'信息化系统',exact:true}).click();
+  await directory.getByRole('button',{name:'新增业务系统',exact:true}).click();
+  await directory.getByRole('textbox',{name:'目录名称'}).fill(system);
+  await directory.getByRole('combobox',{name:'关联业务系统'}).selectOption({label:system});
+  await directory.getByRole('checkbox',{name:'启用此目录'}).check();
+  await directory.getByRole('button',{name:'新增服务事项',exact:true}).click();
+  await directory.getByRole('textbox',{name:'目录名称'}).fill(name);
+  await directory.getByRole('combobox',{name:'关联服务编码'}).selectOption(code);
+  await directory.getByRole('checkbox',{name:'启用此目录'}).check();
+  await directory.getByRole('textbox',{name:'目录展示变更原因'}).fill(`上架试验设备服务 ${suffix}`);
+  await directory.getByRole('checkbox',{name:'本次内容不含密码、密钥及安全事件证据'}).check();
+  const previewResponse=page.waitForResponse(response=>response.url().endsWith('/admin/catalog-navigation/tree/preview')&&response.request().method()==='POST',{timeout:60_000});
+  await directory.getByRole('button',{name:'检查目录与承接'}).click();
+  expect((await previewResponse).ok()).toBe(true);
+  await expect(directory.getByRole('table')).toContainText(code);
+  await directory.getByRole('button',{name:'保存并生效',exact:true}).click();
+  await expect(directory.getByRole('status')).toHaveText('服务目录已保存并生效');
   await page.getByRole('combobox',{name:'开发身份'}).selectOption('employee-1');
   await page.getByRole('button',{name:'服务目录',exact:true}).click();
   await page.getByRole('button',{name:new RegExp(name)}).click();

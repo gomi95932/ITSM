@@ -56,7 +56,6 @@ test('employee and IT workbench complete a real ticket round trip',async({page})
   await page.getByRole('textbox',{name:'详细情况'}).fill('今天无法登录 WMS，请协助排查。');
   await page.getByRole('combobox',{name:'影响范围'}).selectOption('INDIVIDUAL');
   await page.getByRole('combobox',{name:'紧急程度'}).selectOption('MEDIUM');
-  await page.getByRole('combobox',{name:'业务系统',exact:true}).selectOption('WMS');
   await page.getByRole('checkbox',{name:'本次内容不含密码、密钥及安全事件证据'}).check();
   await page.getByRole('button',{name:'核对信息'}).click();await expect(page.getByRole('heading',{name:'确认报障信息'})).toBeVisible();
   await page.getByRole('button',{name:'确认提交'}).click();await expect(page.getByRole('heading',{name:'E2E WMS 登录异常'})).toBeVisible();
