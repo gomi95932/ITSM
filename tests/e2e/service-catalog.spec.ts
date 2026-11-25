@@ -75,7 +75,21 @@ test('administrators configure a new service domain through actual employee inta
   await publish(`发布试验设备服务 ${suffix}`);
   await page.getByRole('tab',{name:'目录展示',exact:true}).click();
   const directory=page.getByRole('region',{name:'目录展示配置'});
-  await directory.getByRole('navigation',{name:'服务目录树'}).getByRole('button',{name:'信息化系统',exact:true}).click();
+  const tree=directory.getByRole('navigation',{name:'服务目录树'});
+  const snapshot=await page.evaluate(async()=>{
+    const response=await fetch('/api/v1/admin/catalog-navigation/tree',{headers:{'X-Dev-User':'demo-admin-1'}});
+    if(!response.ok)throw new Error(`Catalog tree read failed: ${response.status}`);
+    return response.json() as Promise<{nodes:{serviceCode:string|null}[];services:{code:string}[]}>;
+  });
+  const assigned=new Set(snapshot.nodes.map(node=>node.serviceCode));
+  for(const service of snapshot.services.filter(service=>service.code!==code&&!assigned.has(service.code))){
+    await tree.getByRole('button',{name:'其他服务',exact:true}).click();
+    await directory.getByRole('button',{name:'新增服务事项',exact:true}).click();
+    await directory.getByRole('textbox',{name:'目录名称'}).fill(`待上架 ${service.code}`.slice(0,80));
+    await directory.getByRole('combobox',{name:'关联服务编码'}).selectOption(service.code);
+    await expect(directory.getByRole('checkbox',{name:'启用此目录'})).not.toBeChecked();
+  }
+  await tree.getByRole('button',{name:'信息化系统',exact:true}).click();
   await directory.getByRole('button',{name:'新增业务系统',exact:true}).click();
   await directory.getByRole('textbox',{name:'目录名称'}).fill(system);
   await directory.getByRole('combobox',{name:'关联业务系统'}).selectOption({label:system});
