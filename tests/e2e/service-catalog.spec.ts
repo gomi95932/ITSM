@@ -88,7 +88,8 @@ test('administrators configure a new service domain through actual employee inta
   await directory.getByRole('checkbox',{name:'本次内容不含密码、密钥及安全事件证据'}).check();
   const previewResponse=page.waitForResponse(response=>response.url().endsWith('/admin/catalog-navigation/tree/preview')&&response.request().method()==='POST',{timeout:60_000});
   await directory.getByRole('button',{name:'检查目录与承接'}).click();
-  expect((await previewResponse).ok()).toBe(true);
+  const response=await previewResponse;
+  expect(response.ok(),`Catalog preview failed: ${response.status()} ${await response.text()}`).toBe(true);
   await expect(directory.getByRole('table')).toContainText(code);
   await directory.getByRole('button',{name:'保存并生效',exact:true}).click();
   await expect(directory.getByRole('status')).toHaveText('服务目录已保存并生效');
