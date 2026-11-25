@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed,nextTick,onBeforeUnmount,onMounted,ref,watch } from 'vue';
-import { Check,ChevronLeft,ChevronRight,LoaderCircle,Pencil,Plus,Power,RotateCcw,RefreshCw,Search,UserMinus,UserPlus,X } from 'lucide-vue-next';
+import { Check,ChevronLeft,ChevronRight,LoaderCircle,Pencil,Plus,Power,RotateCcw,RefreshCw,Search,ShieldCheck,UserMinus,UserPlus,X } from 'lucide-vue-next';
 import type { SessionUser,SupportChangeInput,SupportChangeKind,SupportChangeView,SupportDependenciesView,SupportGroupView,SupportMembersView,SupportPeopleView,SupportStructureView } from '@itsm/contracts';
 import { api,errorText } from '../api';
 import { createRequestKey } from '../request-key';
@@ -8,6 +8,7 @@ import { formatDate } from '../labels';
 import ContentBoundary from './ContentBoundary.vue';
 import SupportDependencyList from './SupportDependencyList.vue';
 import OperationLogLink from './OperationLogLink.vue';
+import MemberPrivilegesEditor from './MemberPrivilegesEditor.vue';
 
 const props=defineProps<{user:SessionUser}>();
 const kinds:Record<SupportChangeKind,string>={GROUP_CREATE:'新增支持组',GROUP_UPDATE:'修改支持组',GROUP_DISABLE:'停用支持组',GROUP_RESTORE:'恢复支持组',MEMBER_ADD:'增加成员',MEMBER_REMOVE:'移除成员'};
@@ -20,6 +21,8 @@ const groupsMore=ref(false),proposalsMore=ref(false),canManageGroups=ref(false),
 const selected=ref(''),memberQuery=ref(''),appliedQuery=ref(''),members=ref<SupportMembersView>(),membersLoading=ref(false);
 const loading=ref(true),busy=ref(false),error=ref(''),notice=ref('');
 const editor=ref<HTMLElement>();
+const privilegeMember=ref<string>();
+async function privilegesSaved(){privilegeMember.value=undefined;await loadMembers(members.value?.page??1);notice.value='成员权限已保存并生效。';}
 const editing=ref<{kind:SupportChangeKind;groupId:string;expectedGroupVersion:number|null;employeeId?:string;employeeName?:string}>();
 const groupCode=ref(''),name=ref(''),description=ref(''),reason=ref(''),safe=ref(false),proposalId=ref(createRequestKey());
 const query=ref(''),people=ref<SupportPeopleView>({items:[],hasMore:false}),searched=ref(false),peopleLoading=ref(false),employeeId=ref('');
@@ -179,7 +182,8 @@ onBeforeUnmount(()=>{alive=false;++memberGeneration;++peopleGeneration;++depende
         <ul v-else class="support-member-list"><li v-for="member in members?.items??[]" :key="member.id" :aria-label="member.name">
           <div><strong>{{member.name}}</strong><p class="mono muted">{{member.id}}</p><span :class="member.active?'muted':'danger-text'">{{member.active?'在职':'已停用'}}</span></div>
           <div><p>{{member.active?member.roles.map(role=>roles[role]??role).join('、')||'组内工程师':'无有效操作权限'}}</p><p class="muted">{{member.privileges.map(value=>privileges[value]??value).join('、')||'无附加授权'}}</p></div>
-          <button class="icon-button" :title="`移除${member.name}`" :aria-label="`移除${member.name}`" :disabled="busy||!!editing" @click="open('MEMBER_REMOVE',member)"><UserMinus :size="17"/></button>
+          <div class="support-member-actions"><button v-if="canManageGroups" class="icon-button" :title="`配置${member.name}权限`" :aria-label="`配置${member.name}权限`" :disabled="busy||!!editing||!member.active||!selectedGroup.enabled" @click="privilegeMember=member.id"><ShieldCheck :size="17"/></button>
+          <button class="icon-button" :title="`移除${member.name}`" :aria-label="`移除${member.name}`" :disabled="busy||!!editing" @click="open('MEMBER_REMOVE',member)"><UserMinus :size="17"/></button></div>
         </li></ul>
         <p v-if="!membersLoading&&members&&!members.items.length" class="support-empty muted">{{appliedQuery?'没有匹配的组内成员':'此组暂无成员'}}</p>
         <footer v-if="members" class="pagination"><span>共 {{members.total}} 人</span><div><button class="icon-button" title="上一页成员" aria-label="上一页成员" :disabled="busy||membersLoading||!!editing||members.page<=1" @click="loadMembers(members.page-1)"><ChevronLeft :size="17"/></button><span>{{members.page}} / {{pages}}</span><button class="icon-button" title="下一页成员" aria-label="下一页成员" :disabled="busy||membersLoading||!!editing||members.page>=pages" @click="loadMembers(members.page+1)"><ChevronRight :size="17"/></button></div></footer>
@@ -207,10 +211,12 @@ onBeforeUnmount(()=>{alive=false;++memberGeneration;++peopleGeneration;++depende
       <p v-if="decision.item.kind==='GROUP_RESTORE'&&decision.action==='APPROVE'" class="muted">恢复后成员、岗位任职及权限仍需重新任命。</p>
       <form class="action-form" @submit.prevent="decide"><fieldset class="support-fields" :disabled="busy"><label>复核依据<textarea v-model="decisionReason" required maxlength="500" rows="3"/></label><ContentBoundary v-model="decisionSafe"/><div class="form-footer"><button class="primary" :disabled="!decisionSafe||!decisionReason.trim()||(decision.item.kind==='GROUP_DISABLE'&&decision.action==='APPROVE'&&(!dependencies||dependencies.total>0||dependencyLoading))"><LoaderCircle v-if="busy" class="spin" :size="16"/><Check v-else :size="16"/>确认复核</button></div></fieldset></form>
     </section></div>
+    <MemberPrivilegesEditor v-if="privilegeMember" :key="`${selected}:${privilegeMember}`" :group-id="selected" :employee-id="privilegeMember" @close="privilegeMember=undefined" @saved="privilegesSaved"/>
     <OperationLogLink module="support" :object="selected||undefined" :disabled="busy||!!editing||!!decision"/>
   </div>
 </template>
 
 <style scoped>
+.support-member-actions{display:flex;flex-direction:column;align-items:center;gap:6px}
 .support-panel{min-width:0}.support-tools{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.support-tabs{display:flex;gap:16px;min-width:0;flex-wrap:wrap}.support-tabs button{padding:10px 0;border-radius:0;border-bottom:2px solid transparent;color:#607079}.support-tabs button[aria-selected=true]{border-bottom-color:#117965;color:#10735f}.support-group-heading{display:flex;align-items:end;gap:16px;flex-wrap:wrap;margin:22px 0}.support-group-heading>label{flex:1;min-width:180px}.support-panel>.detail-section{margin-top:24px}.support-fields{border:0;padding:0;margin:0;min-width:0;display:grid;gap:18px}.support-fields .full{grid-column:1/-1}.support-search{display:flex;align-items:end;gap:8px;margin:14px 0}.support-search>label{flex:1;min-width:0}.support-search>.icon-button{flex:none;margin-bottom:3px}.support-member-list,.support-change-list{padding:0;margin:16px 0 0;list-style:none}.support-member-list>li{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.4fr) 36px;gap:16px;padding:18px 0;border-bottom:1px solid #dfe5e8}.support-member-list p,.support-change-list p{margin-top:6px;font-size:12px;overflow-wrap:anywhere}.support-member-list span{display:block;font-size:12px;margin-top:6px}.support-member-list strong{font-size:14px;overflow-wrap:anywhere}.support-change-list>li{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.3fr) minmax(0,1fr) auto;gap:16px;padding:20px 0;border-bottom:1px solid #dfe5e8}.support-change-list>li>div{min-width:0}.support-change-list strong{font-size:14px}.support-change-meta time{font-size:12px}.support-change-list .support-tools{align-self:start}.support-notice{padding:12px 16px;border-left:3px solid #117965;background:#edf8f4;color:#245c47;font-size:13px;margin-bottom:16px}.support-empty{padding:22px 0;font-size:13px}.support-audit{padding-left:20px}.support-audit li{padding:14px 0;border-bottom:1px solid #dfe5e8;overflow-wrap:anywhere}.support-audit p,.support-audit summary{font-size:12px;margin-top:8px}.support-audit pre{white-space:pre-wrap;overflow-wrap:anywhere;max-width:100%;font-size:11px}.support-panel .modal>p{overflow-wrap:anywhere;font-size:13px;line-height:1.7}@media(max-width:1100px){.support-change-list>li{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:760px){.support-panel>.section-heading{align-items:start;gap:12px;flex-wrap:wrap}.support-tabs{gap:12px}.support-tabs button{font-size:12px}.support-panel .form-grid{grid-template-columns:minmax(0,1fr)}.support-member-list>li{gap:10px;grid-template-columns:minmax(0,1fr) minmax(0,1fr) 36px}.support-member-list strong{font-size:13px}.support-change-list>li{gap:12px}.support-change-list .support-tools{grid-column:1/-1}.support-panel .modal{max-width:calc(100vw - 32px)}}
 </style>

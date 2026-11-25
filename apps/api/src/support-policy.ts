@@ -1,5 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
-import type { SupportChangeInput,SupportChangeDecision } from '@itsm/contracts';
+import type { MemberPrivilegesInput,SupportChangeInput,SupportChangeDecision } from '@itsm/contracts';
 import { validEmployeeId } from '@itsm/contracts';
 
 export const supportUuid=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
@@ -40,4 +40,20 @@ export function supportDecision(body:unknown):SupportChangeDecision {
 
 export function supportIndependentReview(actor:string,proposer:string,subject:string|null):boolean {
   return actor!==proposer&&actor!==subject;
+}
+
+export function memberPrivilegesInput(body:unknown):MemberPrivilegesInput {
+  const invalid=()=>new BadRequestException({code:'INVALID_MEMBER_PRIVILEGES'});
+  if(!object(body)||!only(body,['id','expectedGroupVersion','privileges','catalogServiceCodes','reason','contentClass'])
+    ||typeof body.id!=='string'||!supportUuid.test(body.id)||!version(body.expectedGroupVersion)
+    ||!text(body.reason,500)||body.contentClass!=='GENERAL'
+    ||!Array.isArray(body.privileges)||body.privileges.length>3
+    ||body.privileges.some(v=>!['P1_REVIEW','KNOWLEDGE_EDIT','KNOWLEDGE_REVIEW'].includes(v))
+    ||new Set(body.privileges).size!==body.privileges.length
+    ||!Array.isArray(body.catalogServiceCodes)||body.catalogServiceCodes.length>2000
+    ||body.catalogServiceCodes.some(v=>typeof v!=='string'||!v.length||v.length>100||!text(v,100)||v!==v.trim())
+    ||new Set(body.catalogServiceCodes).size!==body.catalogServiceCodes.length)throw invalid();
+  return {id:body.id.toLowerCase(),expectedGroupVersion:body.expectedGroupVersion as number,
+    privileges:[...body.privileges].sort() as MemberPrivilegesInput['privileges'],catalogServiceCodes:[...body.catalogServiceCodes].sort(),
+    reason:body.reason.trim(),contentClass:'GENERAL'};
 }

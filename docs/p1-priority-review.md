@@ -1,5 +1,7 @@
 # P1-03: Candidate Notification and Supervisor Confirmation
 
+2026-11-24：P1 复核人可由有效平台管理员在“支持组 → 支持组与成员 → 成员权限”直接配置，无需修改代码或手工写库。授权按支持组生效，保留独立复核和连续性约束，变更进入统一操作日志。详见 [管理员成员权限配置](admin-member-privileges.md)。
+
 ## Scope and Status
 
 2026-11-21 supplement: see [priority governance](p1-priority-governance.md) for the configurable P1-P4 matrix, evidence-based AI drafts, authorized adjustments, independent configuration approval, generation-specific reminders and preserved/added SLA obligations. This supersedes the fixed reminder threshold below. Its validation is tracked separately from older CI evidence.

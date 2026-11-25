@@ -22,3 +22,8 @@ test('operation log snapshots exclude credentials and ticket content while prese
   assert.equal(operationLogChanges({rows:[]},{rows:[{serviceCode:'A',siteId:'x'},{serviceCode:'A',siteId:'y'}]}).changes.length,1);
   assert.equal(operationLogChanges(Object.fromEntries(Array.from({length:201},(_,i)=>[i,0])),Object.fromEntries(Array.from({length:201},(_,i)=>[i,1]))).changesTruncated,true);
 });
+test('member privilege audit snapshots preserve explicit grants while excluding arbitrary data',()=>{
+  assert.deepEqual(operationLogSnapshot({employeeId:'agent-1',privileges:['P1_REVIEW'],catalogServiceCodes:['REQ-ACCOUNT'],
+    authToken:'hidden',fields:{private:'hidden'}},'roles'),
+    {employeeId:'agent-1',privileges:['P1_REVIEW'],catalogServiceCodes:['REQ-ACCOUNT'],fields:{}});
+});

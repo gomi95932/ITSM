@@ -4,6 +4,7 @@ import { type PoolClient } from 'pg';
 import { type Identity } from './auth.service.js';
 import { Database } from './database.service.js';
 import { IntakePolicyService } from './intake-policy.service.js';
+import { ROLE_AUTHORIZATION_LOCK } from './role-policy.js';
 
 type Article = { id: string; owner_group_id: string; author_id: string; source_ticket_id: string | null;
   status: string; draft_version: number; published_version: number | null; review_version: number | null;
@@ -32,6 +33,13 @@ function draft(body: unknown, create: boolean): Draft {
 @Injectable()
 export class KnowledgeService {
   constructor(private readonly db: Database, private readonly intake: IntakePolicyService) {}
+
+  private transaction<T>(fn:(client:PoolClient)=>Promise<T>){
+    return this.db.transaction(async client=>{
+      await client.query('SELECT pg_advisory_xact_lock_shared($1)',[ROLE_AUTHORIZATION_LOCK]);
+      return fn(client);
+    });
+  }
 
   private async appointed(client: PoolClient, actor: Identity, group: string, role: 'editors'|'reviewers') {
     if (!actor.groups.includes(group)) throw new NotFoundException();
@@ -79,7 +87,7 @@ export class KnowledgeService {
   async create(actor: Identity, body: unknown, key: string, requestId: string) {
     const input=draft(body,true);
     await this.intake.requireGeneral(actor.id,input as unknown as Record<string,unknown>,'knowledge');
-    return this.db.transaction(async client => {
+    return this.transaction(async client => {
       await this.appointed(client,actor,input.groupId!,'editors');
       const {hash,response}=await this.replay(client,actor,null,'CREATE',input,key);
       if (response) return response;
@@ -100,7 +108,7 @@ export class KnowledgeService {
   async revise(actor: Identity, id: string, body: unknown, key: string, requestId: string) {
     const input=draft(body,false);
     await this.intake.requireGeneral(actor.id,input as unknown as Record<string,unknown>,'knowledge');
-    return this.db.transaction(async client => {
+    return this.transaction(async client => {
       const row=await this.locked(client,id);
       await this.appointed(client,actor,row.owner_group_id,'editors');
       if(!(await client.query('SELECT 1 WHERE knowledge_site_access($1,$2)',[id,actor.id])).rowCount)throw new NotFoundException();
@@ -123,7 +131,7 @@ export class KnowledgeService {
     body: unknown, key: string, requestId: string) {
     if (!plain(body) || !only(body,['expectedVersion']) || !Number.isInteger(body.expectedVersion) || (body.expectedVersion as number)<1)
       throw new BadRequestException({code:'INVALID_KNOWLEDGE_ACTION'});
-    return this.db.transaction(async client => {
+    return this.transaction(async client => {
       const row=await this.locked(client,id);
       await this.appointed(client,actor,row.owner_group_id,action==='APPROVE'||action==='REJECT'?'reviewers':'editors');
       if(!(await client.query('SELECT 1 WHERE knowledge_site_access($1,$2)',[id,actor.id])).rowCount)throw new NotFoundException();
