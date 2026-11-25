@@ -70,6 +70,7 @@ test('administrators configure a new service domain through actual employee inta
     await page.screenshot({path:'test-results/service-catalog-review-mobile.png',fullPage:true});
     await expect(reviewing.getByRole('button',{name:'批准发布',exact:true})).toHaveCount(0);
     await reviewing.getByRole('button',{name:'关闭日志详情'}).click();
+    await page.getByRole('button',{name:'服务组织',exact:true}).click();
   }
   await publish(`发布试验设备服务 ${suffix}`);
   await page.getByRole('tab',{name:'目录展示',exact:true}).click();
