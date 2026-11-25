@@ -7,7 +7,9 @@ const base='http://127.0.0.1:8088/api/v1',path='/admin/service-structure';
 async function request(url,user='demo-admin-1',body){
   const response=await fetch(base+url,{method:body?'POST':'GET',headers:{'Content-Type':'application/json','X-Dev-User':user,'Idempotency-Key':randomUUID()},
     body:body?JSON.stringify({contentClass:'GENERAL',...body}):undefined});
-  return {status:response.status,data:await response.json()};
+  const text=await response.text();
+  try{return {status:response.status,data:JSON.parse(text)};}
+  catch{throw new Error(`NON_JSON_RESPONSE ${url}: HTTP ${response.status}, content-type=${response.headers.get('content-type')}, body=${text.slice(0,300)}`);}
 }
 async function sql(query,success=true){
   return new Promise((resolve,reject)=>{
@@ -69,6 +71,25 @@ assert.equal((await list()).config.appointments.find(a=>a.id===appointment.id).v
 assert.deepEqual((await ok(request(`${path}/${proposal.id}/history`))).items.map(e=>e.action),['PROPOSED','APPROVED']);
 assert.notEqual(await sql(`UPDATE service_structure_versions SET config='{}' WHERE version=${original.version+1}`,false),0);
 assert.notEqual(await sql(`DELETE FROM service_structure_audits WHERE proposal_id=${quote(proposal.id)}`,false),0);
+
+// The new system route must be reflected in the published directory before employee intake.
+const tree=await ok(request('/admin/catalog-navigation/tree'));
+const information=tree.nodes.find(node=>node.kind==='CATEGORY'&&node.parentId===null&&node.name==='信息化系统');
+const other=tree.nodes.find(node=>node.kind==='CATEGORY'&&node.parentId===null&&node.name==='其他服务');
+const leaf=tree.nodes.find(node=>node.kind==='SERVICE'&&node.serviceCode==='INC-PC');
+assert.ok(information&&other&&leaf);
+const systemNode={id:`system-${randomUUID()}`,parentId:information.id,kind:'SYSTEM',name:'自定义试验系统',
+  enabled:true,sortOrder:900,systemId:system,serviceCode:null};
+const nodes=tree.nodes.map(node=>node.id===leaf.id?{...node,parentId:systemNode.id}:node).concat(systemNode);
+const assigned=new Set(nodes.map(node=>node.serviceCode));
+for(const service of tree.services.filter(service=>!assigned.has(service.code))){
+  nodes.push({id:`draft-${randomUUID()}`,parentId:other.id,kind:'SERVICE',name:`待上架 ${service.code}`.slice(0,80),
+    enabled:false,sortOrder:900,systemId:null,serviceCode:service.code});
+}
+const directoryChange={expectedVersion:tree.version,navigationVersion:tree.navigationVersion,
+  structureVersion:tree.structureVersion,nodes,reason:'CI align test service directory with the new system route'};
+await ok(request('/admin/catalog-navigation/tree/preview','demo-admin-1',directoryChange));
+await ok(request('/admin/catalog-navigation/tree','demo-admin-1',directoryChange));
 
 const ticket=await create();
 const snapshot=await sql(`SELECT service_routing_snapshot::text FROM tickets WHERE id=${quote(ticket.id)}`);

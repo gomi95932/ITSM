@@ -94,5 +94,13 @@ try{
   console.log('PASS daily directory: durable 24h cadence, restart/failure/concurrency safety, manual queue, CSRF/admin expiry, idempotency, actor audit and retained snapshots');
 }finally{
   for(const key of keys)if(previous[key]===undefined)delete process.env[key];else process.env[key]=previous[key];
-  await pool?.end();await control.query(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);await control.end();
+  await pool?.end();
+  let remaining;
+  for(let attempt=0;attempt<40;attempt++){
+    remaining=(await control.query('SELECT count(*)::int AS count FROM pg_stat_activity WHERE datname=$1',[name])).rows[0].count;
+    if(remaining===0)break;
+    await new Promise(resolve=>setTimeout(resolve,50));
+  }
+  assert.equal(remaining,0,'disposable database connections must close before cleanup');
+  await control.query(`DROP DATABASE IF EXISTS ${name}`);await control.end();
 }

@@ -32,7 +32,7 @@ export class ReportsController {
     @Query('groupId') groupId?: string, @Query('from') from?: string, @Query('to') to?: string,
     @Query('serviceType') serviceType: string = 'INC', @Query('state') state?: string) {
     const actor = await this.auth.identity({ devUser, cookie });
-    if (!groupId || !actor.groups.includes(groupId)) throw new NotFoundException();
+    if (!groupId || (!actor.canManageRouting && !actor.groups.includes(groupId))) throw new NotFoundException();
     if (serviceType !== 'INC' && serviceType !== 'REQ') throw new BadRequestException({ code: 'INVALID_REPORT_SERVICE_TYPE' });
     const filter = notificationFilter(state);
     if (!filter) throw new BadRequestException({ code: 'INVALID_NOTIFICATION_REPORT_FILTER' });
@@ -41,9 +41,9 @@ export class ReportsController {
     if (days < 0 || days > 30) throw new BadRequestException({ code: 'INVALID_REPORT_WINDOW' });
     return this.db.transaction(async client => {
       await client.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY');
-      const membership = await client.query(`SELECT now() AS clock FROM group_memberships m
-        JOIN employees e ON e.id=m.employee_id JOIN support_groups g ON g.id=m.group_id
-        WHERE e.id=$1 AND e.active AND g.enabled AND m.group_id=$2`, [actor.id, groupId]);
+      const membership = await client.query(`SELECT now() AS clock FROM employees e JOIN support_groups g ON g.id=$2
+        WHERE e.id=$1 AND e.active AND g.enabled AND ($3::boolean OR EXISTS
+          (SELECT 1 FROM group_memberships m WHERE m.employee_id=e.id AND m.group_id=g.id))`, [actor.id, groupId, !!actor.canManageRouting]);
       if (!membership.rowCount) throw new NotFoundException();
       const window = [groupId, serviceType, from, to, actor.id];
       const coverage = (await client.query(`SELECT count(*)::int AS events,
@@ -51,12 +51,12 @@ export class ReportsController {
           count(*) FILTER(WHERE o.expanded_at IS NOT NULL AND NOT EXISTS
             (SELECT 1 FROM notification_deliveries d WHERE d.outbox_id=o.id))::int AS without_deliveries
         FROM outbox_events o JOIN tickets t ON t.id=o.ticket_id
-        WHERE t.owner_group_id=$1 AND t.service_type=$2 AND staff_site_access(t.service_routing_snapshot,$5,t.owner_group_id)
+        WHERE t.owner_group_id=$1 AND t.service_type=$2 AND (staff_site_access(t.service_routing_snapshot,$5,t.owner_group_id) OR ${!!actor.canManageRouting})
           AND o.created_at>=($3::date::timestamp AT TIME ZONE 'Asia/Shanghai')
           AND o.created_at<(($4::date+1)::timestamp AT TIME ZONE 'Asia/Shanghai')`, window)).rows[0];
       const rows = await client.query(`SELECT d.id,o.ticket_id,t.number,o.created_at AS event_at,d.updated_at,
           d.state,d.attempts,d.last_error FROM notification_deliveries d JOIN outbox_events o ON o.id=d.outbox_id
-        JOIN tickets t ON t.id=o.ticket_id WHERE t.owner_group_id=$1 AND t.service_type=$2 AND staff_site_access(t.service_routing_snapshot,$5,t.owner_group_id)
+        JOIN tickets t ON t.id=o.ticket_id WHERE t.owner_group_id=$1 AND t.service_type=$2 AND (staff_site_access(t.service_routing_snapshot,$5,t.owner_group_id) OR ${!!actor.canManageRouting})
           AND o.created_at>=($3::date::timestamp AT TIME ZONE 'Asia/Shanghai')
           AND o.created_at<(($4::date+1)::timestamp AT TIME ZONE 'Asia/Shanghai')
         ORDER BY d.updated_at DESC,d.id LIMIT 5001`, window);
@@ -79,7 +79,7 @@ export class ReportsController {
     @Query('serviceType') serviceType: string = 'INC',
     @Query('ownerScope') ownerScope?: string, @Query('employeeId') employeeId?: string) {
     const actor = await this.auth.identity({ devUser, cookie });
-    if (!groupId || !actor.groups.includes(groupId)) throw new NotFoundException();
+    if (!groupId || (!actor.canManageRouting && !actor.groups.includes(groupId))) throw new NotFoundException();
     if (serviceType !== 'INC' && serviceType !== 'REQ') throw new BadRequestException({ code: 'INVALID_REPORT_SERVICE_TYPE' });
     const ownerFilter = reportOwnerFilter(ownerScope, employeeId);
     if (!ownerFilter) throw new BadRequestException({ code: 'INVALID_REPORT_OWNER_FILTER' });
@@ -92,8 +92,9 @@ export class ReportsController {
         SELECT clock_timestamp() AS as_of,r.started_at AS recording_started_at,
           ($3::date::timestamp AT TIME ZONE 'Asia/Shanghai') AS window_start,
           (($4::date+1)::timestamp AT TIME ZONE 'Asia/Shanghai') AS window_end
-        FROM group_memberships m JOIN employees e ON e.id=m.employee_id CROSS JOIN responsibility_recording r
-        WHERE e.id=$1 AND e.active AND m.group_id=$2`, [actor.id, groupId, from, to]);
+        FROM employees e JOIN support_groups g ON g.id=$2 CROSS JOIN responsibility_recording r
+        WHERE e.id=$1 AND e.active AND g.enabled AND ($5::boolean OR EXISTS
+          (SELECT 1 FROM group_memberships m WHERE m.employee_id=e.id AND m.group_id=g.id))`, [actor.id, groupId, from, to, !!actor.canManageRouting]);
       if (!membership.rowCount) throw new NotFoundException();
       const clock = membership.rows[0];
       const rows = await client.query(`SELECT h.*,n.observed_at AS next_at,f.source AS history_origin,
@@ -106,7 +107,7 @@ export class ReportsController {
         LEFT JOIN LATERAL (SELECT observed_at FROM ticket_responsibility_history
           WHERE ticket_id=h.ticket_id AND revision>h.revision ORDER BY revision LIMIT 1) n ON true
         WHERE h.owner_group_id=$1 AND h.service_type=$2
-          AND EXISTS(SELECT 1 FROM tickets scoped WHERE scoped.id=h.ticket_id AND staff_site_access(scoped.service_routing_snapshot,$6,h.owner_group_id))
+          AND EXISTS(SELECT 1 FROM tickets scoped WHERE scoped.id=h.ticket_id AND (staff_site_access(scoped.service_routing_snapshot,$6,h.owner_group_id) OR ${!!actor.canManageRouting}))
           AND h.observed_at<least($4::timestamptz,$5::timestamptz)
           AND least(coalesce(n.observed_at,$5::timestamptz),$4::timestamptz,$5::timestamptz)
             > greatest(h.observed_at,$3::timestamptz)
@@ -136,7 +137,7 @@ export class ReportsController {
     @Query('ownerScope') ownerScope?: string, @Query('employeeId') employeeId?: string,
     @Query('serviceCode') serviceCode?: string) {
     const actor = await this.auth.identity({ devUser, cookie });
-    if (!groupId || !actor.groups.includes(groupId)) throw new NotFoundException();
+    if (!groupId || (!actor.canManageRouting && !actor.groups.includes(groupId))) throw new NotFoundException();
     if (serviceType !== 'INC' && serviceType !== 'REQ') throw new BadRequestException({ code: 'INVALID_REPORT_SERVICE_TYPE' });
     const ownerFilter = reportOwnerFilter(ownerScope, employeeId);
     if (!ownerFilter) throw new BadRequestException({ code: 'INVALID_REPORT_OWNER_FILTER' });
@@ -147,8 +148,9 @@ export class ReportsController {
     if (days < 0 || days > 30) throw new BadRequestException({ code: 'INVALID_REPORT_WINDOW' });
     return this.db.transaction(async client => {
       await client.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY');
-      const membership = await client.query(`SELECT now() AS clock FROM group_memberships m JOIN employees e ON e.id=m.employee_id
-        JOIN support_groups g ON g.id=m.group_id WHERE e.id=$1 AND e.active AND g.enabled AND m.group_id=$2`, [actor.id, groupId]);
+      const membership = await client.query(`SELECT now() AS clock FROM employees e JOIN support_groups g ON g.id=$2
+        WHERE e.id=$1 AND e.active AND g.enabled AND ($3::boolean OR EXISTS
+          (SELECT 1 FROM group_memberships m WHERE m.employee_id=e.id AND m.group_id=g.id))`, [actor.id, groupId, !!actor.canManageRouting]);
       if (!membership.rowCount) throw new NotFoundException();
       const tickets = await client.query(`SELECT t.id,t.number,t.status,t.priority,t.initial_priority,t.created_at,f.rating,
         (SELECT count(*)::integer FROM ticket_events e WHERE e.ticket_id=t.id
@@ -163,7 +165,7 @@ export class ReportsController {
         FROM tickets t LEFT JOIN ticket_feedback f ON f.ticket_id=t.id
         JOIN service_catalog c ON c.code=t.service_code
         LEFT JOIN employees a ON a.id=t.assignee_id LEFT JOIN employees p ON p.id=t.pending_assignee_id
-        WHERE t.service_type=$4 AND t.owner_group_id=$1 AND staff_site_access(t.service_routing_snapshot,$5,t.owner_group_id)
+        WHERE t.service_type=$4 AND t.owner_group_id=$1 AND (staff_site_access(t.service_routing_snapshot,$5,t.owner_group_id) OR ${!!actor.canManageRouting})
           AND t.created_at>=($2::date::timestamp AT TIME ZONE 'Asia/Shanghai')
           AND t.created_at<(($3::date + 1)::timestamp AT TIME ZONE 'Asia/Shanghai')
         ORDER BY t.created_at DESC,t.id DESC LIMIT 5001`, [groupId, from, to, serviceType, actor.id]);

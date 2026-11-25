@@ -65,6 +65,8 @@ jobs:
         run: node tests/integration/catalog-navigation.mjs
       - name: Verify automatic primary-backup dispatch, escalation and concurrent scheduler safety
         run: node tests/integration/automatic-dispatch.mjs
+      - name: Verify ERP directory classification and cross-group handover in a disposable database
+        run: node tests/integration/catalog-classification-handover.mjs
 
   build-test:
     runs-on: ubuntu-latest

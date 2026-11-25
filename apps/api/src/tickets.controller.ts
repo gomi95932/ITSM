@@ -64,6 +64,13 @@ export class TicketsController {
     return this.tickets.classify(await this.tickets.identity({devUser:user,cookie,csrf},true),id,body,key??'',requestId?.slice(0,128)??randomUUID());
   }
 
+  @Post(':id/classification-candidates')
+  @HttpCode(200)
+  async classificationCandidates(@Headers('x-dev-user') user:string|undefined,@Param('id') id:string,@Body() body:unknown,
+    @Headers('cookie') cookie?:string,@Headers('x-csrf-token') csrf?:string):Promise<object>{
+    return this.tickets.classificationCandidates(await this.tickets.identity({devUser:user,cookie,csrf},true),id,body);
+  }
+
   @Post(':id/priority')
   @HttpCode(200)
   async priority(@Headers('x-dev-user') user:string|undefined,@Headers('idempotency-key') key:string|undefined,

@@ -19,9 +19,15 @@ const waitingReason=ref<WaitReason|''>('');
 const waitingOptions=computed(()=>action.value==='REQUEST_INFO'?USER_WAIT_REASONS:VENDOR_WAIT_REASONS);
 const contentSafe=ref(false);
 const catalog=ref<CatalogItem[]>([]),correcting=ref(false),classificationCode=ref(''),classificationReason=ref(''),classificationFields=ref<Record<string,string>>({}),classificationSafe=ref(false),classificationKey=ref(createRequestKey());
+const classificationTarget=ref(''),classificationCandidates=ref<{id:string;name:string}[]>([]),classificationChecking=ref(false),classificationCrossGroup=ref<boolean|null>(null);
+const classificationCheckedFor=ref('');
 const classificationService=computed(()=>catalog.value.find(item=>item.code===classificationCode.value));
+const classificationFingerprint=computed(()=>JSON.stringify({ticketId:props.id,version:ticket.value?.version,
+  code:classificationCode.value,formVersion:classificationService.value?.formVersion,fields:classificationFields.value}));
 watch(classificationCode,()=>{classificationFields.value={};});
-watch([classificationCode,classificationReason,classificationFields],()=>{classificationSafe.value=false;classificationKey.value=createRequestKey();},{deep:true});
+let classificationLookup=0;
+watch(classificationFingerprint,()=>{classificationLookup++;classificationTarget.value='';classificationCandidates.value=[];classificationCrossGroup.value=null;classificationCheckedFor.value='';});
+watch([classificationCode,classificationReason,classificationFields,classificationTarget],()=>{classificationSafe.value=false;classificationKey.value=createRequestKey();},{deep:true});
 const reviewPriority=ref<Priority>('P1'),reviewReason=ref(''),reviewSafe=ref(false),reviewKey=ref(createRequestKey());
 const feedbackRating=ref(0),feedbackComment=ref(''),feedbackSafe=ref(false),feedbackKey=ref(createRequestKey());
 watch([feedbackRating,feedbackComment],()=>{feedbackKey.value=createRequestKey();feedbackSafe.value=false;});
@@ -35,7 +41,7 @@ watch([comment,reason,dueAt,vendorReference,vendorOwner,category,evidence,target
 watch(target,async value=>{
   targetPerson.value='';members.value=[];membersLoading.value=!!value;
   if(!value)return;
-  try{const result=await api<{items:{id:string;name:string}[]}>(`/tickets/${props.id}/assignment-candidates?groupId=${encodeURIComponent(value)}`);if(target.value===value)members.value=result.items.filter(person=>(action.value==='FORCE_TAKEOVER'||person.id!==props.user.id)&&person.id!==ticket.value?.assigneeId);}
+  try{const result=await api<{items:{id:string;name:string}[]}>(`/tickets/${props.id}/assignment-candidates?groupId=${encodeURIComponent(value)}`);if(target.value===value)members.value=result.items.filter(person=>(['FORCE_TAKEOVER','ASSIGN_OFFER'].includes(action.value??'')||person.id!==props.user.id)&&person.id!==ticket.value?.assigneeId);}
   catch(e){if(target.value===value)error.value=errorText(e);}
   finally{if(target.value===value)membersLoading.value=false;}
 });
@@ -52,7 +58,7 @@ const available=computed<TicketAction[]>(()=>{
     const owner=ticket.value.assigneeId===props.user.id;
     if(!ticket.value.assigneeId&&!ticket.value.pendingAssigneeId&&ticket.value.canClaim!==false)result.push('ACCEPT');
     if(owner&&ticket.value.canProcess){if(state==='IN_PROGRESS')result.push('REQUEST_INFO','WAIT_VENDOR');if(state==='WAITING_VENDOR')result.push('RESUME_VENDOR');if(['IN_PROGRESS','WAITING_VENDOR'].includes(state)&&completionReady.value)result.push('RESOLVE');}
-    if(owner||(!ticket.value.assigneeId&&(state==='QUEUED'||ticket.value.serviceType==='REQ'&&state==='IN_PROGRESS')&&ticket.value.canDispatchQueued)){
+    if(owner){
       if(ticket.value.pendingAssigneeId)result.push(ticket.value.assignmentKind==='OFFER'?'CANCEL_OFFER':'CANCEL_HANDOVER');
       else {result.push('REASSIGN');if(ticket.value.canAssignOffer)result.push('ASSIGN_OFFER');}
     }
@@ -65,6 +71,10 @@ const available=computed<TicketAction[]>(()=>{
       if(current.some(item=>item.effective))result.push('CONTINUATION_REVOKE');
     }
   }
+  if(active&&!ticket.value.assigneeId&&(state==='QUEUED'||ticket.value.serviceType==='REQ'&&state==='IN_PROGRESS')&&ticket.value.canDispatchQueued){
+    if(ticket.value.pendingAssigneeId)result.push(ticket.value.assignmentKind==='OFFER'?'CANCEL_OFFER':'CANCEL_HANDOVER');
+    else {result.push('REASSIGN');if(ticket.value.canAssignOffer)result.push('ASSIGN_OFFER');}
+  }
   return result;
 });
 const commands=computed<Record<string,string>>(()=>({ACCEPT:'接单并回复',REQUEST_INFO:'请求补充',ADD_INFO:'补充信息',WAIT_VENDOR:'等待厂商',RESUME_VENDOR:'恢复处理',RESOLVE:'提交解决方案',CONFIRM:'确认已解决',REOPEN:'仍未解决',CANCEL:'撤销报障',REASSIGN:'发起交接',INITIATE_HANDOVER:'主管发起交接',CONTINUATION_PROPOSE:'申请限期处理',CONTINUATION_APPROVE:'批准限期处理',CONTINUATION_REJECT:'拒绝限期处理',CONTINUATION_REVOKE:'立即撤销授权',ACCEPT_HANDOVER:'确认接收',DECLINE_HANDOVER:'退回交接',CANCEL_HANDOVER:'撤回交接',ASSIGN_OFFER:'指定候选人',ACCEPT_OFFER:'确认接单并回复',DECLINE_OFFER:'拒绝接单',CANCEL_OFFER:'撤回派单',
@@ -73,11 +83,24 @@ const resolutionCategories=computed(()=>ticket.value?.serviceType==='REQ'?['权�
 const continuationLabels:Record<string,string>={PENDING:'待独立复核',APPROVED:'已批准',REJECTED:'已拒绝',REVOKED:'已撤销'};
 const selectableContinuations=computed(()=>ticket.value?.continuations?.filter(item=>item.current&&
   (action.value==='CONTINUATION_REVOKE'?item.effective:item.status==='PENDING'&&item.proposedBy!==props.user.id&&item.employeeId!==props.user.id))??[]);
-async function load(){loading.value=true;error.value='';try{ticket.value=await api<TicketView>(`/tickets/${props.id}`);catalog.value=(await api<{items:CatalogItem[]}>('/catalog')).items;if(props.user.groups.length)groups.value=(await api<{items:{id:string;name:string}[]}>('/support-groups')).items;}catch(e){error.value=errorText(e);}finally{loading.value=false;}}
+async function load(){loading.value=true;error.value='';try{ticket.value=await api<TicketView>(`/tickets/${props.id}`);catalog.value=(await api<{items:CatalogItem[]}>('/catalog')).items;if(props.user.groups.length||props.user.canManageRouting)groups.value=(await api<{items:{id:string;name:string}[]}>('/support-groups')).items;}catch(e){error.value=errorText(e);}finally{loading.value=false;}}
 function choose(value:TicketAction){correcting.value=false;action.value=value;comment.value='';reason.value='';dueAt.value='';waitingReason.value='';vendorReference.value='';vendorOwner.value='';category.value='';evidence.value='';target.value=['ASSIGN_OFFER','FORCE_TAKEOVER'].includes(value)?ticket.value?.ownerGroupId??'':'';targetPerson.value='';continuationId.value=selectableContinuations.value[0]?.id??'';contentSafe.value=false;key.value=createRequestKey();error.value='';}
+async function checkClassificationTarget(){
+  if(!classificationService.value||classificationChecking.value)return;
+  const sequence=++classificationLookup;
+  const fingerprint=classificationFingerprint.value;
+  classificationChecking.value=true;error.value='';
+  try{const response=await api<{groupId:string;items:{id:string;name:string}[];crossGroup:boolean}>(`/tickets/${props.id}/classification-candidates`,{
+    method:'POST',body:{serviceCode:classificationCode.value,formVersion:classificationService.value.formVersion,fields:classificationFields.value}});
+    if(sequence===classificationLookup&&fingerprint===classificationFingerprint.value){classificationCrossGroup.value=response.crossGroup;classificationCandidates.value=response.items;classificationCheckedFor.value=fingerprint;}
+  }catch(e){if(sequence===classificationLookup)error.value=errorText(e);}finally{classificationChecking.value=false;}
+}
 async function submitClassification(){
-  if(!ticket.value||!classificationService.value||!classificationSafe.value||busy.value)return;busy.value=true;error.value='';
-  try{await api(`/tickets/${props.id}/classification`,{method:'POST',key:classificationKey.value,body:{contentClass:'GENERAL',expectedVersion:ticket.value.version,serviceCode:classificationCode.value,formVersion:classificationService.value.formVersion,fields:classificationFields.value,reason:classificationReason.value}});
+  if(!ticket.value||!classificationService.value||!classificationSafe.value||busy.value||classificationChecking.value)return;
+  if(classificationCheckedFor.value!==classificationFingerprint.value){await checkClassificationTarget();if(classificationCheckedFor.value!==classificationFingerprint.value)return;}
+  if(classificationCrossGroup.value&&(!classificationTarget.value||!classificationCandidates.value.some(person=>person.id===classificationTarget.value))){error.value='请选择目标支持组的接收人';return;}
+  busy.value=true;error.value='';
+  try{await api(`/tickets/${props.id}/classification`,{method:'POST',key:classificationKey.value,body:{contentClass:'GENERAL',expectedVersion:ticket.value.version,serviceCode:classificationCode.value,formVersion:classificationService.value.formVersion,fields:classificationFields.value,reason:classificationReason.value,...(classificationCrossGroup.value?{targetAssigneeId:classificationTarget.value}:{})}});
     correcting.value=false;classificationCode.value='';classificationReason.value='';await load();emit('changed');}
   catch(e){if(e instanceof ApiError&&e.status===409){await load();classificationKey.value=createRequestKey();}error.value=errorText(e);}finally{busy.value=false;}
 }
@@ -113,7 +136,7 @@ onMounted(load);
 </script>
 <template>
   <section class="detail-page"><button class="text-button" @click="emit('back')"><ArrowLeft :size="17"/> 返回工单列表</button><div v-if="loading&&!ticket" class="empty-state"><LoaderCircle class="spin"/> 正在加载</div><p v-if="error" class="error-banner" role="alert">{{error}}</p>
-    <template v-if="ticket"><div class="page-title"><div><p class="eyebrow">{{ticket.number}}</p><h1>{{ticket.subject}}</h1></div><button class="icon-button" title="刷新" aria-label="刷新工单" :disabled="loading" @click="load"><RefreshCw :size="18" :class="{spin:loading}"/></button></div><div class="ticket-meta"><span class="status" :data-status="ticket.status">{{statuses[ticket.status]}}</span><span class="priority" :data-priority="ticket.priority">{{ticket.priority}}</span><span>{{formatDate(ticket.createdAt)}}</span><span>责任组：{{groups.find(g=>g.id===ticket?.ownerGroupId)?.name??ticket.ownerGroupId}}</span><span>处理人：{{ticket.assigneeName??ticket.assigneeId??'组内待认领'}}</span><span v-if="ticket.pendingAssigneeId" class="amber-text">{{ticket.assignmentKind==='OFFER'?'待候选确认':'待交接'}}：{{ticket.pendingAssigneeName??ticket.pendingAssigneeId}}<template v-if="ticket.assignmentDueAt"> · 截止 {{formatDate(ticket.assignmentDueAt)}}</template></span></div>
+    <template v-if="ticket"><div class="page-title"><div><p class="eyebrow">{{ticket.number}}</p><h1>{{ticket.subject}}</h1></div><button class="icon-button" title="刷新" aria-label="刷新工单" :disabled="loading" @click="load"><RefreshCw :size="18" :class="{spin:loading}"/></button></div><div class="ticket-meta"><span class="status" :data-status="ticket.status">{{statuses[ticket.status]}}</span><span class="priority" :data-priority="ticket.priority">{{ticket.priority}}</span><span>{{formatDate(ticket.createdAt)}}</span><span>责任组：{{ticket.ownerGroupName??groups.find(g=>g.id===ticket?.ownerGroupId)?.name??ticket.ownerGroupId}}</span><span>当前处理人：{{ticket.assigneeName??ticket.assigneeId??'尚未接单'}}</span><span v-if="ticket.pendingAssigneeId" class="amber-text">{{ticket.assignmentKind==='OFFER'?'已分派责任人':'待交接人'}}：{{ticket.pendingAssigneeName??ticket.pendingAssigneeId}}（待接单）<template v-if="ticket.assignmentDueAt"> · 截止 {{formatDate(ticket.assignmentDueAt)}}</template></span></div>
       <p v-if="ticket.site" class="muted">归属厂区：{{ticket.site.name}} · 配置版本 {{ticket.site.configVersion}}</p>
       <p v-for="cycle in (ticket.sla??[]).filter(s=>s.template)" :key="`template-${cycle.cycle}`" class="muted">第 {{cycle.cycle}} 轮 SLA 模板：{{cycle.template?.name}} · 配置版本 {{cycle.template?.configVersion}}</p>
       <section v-if="isAgent&&(ticket.ownerContinuityRequired||ticket.continuations?.length)" class="detail-section" aria-label="责任连续性">
@@ -143,9 +166,13 @@ onMounted(load);
         </form>
       </section>
       <section class="detail-section" aria-label="工单分类"><div class="section-heading"><div><h2>工单分类</h2><p>{{catalog.find(item=>item.code===ticket?.serviceCode)?.name??ticket.serviceCode}}</p><p v-if="ticket.originalServiceCode!==ticket.serviceCode" class="muted">原分类：{{catalog.find(item=>item.code===ticket?.originalServiceCode)?.name??ticket.originalServiceCode}}</p></div><button v-if="ticket.canCorrectClassification" class="secondary" :disabled="busy" @click="correcting=!correcting;action=undefined"><Tags :size="16"/>分类纠偏</button></div>
+        <p v-if="ticket.pendingClassification" class="muted">待接收分类：{{catalog.find(item=>item.code===ticket?.pendingClassification?.serviceCode)?.name??ticket.pendingClassification.serviceCode}} · 对方确认后生效</p>
         <form v-if="correcting&&ticket.canCorrectClassification" class="action-form" @submit.prevent="submitClassification">
           <label>调整为<select v-model="classificationCode" required><option value="">请选择</option><option v-for="item in catalog.filter(item=>item.available&&item.code!==ticket?.serviceCode)" :key="item.code" :value="item.code">{{item.name}}</option></select></label>
           <label v-for="field in classificationService?.fields??[]" :key="field.key">{{field.label}}<select v-if="field.options" v-model="classificationFields[field.key]" :required="field.required"><option value="">请选择</option><option v-for="option in field.options" :key="option">{{option}}</option></select><input v-else v-model="classificationFields[field.key]" :required="field.required" maxlength="500"/></label>
+          <button type="button" class="secondary" :disabled="classificationChecking||!classificationCode" @click="checkClassificationTarget"><LoaderCircle v-if="classificationChecking" :size="16" class="spin"/><RefreshCw v-else :size="16"/>检查承接人员</button>
+          <label v-if="classificationCrossGroup">目标支持组接收人<select v-model="classificationTarget" required><option value="">{{classificationCandidates.length?'请选择':'暂无具备该服务岗位资格的人员'}}</option><option v-for="person in classificationCandidates" :key="person.id" :value="person.id">{{person.name}}</option></select></label>
+          <p v-if="classificationCrossGroup" class="muted">跨组纠偏将在目标人员确认后生效。原责任人与分类在此之前不变。</p>
           <label>纠偏原因<textarea v-model="classificationReason" required maxlength="2000" rows="2"/></label><ContentBoundary v-model="classificationSafe"/><div class="form-footer"><button class="primary" type="submit" :disabled="busy||!classificationSafe||!classificationCode||!classificationReason.trim()"><Check :size="16"/>保存分类</button></div>
         </form>
       </section>

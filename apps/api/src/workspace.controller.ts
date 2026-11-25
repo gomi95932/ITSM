@@ -9,6 +9,7 @@ import { VoiceAsrService } from './voice-asr.service.js';
 import { voiceCandidate } from './voice-catalog.js';
 import { applyIntakeSuggestion, IntakeInterpreterService } from './intake-interpreter.service.js';
 import { initialCatalogPath } from './catalog-navigation-policy.js';
+import {currentCatalogTree,directoryState} from './catalog-tree-store.js';
 type H = Record<string,string | undefined>;
 const auth = (h: H) => ({ devUser: h['x-dev-user'], cookie: h.cookie, csrf: h['x-csrf-token'] });
 
@@ -21,10 +22,14 @@ export class WorkspaceController {
   }
   @Get('catalog') async catalog(@Headers() h: H) {
     const actor = await this.identity.identity(auth(h));
-    const result = await this.db.pool.query(`WITH actor_access AS (SELECT EXISTS(
+    const client=await this.db.pool.connect();
+    try {
+    await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
+    const result = await client.query(`WITH actor_access AS (SELECT EXISTS(
       SELECT 1 FROM role_bindings r WHERE r.employee_id=$1 AND r.role_code='PLATFORM_ADMIN'
         AND ${ROLE_EFFECTIVE_SQL}) AS is_admin)
-      SELECT c.*,v.snapshot,n.path AS navigation_path,n."sortOrder" AS navigation_order,
+      SELECT c.*,a.is_admin,v.snapshot,n.path AS navigation_path,n."sortOrder" AS navigation_order,
+        (SELECT r."systemId" FROM service_position_routes r WHERE r."serviceCode"=c.code) AS mapped_system_id,
         scope.visible AS scope_visible,
         (SELECT s.name FROM service_position_routes r JOIN business_systems s ON s.id=r."systemId"
           WHERE r."serviceCode"=c.code LIMIT 1) AS system_name
@@ -38,34 +43,40 @@ export class WorkspaceController {
         AND service_site_visible(c.code,$1) AS visible) scope
       WHERE a.is_admin OR (c.published AND scope.visible)
       ORDER BY COALESCE(n."sortOrder",c.sort_order),c.code`,[actor.id]);
-    return { items: result.rows.map<CatalogItem>(r => {
+    const tree=await currentCatalogTree(client);
+    const items=result.rows.filter(r=>r.is_admin||!directoryState(tree,r.code,r.mapped_system_id).reason).map<CatalogItem>(r => {
+      const directory=directoryState(tree,r.code,r.mapped_system_id);
       const ready=['INC','GEN'].includes(r.type)||(r.type==='REQ'&&!!r.snapshot?.approval?.steps?.length
         &&!!requestIntakePolicy(process.env,r.code,r.form_version));
-      const unavailableReason=!r.published?'UNPUBLISHED':!r.scope_visible?'OUT_OF_SCOPE':!ready?'NOT_READY':undefined;
+      const unavailableReason=!r.published?'UNPUBLISHED':directory.reason??(!r.scope_visible?'OUT_OF_SCOPE':!ready?'NOT_READY':undefined);
       return {code:r.code,name:r.name || r.code,description:r.description,type:r.type,formVersion:r.form_version,fields:r.field_schema,
-        navigationPath:r.navigation_path??initialCatalogPath(r.code,r.system_name),navigationOrder:r.navigation_order??r.sort_order,
+        navigation:directory.navigation,navigationPath:tree?directory.navigation?.path.map(n=>n.name)??[]:r.navigation_path??initialCatalogPath(r.code,r.system_name),navigationOrder:r.navigation_order??r.sort_order,
         published:r.published,available:!unavailableReason,unavailableReason,
         maxValidityDays:r.type==='REQ'?r.snapshot?.maxValidityDays??null:null};
-    }) };
+    });
+    await client.query('COMMIT');
+    return {items};
+    } catch(error){await client.query('ROLLBACK');throw error;}
+    finally{client.release();}
   }
   @Get('support-groups') async groups(@Headers() h: H) {
-    const actor = await this.identity.identity(auth(h)); if (!actor.groups.length) throw new NotFoundException();
+    const actor = await this.identity.identity(auth(h)); if (!actor.groups.length&&!actor.canManageRouting) throw new NotFoundException();
     return { items: (await this.db.pool.query('SELECT id,name FROM support_groups WHERE enabled ORDER BY name')).rows };
   }
   @Get('support-groups/:id/members') async members(@Headers() h: H,@Param('id') id: string) {
-    const actor = await this.identity.identity(auth(h)); if (!actor.groups.length) throw new NotFoundException();
+    const actor = await this.identity.identity(auth(h)); if (!actor.groups.length&&!actor.canManageRouting) throw new NotFoundException();
     if (!(await this.db.pool.query('SELECT id FROM support_groups WHERE id=$1 AND enabled',[id])).rowCount) throw new NotFoundException();
     return { items:(await this.db.pool.query(`SELECT e.id,e.display_name AS name FROM employees e
       JOIN group_memberships m ON m.employee_id=e.id WHERE m.group_id=$1 AND e.active ORDER BY e.display_name,e.id`,[id])).rows };
   }
   @Get('notifications') async notifications(@Headers() h: H) {
-    const actor = await this.identity.identity(auth(h)); if (!actor.groups.length) throw new NotFoundException();
+    const actor = await this.identity.identity(auth(h)); if (!actor.groups.length&&!actor.canManageRouting) throw new NotFoundException();
     const result = await this.db.pool.query(`SELECT d.id,d.state,d.attempts,d.last_error AS "lastError",d.updated_at AS "updatedAt",t.number,
       (d.state='DEAD' AND EXISTS(SELECT 1 FROM role_bindings r WHERE r.employee_id=$2 AND r.group_id=t.owner_group_id
         AND r.role_code IN ('DISPATCHER','GROUP_LEAD') AND ${ROLE_EFFECTIVE_SQL})) AS "canRetry"
       FROM notification_deliveries d JOIN outbox_events o ON o.id=d.outbox_id JOIN tickets t ON t.id=o.ticket_id
-      WHERE t.owner_group_id=ANY($1::text[]) AND staff_site_access(t.service_routing_snapshot,$2,t.owner_group_id)
-      ORDER BY (d.state='REVIEW_REQUIRED') DESC,d.updated_at DESC,d.id LIMIT 100`,[actor.groups,actor.id]);
+      WHERE ($3::boolean OR t.owner_group_id=ANY($1::text[])) AND ($3::boolean OR staff_site_access(t.service_routing_snapshot,$2,t.owner_group_id))
+      ORDER BY (d.state='REVIEW_REQUIRED') DESC,d.updated_at DESC,d.id LIMIT 100`,[actor.groups,actor.id,!!actor.canManageRouting]);
     return { mode: process.env.NOTIFICATION_MODE ?? 'disabled', items:result.rows };
   }
   @Get('routing-alerts') async routingAlerts(@Headers() h: H) {

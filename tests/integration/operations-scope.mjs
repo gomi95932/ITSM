@@ -95,6 +95,19 @@ for(const [index,group] of groups.entries())if(group!=='service-desk'){
   const id=`ops-position-group-${index}`;routePositions.set(group,id);config.positions.push({id,name:id,domainId:domain,groupId:group,enabled:true});
 }
 await publishStructure(config);
+const tree=await ok(request('/admin/catalog-navigation/tree'));
+const nodes=structuredClone(tree.nodes);
+for(const [code,category] of [['INC-PC','电脑与软件'],['INC-BIZ','信息化系统']]){
+  const root=nodes.find(node=>node.kind==='CATEGORY'&&node.parentId===null&&node.name===category);
+  const leaf=nodes.find(node=>node.kind==='SERVICE'&&node.serviceCode===code);
+  assert.ok(root?.enabled&&leaf,`CI directory requires ${category} and ${code}`);
+  leaf.parentId=root.id;
+  leaf.enabled=true;
+}
+const directoryChange={expectedVersion:tree.version,navigationVersion:tree.navigationVersion,
+  structureVersion:tree.structureVersion,nodes,reason:'Restore CI operations services to their active categories'};
+await ok(request('/admin/catalog-navigation/tree/preview','demo-admin-1',directoryChange));
+await ok(request('/admin/catalog-navigation/tree','demo-admin-1',directoryChange));
 const action=(t,user,action,extra={},key)=>request(`/tickets/${t.id}/actions`,user,{expectedVersion:t.version,action,...extra},key);
 const create=(user=person.requesterA,extra={})=>request('/tickets',user,{serviceCode:'INC-PC',formVersion:1,subject:`Operations ${randomUUID()}`,
   description:'Peripheral device unavailable',impact:'INDIVIDUAL',urgency:'MEDIUM',fields:{},...extra});

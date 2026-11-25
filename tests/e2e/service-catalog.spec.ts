@@ -70,8 +70,43 @@ test('administrators configure a new service domain through actual employee inta
     await page.screenshot({path:'test-results/service-catalog-review-mobile.png',fullPage:true});
     await expect(reviewing.getByRole('button',{name:'批准发布',exact:true})).toHaveCount(0);
     await reviewing.getByRole('button',{name:'关闭日志详情'}).click();
+    await page.getByRole('button',{name:'服务组织',exact:true}).click();
   }
   await publish(`发布试验设备服务 ${suffix}`);
+  await page.getByRole('tab',{name:'目录展示',exact:true}).click();
+  const directory=page.getByRole('region',{name:'目录展示配置'});
+  const tree=directory.getByRole('navigation',{name:'服务目录树'});
+  const snapshot=await page.evaluate(async()=>{
+    const response=await fetch('/api/v1/admin/catalog-navigation/tree',{headers:{'X-Dev-User':'demo-admin-1'}});
+    if(!response.ok)throw new Error(`Catalog tree read failed: ${response.status}`);
+    return response.json() as Promise<{nodes:{serviceCode:string|null}[];services:{code:string}[]}>;
+  });
+  const assigned=new Set(snapshot.nodes.map(node=>node.serviceCode));
+  for(const service of snapshot.services.filter(service=>service.code!==code&&!assigned.has(service.code))){
+    await tree.getByRole('button',{name:'其他服务',exact:true}).click();
+    await directory.getByRole('button',{name:'新增服务事项',exact:true}).click();
+    await directory.getByRole('textbox',{name:'目录名称'}).fill(`待上架 ${service.code}`.slice(0,80));
+    await directory.getByRole('combobox',{name:'关联服务编码'}).selectOption(service.code);
+    await expect(directory.getByRole('checkbox',{name:'启用此目录'})).not.toBeChecked();
+  }
+  await tree.getByRole('button',{name:'信息化系统',exact:true}).click();
+  await directory.getByRole('button',{name:'新增业务系统',exact:true}).click();
+  await directory.getByRole('textbox',{name:'目录名称'}).fill(system);
+  await directory.getByRole('combobox',{name:'关联业务系统'}).selectOption({label:system});
+  await directory.getByRole('checkbox',{name:'启用此目录'}).check();
+  await directory.getByRole('button',{name:'新增服务事项',exact:true}).click();
+  await directory.getByRole('textbox',{name:'目录名称'}).fill(name);
+  await directory.getByRole('combobox',{name:'关联服务编码'}).selectOption(code);
+  await directory.getByRole('checkbox',{name:'启用此目录'}).check();
+  await directory.getByRole('textbox',{name:'目录展示变更原因'}).fill(`上架试验设备服务 ${suffix}`);
+  await directory.getByRole('checkbox',{name:'本次内容不含密码、密钥及安全事件证据'}).check();
+  const previewResponse=page.waitForResponse(response=>response.url().endsWith('/admin/catalog-navigation/tree/preview')&&response.request().method()==='POST',{timeout:60_000});
+  await directory.getByRole('button',{name:'检查目录与承接'}).click();
+  const response=await previewResponse;
+  expect(response.ok(),`Catalog preview failed: ${response.status()} ${await response.text()}`).toBe(true);
+  await expect(directory.getByRole('table')).toContainText(code);
+  await directory.getByRole('button',{name:'保存并生效',exact:true}).click();
+  await expect(directory.getByRole('status')).toHaveText('服务目录已保存并生效');
   await page.getByRole('combobox',{name:'开发身份'}).selectOption('employee-1');
   await page.getByRole('button',{name:'服务目录',exact:true}).click();
   await page.getByRole('button',{name:new RegExp(name)}).click();

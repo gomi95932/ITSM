@@ -29,7 +29,8 @@ async function setup() {
       [randomUUID(),id(person),role,role==='PLATFORM_ADMIN'?null:id('group'),start,end,person==='revoked'?'REVOKED':'ACTIVE',id('proposer'),id('approver')]);
   }
   await client.query('INSERT INTO priority_reviewers(employee_id,group_id) VALUES ($1,$2)',[id('reviewer'),id('group')]);
-  await client.query(`INSERT INTO service_catalog(code,type,form_version,published,group_id) VALUES ($1,'INC',1,true,$2)`,[id('catalog'),id('group')]);
+  await client.query(`INSERT INTO service_catalog(code,type,form_version,published,group_id,name)
+    VALUES ($1,'INC',1,true,$2,'Notification CI fixture')`,[id('catalog'),id('group')]);
   ticket = randomUUID();
   await client.query(`INSERT INTO tickets(id,number,requester_id,submitted_by_id,owner_group_id,service_code,service_type,form_version,
     subject,description,fields,impact,urgency,priority,status) VALUES ($1,$2,$3,$3,$4,$5,'INC',1,'Notification fixture',

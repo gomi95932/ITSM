@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 
 export const intakeCorp='ci-intake-corp';
 export const requester='ci-intake-requester';
@@ -47,5 +48,51 @@ export async function seedIntake({browser=false}={}) {
     INSERT INTO request_catalog_versions(service_code,form_version,snapshot,published_by)
       VALUES (${quote(code)},1,${quote(JSON.stringify(snapshot))},${quote(verifier)}) ON CONFLICT DO NOTHING;
     COMMIT;`);
+  const base='http://127.0.0.1:8088/api/v1/admin/catalog-navigation/tree';
+  const headers={'Content-Type':'application/json','X-Dev-User':'demo-admin-1'};
+  const response=await fetch(base,{headers});
+  if(!response.ok)throw new Error(`REQUEST_INTAKE_DIRECTORY_READ_FAILED:${response.status}`);
+  const tree=await response.json();
+  const root=tree.nodes.find(node=>node.kind==='CATEGORY'&&node.parentId===null&&node.name==='其他服务');
+  if(!root)throw new Error('REQUEST_INTAKE_DIRECTORY_ROOT_MISSING');
+  const nodes=structuredClone(tree.nodes);
+  const available=new Set(tree.systems.filter(item=>item.enabled).map(item=>item.id));
+  for(const node of nodes){
+    if(node.kind==='SYSTEM'&&node.systemId&&!available.has(node.systemId))node.enabled=false;
+  }
+  for(const node of nodes){
+    if(node.parentId&&nodes.some(parent=>parent.id===node.parentId&&!parent.enabled))node.enabled=false;
+  }
+  const information=nodes.find(node=>node.kind==='CATEGORY'&&node.parentId===null&&node.name==='信息化系统');
+  const publishedCodes=new Set(nodes.filter(node=>node.serviceCode).map(node=>node.serviceCode));
+  // Earlier CI fixtures insert catalog rows directly; the directory editor requires a complete snapshot.
+  for(const service of tree.services){
+    if(publishedCodes.has(service.code)||service.code===code||service.code===incidentCode)continue;
+    let parent=root;
+    if(service.systemId){
+      if(!information)throw new Error('REQUEST_INTAKE_INFORMATION_ROOT_MISSING');
+      parent=nodes.find(node=>node.kind==='SYSTEM'&&node.systemId===service.systemId);
+      if(!parent){
+        parent={id:`system-${randomUUID()}`,parentId:information.id,kind:'SYSTEM',
+          name:`CI system ${service.systemId}`.slice(0,80),enabled:false,sortOrder:900,
+          systemId:service.systemId,serviceCode:null};
+        nodes.push(parent);
+      }
+    }
+    nodes.push({id:`service-${randomUUID()}`,parentId:parent.id,kind:'SERVICE',
+      name:`CI fixture ${service.code}`.slice(0,80),enabled:false,sortOrder:900,
+      systemId:null,serviceCode:service.code});
+    publishedCodes.add(service.code);
+  }
+  for(const [serviceCode,name] of [[code,snapshot.name],[incidentCode,'CI intake incident']]){
+    if(nodes.some(node=>node.serviceCode===serviceCode))continue;
+    nodes.push({id:`service-${randomUUID()}`,parentId:root.id,kind:'SERVICE',name,enabled:true,
+      sortOrder:900,systemId:null,serviceCode});
+  }
+  const published=await fetch(base,{method:'POST',headers:{...headers,'Idempotency-Key':randomUUID()},body:JSON.stringify({
+    contentClass:'GENERAL',expectedVersion:tree.version,navigationVersion:tree.navigationVersion,
+    structureVersion:tree.structureVersion,nodes,reason:'Publish disposable CI request intake services'
+  })});
+  if(!published.ok)throw new Error(`REQUEST_INTAKE_DIRECTORY_PUBLISH_FAILED:${published.status}:${JSON.stringify(await published.json())}`);
   return snapshot;
 }

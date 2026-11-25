@@ -77,12 +77,15 @@ test('non-JSON, truncated, oversized, failed or tool-calling model responses are
 
 function controllerFixture(interpreter:IntakeInterpreterService,revoke=false,changed=false) {
   const writes:unknown[][]=[];let checks=0,catalogReads=0;
-  const db={pool:{query:async(sql:string,...args:unknown[])=>{
+  const query=async(sql:string,...args:unknown[])=>{
     if(sql.includes('intake_rate_limits'))return {rows:[{count:1}]};
+    if(sql.includes('catalog_tree_versions'))return {rows:[]};
     if(sql.includes('SELECT c.*')){catalogReads++;return {rows:(!changed||catalogReads===1?catalog:[]).map(item=>({code:item.code,name:item.name,description:item.description,
       type:item.type,published:true,scope_visible:true,form_version:item.formVersion,field_schema:item.fields}))};}
+    if(sql.startsWith('BEGIN')||sql==='COMMIT'||sql==='ROLLBACK')return {rows:[]};
     writes.push([sql,...args]);return {rows:[{id:'synthetic-draft',expiresAt:'2099-01-01'}]};
-  }}} as unknown as Database;
+  };
+  const db={pool:{query,connect:async()=>({query,release:()=>{}})}} as unknown as Database;
   const identity={identity:async()=>{checks++;if(revoke&&checks>2)throw new Error('IDENTITY_REVOKED');return {id:'employee-1'};}} as unknown as AuthService;
   const controller=new WorkspaceController(db,identity,new IntakePolicyService(db),{} as VoiceAsrService,interpreter);
   return {controller,writes};

@@ -50,7 +50,7 @@ test('withdrawn appointment requires independently reviewed continuity or superv
   await page.getByRole('combobox',{name:'接收人',exact:true}).selectOption(f.peer);
   await submit('主管发起交接');
   await expect(page.locator('.ticket-meta')).toContainText('处理人：连续性工程师');
-  await expect(page.locator('.ticket-meta')).toContainText('待交接：接替工程师');
+  await expect(page.locator('.ticket-meta')).toContainText('待交接人：接替工程师（待接单）');
   await page.screenshot({path:'test-results/continuity-handover-mobile.png',fullPage:true});
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
   await as(f.peer);

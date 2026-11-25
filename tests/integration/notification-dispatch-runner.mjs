@@ -33,7 +33,7 @@ async function setup() {
   await db.query('INSERT INTO employees(id,display_name) VALUES ($1,$1)',[fixture]);
   await db.query('INSERT INTO identity_links(corp_id,ding_user_id,employee_id) VALUES ($1,$2,$1)',[fixture,userId]);
   await db.query('INSERT INTO support_groups(id,name) VALUES ($1,$1)',[fixture]);
-  await db.query("INSERT INTO service_catalog(code,type,form_version,published,group_id) VALUES ($1,'INC',1,true,$1)",[fixture]);
+  await db.query("INSERT INTO service_catalog(code,type,form_version,published,group_id,name) VALUES ($1,'INC',1,true,$1,'CI notification dispatch fixture')",[fixture]);
 }
 
 async function delivery() {
