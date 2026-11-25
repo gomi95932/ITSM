@@ -128,7 +128,7 @@ export const messages: Record<string,string> = {
   SUPPORT_OPEN_RESPONSIBILITIES:'该成员仍有未结工单、交付或知识维护责任，请先完成交接。',
   SUPPORT_MEMBER_CONTINUITY_REQUIRED:'支持组至少保留一名有效成员，请先增加接替人员。',
   SUPPORT_LEAD_CONTINUITY_REQUIRED:'请先完成接替组长的任命，再移除此成员。',
-  SUPPORT_REVIEW_CONTINUITY_REQUIRED:'请先授权接替的 P1 复核人，再撤销最后一名复核人或移除此成员。',
+  SUPPORT_REVIEW_CONTINUITY_REQUIRED:'请先安排接替的 P1 复核人，再撤销最后一名复核人或移除此成员。',
   INVALID_MEMBER_PRIVILEGES:'权限配置无效，请核对权限、服务范围和变更依据。',
   MEMBER_PRIVILEGE_CATALOG_SCOPE:'所选服务不属于当前支持组的申请类服务，请重新读取权限后选择。',
   MEMBER_PRIVILEGE_PENDING_P1:'当前待复核工单将缺少独立复核人，请先为其他有效成员授予 P1 复核权限。',
