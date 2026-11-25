@@ -70,7 +70,7 @@ try{
     const before=await row(ticket.id);await classify(ticket.id);return {id:ticket.id,before};};
   const queued=await create();
   await assert.rejects(tickets.classificationCandidates(engineer,queued.id,{serviceCode:'INC-DESK',formVersion:1,fields:{}}),
-    error=>error.getResponse().code==='CLASSIFICATION_OWNER_REQUIRED');
+    error=>error.getStatus()===404,'unrelated engineers must not learn whether a queued ticket exists');
   const sameGroup=await tickets.classificationCandidates(desk,queued.id,{serviceCode:'INC-DESK',formVersion:1,fields:{}});
   assert.equal(sameGroup.crossGroup,false);
   await tickets.classify(desk,queued.id,{expectedVersion:(await row(queued.id)).version,serviceCode:'INC-DESK',
