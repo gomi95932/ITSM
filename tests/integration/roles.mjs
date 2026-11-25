@@ -23,9 +23,9 @@ async function request(path,user='demo-admin-1',body,key=randomUUID(),headers={}
     'Idempotency-Key':key,...headers},body:body?JSON.stringify({contentClass:'GENERAL',...body}):undefined});
   return {status:response.status,data:await response.json()};
 }
-const a='demo-admin-1',b='demo-admin-2',subject='role-subject',lead='role-lead',peer='role-peer',third='role-third-admin';
+const a='demo-admin-1',b='demo-admin-2',subject='role-subject',lead='role-lead',peer='role-peer',third='role-third-admin',outsider='role-outsider';
 await sql(`INSERT INTO employees(id,display_name) VALUES
-  ('${subject}','Role subject'),('${lead}','Role lead'),('${peer}','Role peer'),('${third}','Third admin');
+  ('${subject}','Role subject'),('${lead}','Role lead'),('${peer}','Role peer'),('${third}','Third admin'),('${outsider}','Role outsider');
   INSERT INTO group_memberships(employee_id,group_id) VALUES
   ('${subject}','service-desk'),('${subject}','applications'),('${lead}','service-desk'),('${peer}','service-desk'),('${third}','service-desk');`);
 const proposal=(employeeId=subject,roleCode='DISPATCHER',groupId='service-desk')=>({id:randomUUID(),employeeId,roleCode,groupId,
@@ -51,8 +51,9 @@ const original=await create();
 assert.equal((await request('/admin/role-bindings',subject)).status,404);
 assert.equal((await request('/auth/me',subject)).data.canManageRoles,false);
 assert.equal((await action(original,subject,'REASSIGN',dispatch)).status,403,'group membership is not dispatch authority');
-assert.equal((await request(`/tickets/${original.id}`,a)).status,404,'configuration admin is not a ticket reader');
-assert.equal((await request('/tickets?mine=false',a)).status,404,'configuration admin cannot read the engineering queue');
+assert.equal((await request(`/tickets/${original.id}`,a)).status,200,'platform admin can inspect a ticket before assigning it');
+assert.equal((await request('/tickets?mine=false',a)).status,200,'platform admin can inspect the assignment queue');
+assert.equal((await request(`/tickets/${original.id}`,outsider)).status,404,'ordinary member cannot read another group ticket');
 assert.equal((await propose(proposal(a,'PLATFORM_ADMIN',null))).status,403,'self-grant denied');
 assert.equal((await propose({...proposal(),reason:'password=blocked-role-sentinel'})).status,403);
 assert.equal((await propose({...proposal(),validTo:new Date(Date.now()+400*86400000).toISOString()})).status,400);
