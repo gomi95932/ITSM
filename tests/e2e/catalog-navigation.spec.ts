@@ -19,6 +19,16 @@ test('catalog grouping preserves service selection and the existing incident sub
   await expect(page.getByRole('tab',{name:'岗位',exact:true})).toBeDisabled();
   await panel.getByRole('textbox',{name:'目录展示变更原因'}).fill('按既有网络服务整理展示分类');
   await panel.getByRole('checkbox',{name:'本次内容不含密码、密钥及安全事件证据'}).check();
+  if(await panel.getByRole('button',{name:'检查目录与承接'}).isDisabled()){
+    const state=await panel.evaluate(element=>({
+      busy:element.getAttribute('aria-busy'),
+      reason:(element.querySelector<HTMLTextAreaElement>('textarea[aria-label="目录展示变更原因"]')?.value.length??0),
+      selected:(element.querySelector<HTMLInputElement>('input[aria-label="目录名称"]')?.value??''),
+      pending:(element.querySelectorAll('button:disabled').length),
+      validation:[...element.querySelectorAll('[role="alert"]')].map(item=>item.textContent?.trim()),
+    }));
+    throw new Error(`Catalog preview unexpectedly disabled: ${JSON.stringify(state)}`);
+  }
   await panel.getByRole('button',{name:'检查目录与承接'}).click();
   await expect(panel.getByRole('table')).toContainText('INC-NET');
   await panel.getByRole('button',{name:'保存并生效',exact:true}).click();

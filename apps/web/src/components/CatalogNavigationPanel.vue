@@ -29,8 +29,9 @@ const visible=computed(()=>{
     if(!words||matches(n))rows.push({node:n,depth});if(depth<2)visit(n.id,depth+1);
   }};visit(null,0);return rows;
 });
-const invalid=computed(()=>nodes.value.some(n=>!n.name.trim()||!Number.isInteger(n.sortOrder)||n.sortOrder<0||n.sortOrder>99999
+const invalidNodes=computed(()=>nodes.value.filter(n=>!n.name.trim()||!Number.isInteger(n.sortOrder)||n.sortOrder<0||n.sortOrder>99999
   ||n.kind==='SYSTEM'&&n.enabled&&!n.systemId||n.kind==='SERVICE'&&n.enabled&&!n.serviceCode));
+const invalid=computed(()=>invalidNodes.value.length>0);
 const payload=()=>({expectedVersion:data.value!.version,navigationVersion:data.value!.navigationVersion,structureVersion:data.value!.structureVersion,
   nodes:nodes.value,reason:reason.value.trim(),contentClass:'GENERAL'});
 async function load(){busy.value=true;error.value='';try{
@@ -60,6 +61,7 @@ onBeforeUnmount(()=>{window.removeEventListener('beforeunload',beforeUnload);emi
 <template>
   <section class="navigation-panel" aria-label="目录展示配置" :aria-busy="busy">
     <p v-if="error" role="alert" class="error-banner">{{error}}</p><p v-if="notice" role="status" class="success-banner">{{notice}}</p>
+    <p v-if="invalid" role="alert" class="error-banner">目录信息不完整，请检查：{{invalidNodes.map(item=>item.name||'未命名目录').slice(0,5).join('、')}}</p>
     <div class="section-heading"><span class="muted">目录版本 {{data?.version??'—'}}<span v-if="data?.version===0"> · 待首次启用</span></span><div class="navigation-tools"><button class="icon-button" aria-label="放弃目录展示修改" title="放弃目录展示修改" :disabled="busy||!dirty" @click="reset"><Undo2 :size="17"/></button><button class="icon-button" aria-label="刷新目录展示" title="刷新目录展示" :disabled="busy||dirty" @click="load"><RefreshCw :size="17" :class="{spin:busy}"/></button></div></div>
     <div class="tree-layout">
       <div class="tree-list"><label class="navigation-search"><Search :size="17"/><input v-model="query" type="search" aria-label="查找目录服务" placeholder="查找服务或分类"/></label>
