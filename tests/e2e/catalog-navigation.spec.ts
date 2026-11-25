@@ -32,7 +32,10 @@ test('catalog grouping preserves service selection and the existing incident sub
     }));
     throw new Error(`Catalog preview unexpectedly disabled: ${JSON.stringify(state)}`);
   }
+  const previewResponse=page.waitForResponse(response=>response.url().endsWith('/admin/catalog-navigation/tree/preview')&&response.request().method()==='POST',{timeout:60_000});
   await panel.getByRole('button',{name:'检查目录与承接'}).click();
+  const response=await previewResponse;
+  expect(response.ok(),`Catalog preview failed: ${response.status()} ${await response.text()}`).toBe(true);
   await expect(panel.getByRole('table')).toContainText('INC-NET');
   await panel.getByRole('button',{name:'保存并生效',exact:true}).click();
   await expect(panel.getByRole('status')).toHaveText('服务目录已保存并生效');
