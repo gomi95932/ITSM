@@ -14,7 +14,8 @@ import { dingtalkDirectory } from './directory-provider.js';
 import { directorySettings,synchronizeDirectory } from './directory-sync.js';
 import { dingtalkPilotUsers } from './dingtalk-pilot.js';
 import { recoverOwnership } from './ownership-recovery.js';
-import {maintainAutomaticDispatch,advanceAutomaticDispatch} from '@itsm/workflow';
+import {expireAssignments} from './assignment-expiry.js';
+import {maintainAutomaticDispatch} from '@itsm/workflow';
 
 const db = new Pool({ host:process.env.DB_HOST ?? 'db',database:process.env.DB_NAME ?? 'itsm',user:process.env.DB_USER ?? 'itsm',password:process.env.DB_PASSWORD,
   application_name:'itsm-worker',connectionTimeoutMillis:5000,statement_timeout:30000 });
@@ -123,26 +124,6 @@ async function priorityReviewTimers() {
   });
 }
 
-async function expireAssignments() {
-  await transaction(async client=>{
-    await client.query('SELECT pg_advisory_xact_lock_shared(71820512)');
-    const rows=await client.query(`SELECT * FROM tickets WHERE pending_assignee_id IS NOT NULL
-      AND assignment_due_at<=now() AND status NOT IN ('CLOSED','CANCELLED','REJECTED')
-      ORDER BY assignment_due_at,id LIMIT 100 FOR UPDATE SKIP LOCKED`);
-    for (const row of rows.rows) {
-      if(await advanceAutomaticDispatch(client,row.id))continue;
-      const updated=await client.query(`UPDATE tickets SET pending_group_id=NULL,pending_assignee_id=NULL,
-        assignment_kind=NULL,assignment_state='EXPIRED',assignment_due_at=NULL,assignment_offered_at=NULL,
-        assignment_policy_version_id=NULL,version=version+1,updated_at=now() WHERE id=$1 RETURNING *`,[row.id]);
-      await record(client,updated.rows[0],'ASSIGNMENT_EXPIRED',{
-        reason:'CANDIDATE_DID_NOT_ACCEPT',assignmentKind:row.assignment_kind,
-        targetGroupId:row.pending_group_id,targetAssigneeId:row.pending_assignee_id,
-        assignmentPolicyVersionId:row.assignment_policy_version_id,assignmentDueAt:row.assignment_due_at,
-      },row.status,row.status,row);
-    }
-  });
-}
-
 async function timers() {
   const candidates=await db.query(`SELECT t.id FROM tickets t WHERE t.status NOT IN ('CLOSED','CANCELLED','REJECTED')
     AND EXISTS(SELECT 1 FROM sla_cycles s WHERE s.ticket_id=t.id)
@@ -185,7 +166,7 @@ async function tick() {
     scheduleDirectory();
     await maintainAutomaticDispatch(db);
     await recoverOwnership(db,record);
-    if (ticks++ % 15 === 0) { await expireAssignments(); await priorityReviewTimers(); await maintainRequestApprovals(db); await maintainRequestFulfillments(db); await maintainFulfillmentAttention(db,fulfillmentReminders); await maintainWaitingFollowUps(db); await timers(); }
+    if (ticks++ % 15 === 0) { await expireAssignments(db,record); await priorityReviewTimers(); await maintainRequestApprovals(db); await maintainRequestFulfillments(db); await maintainFulfillmentAttention(db,fulfillmentReminders); await maintainWaitingFollowUps(db); await timers(); }
     if(approvalProvider)for(let i=0;i<5&&!stopped;i++)if(!await processNextRequestApproval(db,approvalProvider))break;
     if(approvalProvider&&process.env.ENABLE_MANUAL_REQUEST_DELIVERY==='true')
       for(let i=0;i<5&&!stopped;i++)if(!await processNextRequestDelivery(db,approvalProvider))break;

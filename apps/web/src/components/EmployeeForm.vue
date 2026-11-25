@@ -5,12 +5,20 @@ import type { CatalogItem,CreateTicketInput,DelegationView,Impact,TicketReceipt,
 import { api,errorText } from '../api';
 import { createRequestKey } from '../request-key';
 import ContentBoundary from './ContentBoundary.vue';
+import {categoryId,categoryName,systemId,systemName} from '../catalog-path';
 
 const props=defineProps<{ catalog:CatalogItem[]; initialCode?:string }>();
 const emit=defineEmits<{ close:[]; created:[id:string] }>();
 const serviceCode=ref(props.initialCode ?? ''),subject=ref(''),description=ref(''),fields=ref<Record<string,string>>({});
 const impact=ref<Impact | ''>(''),urgency=ref<Urgency | ''>(''),error=ref(''),busy=ref(false),review=ref(false),draftId=ref<string>();
 const service=computed(()=>props.catalog.find(item=>item.code===serviceCode.value));
+const category=ref(service.value?categoryId(service.value):''),system=ref(service.value?systemId(service.value):'');
+const categories=computed(()=>[...new Map(props.catalog.filter(i=>i.available).map(i=>[categoryId(i),{id:categoryId(i),name:categoryName(i)}])).values()]);
+const systems=computed(()=>[...new Map(props.catalog.filter(i=>i.available&&categoryId(i)===category.value&&systemId(i)).map(i=>[systemId(i),{id:systemId(i),name:systemName(i)}])).values()]);
+const selectable=computed(()=>props.catalog.filter(i=>i.available&&categoryId(i)===category.value&&(!system.value||systemId(i)===system.value)));
+function changeCategory(){system.value='';serviceCode.value='';}
+function changeSystem(){serviceCode.value='';}
+watch(serviceCode,()=>{if(service.value){category.value=categoryId(service.value);system.value=systemId(service.value);}});
 const requestedValidityDays=ref<number | ''>('');
 const isRequest=computed(()=>service.value?.type==='REQ');
 const requestKey=ref(createRequestKey());
@@ -121,7 +129,9 @@ async function submit() {
     <p v-if="draftNotice&&!review" role="status" class="muted">{{draftNotice}}</p>
     <form v-if="!review" class="request-form" @submit.prevent="check">
       <label v-if="delegations.length">申请人<select v-model="delegationId" aria-label="申请人"><option value="">本人</option><option v-for="item in delegations" :key="item.id" :value="item.id">{{item.requesterName}}（已授权代报）</option></select></label>
-      <label>服务类型 <span class="required">*</span><select v-model="serviceCode" required aria-label="服务类型"><option value="" disabled>请选择</option><option v-for="item in catalog.filter(item=>item.available)" :key="item.code" :value="item.code">{{ item.name }}</option></select></label>
+      <label>一级目录 <span class="required">*</span><select v-model="category" required aria-label="一级目录" @change="changeCategory"><option value="" disabled>请选择</option><option v-for="item in categories" :key="item.id" :value="item.id">{{item.name}}</option></select></label>
+      <label v-if="systems.length">业务系统<select v-model="system" aria-label="业务系统" @change="changeSystem"><option value="">全部</option><option v-for="item in systems" :key="item.id" :value="item.id">{{item.name}}</option></select></label>
+      <label>服务类型 <span class="required">*</span><select v-model="serviceCode" required aria-label="服务类型" :disabled="!category"><option value="" disabled>请选择</option><option v-for="item in selectable" :key="item.code" :value="item.code">{{ item.navigation?.path.at(-1)?.name??item.name }}</option></select></label>
       <label>{{isRequest?'申请标题':'问题标题'}} <span class="required">*</span><input v-model="subject" required maxlength="200" :placeholder="isRequest?'例如：申请 WMS 出库查询权限':'例如：WMS 登录后无法打开出库页面'"/></label>
       <label>{{isRequest?'申请说明':'详细情况'}} <span class="required">*</span><textarea v-model="description" required maxlength="10000" rows="5" :placeholder="isRequest?'说明申请用途及所需范围':'遇到了什么问题？从什么时候开始？'"/></label>
       <div class="form-grid"><label>影响范围 <span class="required">*</span><select v-model="impact" required aria-label="影响范围"><option value="" disabled>请选择</option><option value="INDIVIDUAL">仅我一人</option><option value="DEPARTMENT">部门 / 多人</option><option value="COMPANY">全公司 / 核心生产</option></select></label><label>紧急程度 <span class="required">*</span><select v-model="urgency" required aria-label="紧急程度"><option value="" disabled>请选择</option><option value="LOW">可正常工作，部分受影响</option><option value="MEDIUM">工作明显受影响</option><option value="HIGH">工作中断，暂无替代方式</option></select></label></div>
@@ -134,7 +144,7 @@ async function submit() {
     </form>
     <div v-else class="review-page">
       <h2>{{isRequest?'确认申请信息':'确认报障信息'}}</h2>
-      <dl class="fact-list"><dt>服务</dt><dd>{{service?.name}}</dd><dt>标题</dt><dd>{{subject}}</dd>
+      <dl class="fact-list"><dt>服务</dt><dd>{{service?.navigationPath?.join(' / ')||service?.name}}</dd><dt>标题</dt><dd>{{subject}}</dd>
         <dt>{{isRequest?'申请说明':'详细情况'}}</dt><dd class="multiline">{{description}}</dd>
         <dt>影响范围</dt><dd>{{({INDIVIDUAL:'仅我一人',DEPARTMENT:'部门 / 多人',COMPANY:'全公司 / 核心生产'})[impact || 'INDIVIDUAL']}}</dd>
         <dt>紧急程度</dt><dd>{{({LOW:'可正常工作，部分受影响',MEDIUM:'工作明显受影响',HIGH:'工作中断，暂无替代方式'})[urgency || 'LOW']}}</dd>

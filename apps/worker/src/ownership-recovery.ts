@@ -35,7 +35,7 @@ export async function recoverOwnership(db:Pool,record:RecordOwnership) {
       'SELECT ticket_processing_eligible($1,$2) AS eligible',[row.id,row.assignee_id])).rows[0].eligible;
     const targetValid = await valid(row.pending_assignee_id,row.pending_group_id) && (!row.pending_assignee_id ||
       (await client.query('SELECT service_position_eligible($1,$2,$3) AS eligible',
-        [JSON.stringify(row.service_routing_snapshot),row.pending_assignee_id,row.pending_group_id])).rows[0].eligible);
+        [JSON.stringify(row.pending_classification?.route??row.service_routing_snapshot),row.pending_assignee_id,row.pending_group_id])).rows[0].eligible);
     let group = row.owner_group_id as string;
     const available = await groupAvailable(group);
     const mapped=Object.keys(row.service_routing_snapshot).length>0;
@@ -87,10 +87,11 @@ export async function recoverOwnership(db:Pool,record:RecordOwnership) {
     if (!moved && ownerValid && targetValid) return;
     const updated = await client.query(`UPDATE tickets SET owner_group_id=$2,assignee_id=$3,pending_group_id=NULL,pending_assignee_id=NULL,
       assignment_kind=NULL,assignment_state=CASE WHEN pending_assignee_id IS NOT NULL THEN 'INVALIDATED' ELSE assignment_state END,
-      assignment_due_at=NULL,assignment_offered_at=NULL,assignment_policy_version_id=NULL,
+      assignment_due_at=NULL,assignment_offered_at=NULL,assignment_policy_version_id=NULL,pending_classification=NULL,
       version=version+1,updated_at=now() WHERE id=$1 RETURNING *`,[row.id,group,moved ? null : ownerValid ? row.assignee_id : null]);
     await record(client,updated.rows[0],'OWNERSHIP_RECOVERED',{
       reason:moved ? 'OWNER_GROUP_UNAVAILABLE' : ownerValid ? 'HANDOVER_TARGET_UNAVAILABLE' : 'ASSIGNEE_UNAVAILABLE',
+      targetServiceCode:row.pending_classification?.serviceCode,
       oldOwnerGroupId:row.owner_group_id,oldAssigneeId:row.assignee_id,oldPendingAssigneeId:row.pending_assignee_id,
     },row.status,row.status,row);
     if (moved) await client.query('UPDATE ticket_routing_alerts SET resolved_at=now() WHERE ticket_id=$1 AND resolved_at IS NULL',[row.id]);

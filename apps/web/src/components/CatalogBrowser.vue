@@ -2,20 +2,21 @@
 import {computed,ref,watch} from 'vue';
 import {ArrowRight,ClipboardList,LayoutGrid,Monitor,Network,Search,Send,X} from 'lucide-vue-next';
 import type {CatalogItem} from '@itsm/contracts';
+import {categoryId,categoryName,systemId,systemName} from '../catalog-path';
 const props=defineProps<{catalog:CatalogItem[]}>();
 const emit=defineEmits<{select:[code:string]}>();
 const category=ref(''),system=ref(''),query=ref('');
-const path=(item:CatalogItem)=>item.navigationPath?.length?item.navigationPath:['其他服务'];
-const categories=computed(()=>[...new Set(props.catalog.map(item=>path(item)[0]))]);
-const systems=computed(()=>[...new Set(props.catalog.filter(item=>!category.value||path(item)[0]===category.value)
-  .flatMap(item=>path(item)[1]?[path(item)[1]]:[]))]);
+const path=(item:CatalogItem)=>item.navigationPath?.length?item.navigationPath:['待配置目录'];
+const categories=computed(()=>[...new Map(props.catalog.map(item=>[categoryId(item),{id:categoryId(item),name:categoryName(item)}])).values()]);
+const systems=computed(()=>[...new Map(props.catalog.filter(item=>(!category.value||categoryId(item)===category.value)&&systemId(item))
+  .map(item=>[systemId(item),{id:systemId(item),name:systemName(item)}])).values()]);
 watch(category,()=>{system.value='';});
-watch(categories,values=>{if(category.value&&!values.includes(category.value)){category.value='';system.value='';}});
-watch(systems,values=>{if(system.value&&!values.includes(system.value))system.value='';});
+watch(categories,values=>{if(category.value&&!values.some(v=>v.id===category.value)){category.value='';system.value='';}});
+watch(systems,values=>{if(system.value&&!values.some(v=>v.id===system.value))system.value='';});
 const filtered=computed(()=>{
   const words=query.value.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
-  return props.catalog.filter(item=>(!category.value||path(item)[0]===category.value)
-    &&(!system.value||path(item)[1]===system.value)
+  return props.catalog.filter(item=>(!category.value||categoryId(item)===category.value)
+    &&(!system.value||systemId(item)===system.value)
     &&words.every(word=>[item.name,item.description,...path(item)].join(' ').toLocaleLowerCase().includes(word)));
 });
 const sections=computed(()=>[
@@ -39,11 +40,11 @@ function reset(){category.value='';system.value='';query.value='';}
   <div class="catalog-browser">
     <div class="catalog-filters">
       <label class="catalog-search"><Search :size="18"/><input v-model="query" type="search" aria-label="搜索服务" placeholder="搜索服务名称或问题" maxlength="200"/></label>
-      <label v-if="systems.length" class="catalog-system">业务系统 / 分类<select v-model="system" aria-label="业务系统或子分类"><option value="">全部</option><option v-for="name in systems" :key="name">{{name}}</option></select></label>
+      <label v-if="systems.length" class="catalog-system">业务系统 / 分类<select v-model="system" aria-label="业务系统或子分类"><option value="">全部</option><option v-for="item in systems" :key="item.id" :value="item.id">{{item.name}}</option></select></label>
     </div>
     <nav class="catalog-categories" aria-label="服务分类">
       <button :class="{selected:!category}" :aria-pressed="!category" @click="category=''">全部<span>{{catalog.length}}</span></button>
-      <button v-for="name in categories" :key="name" :class="{selected:category===name}" :aria-pressed="category===name" @click="category=name">{{name}}<span>{{catalog.filter(item=>path(item)[0]===name).length}}</span></button>
+      <button v-for="item in categories" :key="item.id" :class="{selected:category===item.id}" :aria-pressed="category===item.id" @click="category=item.id">{{item.name}}<span>{{catalog.filter(service=>categoryId(service)===item.id).length}}</span></button>
     </nav>
     <template v-if="filtered.length">
       <section v-for="section in sections" v-show="section.items.length" :key="section.key" class="catalog-section" :aria-labelledby="`catalog-${section.key}-title`">

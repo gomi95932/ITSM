@@ -43,6 +43,7 @@ export interface PriorityReviewInput {
 export interface ClassificationInput {
   contentClass: 'GENERAL'; expectedVersion: number; serviceCode: string;
   formVersion: number; fields: Record<string, unknown>; reason: string;
+  targetAssigneeId?: string;
 }
 export interface DelegationView {
   id: string; requesterId: string; requesterName: string; delegateId: string; delegateName: string;
@@ -93,8 +94,9 @@ export interface TicketFeedback {
 }
 
 export interface CatalogField { key: string; label: string; required: boolean; options?: string[] }
-export interface CatalogItem { code: string; name: string; description: string; type: TicketType; formVersion: number; fields: CatalogField[]; available: boolean; published?:boolean; unavailableReason?:'UNPUBLISHED'|'OUT_OF_SCOPE'|'NOT_READY'; maxValidityDays?: number | null; navigationPath?:string[]; navigationOrder?:number }
-export type {CatalogNavigationEntry,CatalogNavigationView} from './catalog-navigation.js';
+export interface CatalogItem { code: string; name: string; description: string; type: TicketType; formVersion: number; fields: CatalogField[]; available: boolean; published?:boolean; unavailableReason?:'UNPUBLISHED'|'OUT_OF_SCOPE'|'NOT_READY'|'DIRECTORY_DISABLED'|'DIRECTORY_UNASSIGNED'|'SYSTEM_MAPPING_MISMATCH'; maxValidityDays?: number | null; navigationPath?:string[]; navigationOrder?:number; navigation?:import('./catalog-navigation.js').CatalogNavigationSnapshot|null }
+export type {CatalogNavigationEntry,CatalogNavigationView,CatalogTreeNode,CatalogTreeView,CatalogNavigationSnapshot} from './catalog-navigation.js';
+export {catalogTreePath,catalogTreeSnapshot} from './catalog-navigation.js';
 export const MANAGED_ROLE_CODES=['PLATFORM_ADMIN','DISPATCHER','GROUP_LEAD'] as const;
 export type ManagedRoleCode=typeof MANAGED_ROLE_CODES[number];
 export interface RoleBindingInput {
@@ -117,6 +119,9 @@ export interface TicketView extends TicketReceipt {
   createdAt: string; updatedAt: string; requesterId: string;
   submittedById: string; originalServiceCode: string;
   canCorrectClassification?: boolean; canAddInfo?: boolean;
+  pendingClassification?: {serviceCode:string;reason:string} | null;
+  navigation?:import('./catalog-navigation.js').CatalogNavigationSnapshot|null;
+  originalNavigation?:import('./catalog-navigation.js').CatalogNavigationSnapshot|null;
   canDispatchQueued?: boolean;
   canAssignOffer?: boolean;
   canClaim?: boolean;

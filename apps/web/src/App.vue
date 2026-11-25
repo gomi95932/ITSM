@@ -177,10 +177,10 @@ onBeforeUnmount(()=>{window.removeEventListener('hashchange',syncHash);if(refres
               <table><thead><tr><th>工单 / 标题</th><th>状态</th><th>优先级</th><th>服务</th><th>更新时间</th><th></th></tr></thead>
                 <tbody><tr v-for="ticket in tickets" :key="ticket.id">
                   <td><button class="ticket-link" @click="openTicket(ticket.id)"><span>{{ticket.number}}</span><strong>{{ticket.subject}}</strong></button>
-                    <div v-if="view==='queue'" class="ticket-ownership">
+                    <div class="ticket-ownership">
                       <span>{{ticket.ownerGroupName??ticket.ownerGroupId}}</span>
-                      <span>{{ticket.assigneeName??'组内未接单'}}</span>
-                      <span v-if="ticket.pendingAssigneeId">待接收：{{ticket.pendingAssigneeName??ticket.pendingAssigneeId}}</span>
+                      <span>当前处理人：{{ticket.assigneeName??'尚未接单'}}</span>
+                      <span v-if="ticket.pendingAssigneeId">{{ticket.assignmentKind==='OFFER'?'已分派责任人':'待交接人'}}：{{ticket.pendingAssigneeName??ticket.pendingAssigneeId}}（待接单）</span>
                     </div>
                   </td>
                   <td><span class="status" :data-status="ticket.status">{{statuses[ticket.status]}}</span></td>
