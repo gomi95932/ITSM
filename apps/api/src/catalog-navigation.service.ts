@@ -101,7 +101,7 @@ export class CatalogNavigationService {
         throw new BadRequestException({code:'CATALOG_TREE_IDENTITY_IMMUTABLE'});
     }
     for(const node of input.nodes){
-      if(node.systemId&&!view.systems.some(s=>s.id===node.systemId&&(!node.enabled||s.enabled)))
+      if(node.systemId&&node.enabled&&!view.systems.some(s=>s.id===node.systemId&&s.enabled))
         throw new BadRequestException({code:'CATALOG_TREE_SYSTEM_UNAVAILABLE'});
       if(node.serviceCode){
         const service=view.services.find(s=>s.code===node.serviceCode);

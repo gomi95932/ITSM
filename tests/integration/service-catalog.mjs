@@ -28,12 +28,20 @@ async function publishDirectory(code,name,systemId){
   const root=tree.nodes.find(node=>node.kind==='CATEGORY'&&node.parentId===null&&node.name==='信息化系统');
   assert.ok(root,'the information systems category must exist');
   const nodes=structuredClone(tree.nodes);
+  const available=new Set(tree.systems.filter(item=>item.enabled).map(item=>item.id));
+  assert.ok(available.has(systemId),'the newly published system must be available');
+  for(const node of nodes){
+    if(node.kind==='SYSTEM'&&node.systemId&&!available.has(node.systemId))node.enabled=false;
+  }
+  for(const node of nodes){
+    if(node.parentId&&nodes.some(parent=>parent.id===node.parentId&&!parent.enabled))node.enabled=false;
+  }
   let parent=nodes.find(node=>node.kind==='SYSTEM'&&node.systemId===systemId);
   if(!parent){
     parent={id:`system-${randomUUID()}`,parentId:root.id,kind:'SYSTEM',name:`试验系统 ${systemId}`,
       enabled:true,sortOrder:900,systemId,serviceCode:null};
     nodes.push(parent);
-  }
+  }else parent.enabled=true;
   nodes.push({id:`service-${randomUUID()}`,parentId:parent.id,kind:'SERVICE',name,enabled:true,
     sortOrder:900,systemId:null,serviceCode:code});
   await ok(request('/admin/catalog-navigation/tree','demo-admin-1',{expectedVersion:tree.version,
