@@ -209,5 +209,12 @@ try{
   console.log('Catalog classification handover verified: ERP directory, disabled ancestors, new service binding, administrator assignment, follow-up during handover, atomic acceptance, rejection, cancellation, timeout, revocation, SLA, audit, resolution');
 }finally{
   if(pool)await pool.end();
-  await control.query(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);await control.end();
+  let remaining;
+  for(let attempt=0;attempt<40;attempt++){
+    remaining=(await control.query('SELECT count(*)::int AS count FROM pg_stat_activity WHERE datname=$1',[name])).rows[0].count;
+    if(remaining===0)break;
+    await new Promise(resolve=>setTimeout(resolve,50));
+  }
+  assert.equal(remaining,0,'disposable database connections must close before cleanup');
+  await control.query(`DROP DATABASE IF EXISTS ${name}`);await control.end();
 }
