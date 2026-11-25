@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { supportDecision,supportIndependentReview,supportProposal } from './support-policy.js';
+import { memberPrivilegesInput,supportDecision,supportIndependentReview,supportProposal } from './support-policy.js';
 
 const proposal={id:'a8caeb74-5f2c-4a30-bfb2-9ba2fae42e07',kind:'MEMBER_ADD',groupId:'service-desk',employeeId:'agent-1',
   config:{},expectedGroupVersion:1,reason:' Reviewed roster ',contentClass:'GENERAL'};
@@ -37,4 +37,16 @@ test('group lifecycle proposals have no employee, implicit migration or privileg
     for(const patch of [{employeeId:'agent-1'},{config:{restoreMembers:true}},{config:{enabled:false}},{expectedGroupVersion:null}])
       assert.throws(()=>supportProposal({...input,...patch}));
   }
+});
+test('member privilege changes allow only explicit scoped grants and canonicalize idempotent input',()=>{
+  const input={id:proposal.id.toUpperCase(),expectedGroupVersion:1,privileges:['P1_REVIEW','KNOWLEDGE_EDIT'],
+    catalogServiceCodes:['REQ-Z','REQ-A'],reason:' Approved duties ',contentClass:'GENERAL'};
+  assert.deepEqual(memberPrivilegesInput(input),{...input,id:proposal.id,privileges:['KNOWLEDGE_EDIT','P1_REVIEW'],
+    catalogServiceCodes:['REQ-A','REQ-Z'],reason:'Approved duties'});
+  for(const patch of [{privileges:['PLATFORM_ADMIN']},{privileges:['P1_REVIEW','P1_REVIEW']},{privileges:[null]},
+    {catalogServiceCodes:['REQ-A','REQ-A']},{catalogServiceCodes:[' REQ-A']},{catalogServiceCodes:[12]},
+    {expectedGroupVersion:0},{reason:'\u0000invalid'},{id:'not-uuid'},{groupId:'other'},{active:true},
+    {contentClass:'SECURITY_SENSITIVE'},{catalogServiceCodes:Array.from({length:2001},(_,i)=>`REQ-${i}`)}])
+    assert.throws(()=>memberPrivilegesInput({...input,...patch}));
+  assert.deepEqual(memberPrivilegesInput({...input,privileges:[],catalogServiceCodes:[]}).privileges,[]);
 });

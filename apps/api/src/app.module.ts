@@ -22,6 +22,7 @@ import { RoutingConfigController } from './routing-config.controller.js';
 import { RoutingConfigService } from './routing-config.service.js';
 import { SupportController } from './support.controller.js';
 import { SupportService } from './support.service.js';
+import { MemberPrivilegesService } from './member-privileges.service.js';
 import { ServiceStructureController } from './service-structure.controller.js';
 import { ServiceStructureService } from './service-structure.service.js';
 import { FulfillmentController } from './fulfillment.controller.js';
@@ -41,5 +42,5 @@ import { DingtalkWebService } from './dingtalk-web.service.js';
 import { CatalogNavigationController } from './catalog-navigation.controller.js';
 import { CatalogNavigationService } from './catalog-navigation.service.js';
 
-@Module({ controllers: [OperationLogsController,CatalogNavigationController,DingtalkWebController,OperationsController,OidcController,SlaCalendarController,PriorityPolicyController,HealthController, TicketsController,AuthController,WorkspaceController,DelegationsController,RequestCatalogController,KnowledgeController,ReportsController,RolesController,RoutingConfigController,SupportController,ServiceStructureController,FulfillmentController,DirectoryController,AttachmentsController], providers: [OperationLogsService,CatalogNavigationService,Database,AuthService,DingtalkWebService,OidcService,TicketsService,SlaService,IntakePolicyService,RequestCatalogService,KnowledgeService,RolesService,RoutingConfigService,SupportService,ServiceStructureService,FulfillmentService,VoiceAsrService,IntakeInterpreterService,AttachmentsService] })
+@Module({ controllers: [OperationLogsController,CatalogNavigationController,DingtalkWebController,OperationsController,OidcController,SlaCalendarController,PriorityPolicyController,HealthController, TicketsController,AuthController,WorkspaceController,DelegationsController,RequestCatalogController,KnowledgeController,ReportsController,RolesController,RoutingConfigController,SupportController,ServiceStructureController,FulfillmentController,DirectoryController,AttachmentsController], providers: [MemberPrivilegesService,OperationLogsService,CatalogNavigationService,Database,AuthService,DingtalkWebService,OidcService,TicketsService,SlaService,IntakePolicyService,RequestCatalogService,KnowledgeService,RolesService,RoutingConfigService,SupportService,ServiceStructureService,FulfillmentService,VoiceAsrService,IntakeInterpreterService,AttachmentsService] })
 export class AppModule {}

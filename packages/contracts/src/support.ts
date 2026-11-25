@@ -29,3 +29,15 @@ export interface SupportPeopleView {items:{id:string;name:string}[];hasMore:bool
 export interface SupportAuditView {
   actorId:string;action:string;beforeValue:unknown;afterValue:unknown;reason:string;createdAt:string;
 }
+export type MemberPrivilege='P1_REVIEW'|'KNOWLEDGE_EDIT'|'KNOWLEDGE_REVIEW';
+export interface MemberPrivilegeState {privileges:MemberPrivilege[];catalogServiceCodes:string[]}
+export interface MemberPrivilegesView extends MemberPrivilegeState {
+  group:SupportGroupView;member:{id:string;name:string;active:boolean};
+  catalogServices:{code:string;name:string;published:boolean}[];
+}
+export interface MemberPrivilegesInput extends MemberPrivilegeState {
+  id:string;expectedGroupVersion:number;reason:string;contentClass:'GENERAL';
+}
+export interface MemberPrivilegesReceipt extends MemberPrivilegeState {
+  id:string;groupId:string;employeeId:string;version:number;
+}
