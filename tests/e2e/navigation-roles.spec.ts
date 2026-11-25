@@ -20,8 +20,8 @@ for(const viewport of [{width:1440,height:900},{width:390,height:844}]){
     await expect(page.getByRole('heading',{name:'IT 工作台'})).toBeVisible();
 
     await page.getByRole('combobox',{name:'开发身份'}).selectOption('agent-3');
-    await expect(work.getByRole('button',{name:'路由告警'})).toBeVisible();
-    await expect(work.getByRole('button',{name:'支持组'})).toBeVisible();
+    await expect(work.getByRole('button',{name:'IT 工作台'})).toBeVisible();
+    await expect(work.getByRole('button',{name:'路由告警'})).toHaveCount(0);
     await expect(admin).toHaveCount(0);
 
     await page.getByRole('combobox',{name:'开发身份'}).selectOption('demo-admin-1');
