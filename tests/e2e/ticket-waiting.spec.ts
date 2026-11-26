@@ -13,7 +13,7 @@ for (const viewport of [{ name:'desktop', width:1440, height:900 }, { name:'mobi
     await page.setViewportSize({ width:viewport.width, height:viewport.height });
     await page.goto('/');
     await page.getByRole('combobox', { name:'开发身份' }).selectOption('agent-1');
-    await expect(page.getByRole('heading', { name:'我的工单', exact:true })).toBeVisible();
+    await expect(page.getByRole('heading', { name:'我提交的工单', exact:true })).toBeVisible();
     await page.goto(`/#/tickets/${f.ticketId}`);
     await page.getByRole('button', { name:'请求补充', exact:true }).click();
     const form = page.locator('.action-form');
@@ -31,7 +31,7 @@ for (const viewport of [{ name:'desktop', width:1440, height:900 }, { name:'mobi
     await page.screenshot({ path:`test-results/waiting-detail-${viewport.name}.png`, fullPage:true });
 
     await page.getByRole('combobox', { name:'开发身份' }).selectOption('employee-1');
-    await expect(page.getByRole('heading', { name:'我的工单', exact:true })).toBeVisible();
+    await expect(page.getByRole('heading', { name:'我提交的工单', exact:true })).toBeVisible();
     await page.goto(`/#/tickets/${f.ticketId}`);
     await expect(waiting).toContainText('等待用户配合时间');
     await page.getByRole('button', { name:'补充信息', exact:true }).click();
@@ -41,7 +41,7 @@ for (const viewport of [{ name:'desktop', width:1440, height:900 }, { name:'mobi
     await expect(waiting).toHaveCount(0);
 
     await page.getByRole('combobox', { name:'开发身份' }).selectOption('agent-1');
-    await expect(page.getByRole('heading', { name:'我的工单', exact:true })).toBeVisible();
+    await expect(page.getByRole('heading', { name:'我提交的工单', exact:true })).toBeVisible();
     await page.goto(`/#/tickets/${f.ticketId}`);
     await page.getByRole('button', { name:'等待厂商', exact:true }).click();
     await form.getByRole('textbox', { name:'回复内容', exact:true }).fill('Waiting for a replacement part');
@@ -54,12 +54,12 @@ for (const viewport of [{ name:'desktop', width:1440, height:900 }, { name:'mobi
     await expect(waiting).toContainText('等待备件或物料');
     await expect(waiting).toContainText('2099');
     await page.getByRole('combobox', { name:'开发身份' }).selectOption('employee-1');
-    await expect(page.getByRole('heading', { name:'我的工单', exact:true })).toBeVisible();
+    await expect(page.getByRole('heading', { name:'我提交的工单', exact:true })).toBeVisible();
     await page.goto(`/#/tickets/${f.ticketId}`);
     await expect(waiting).toContainText('等待备件或物料');
     await expect(page.getByRole('button', { name:'恢复处理', exact:true })).toHaveCount(0);
     await page.getByRole('combobox', { name:'开发身份' }).selectOption('agent-1');
-    await expect(page.getByRole('heading', { name:'我的工单', exact:true })).toBeVisible();
+    await expect(page.getByRole('heading', { name:'我提交的工单', exact:true })).toBeVisible();
     await page.goto(`/#/tickets/${f.ticketId}`);
     await page.getByRole('button', { name:'恢复处理', exact:true }).click();
     const explanation=form.getByRole('textbox', { name:'继续处理说明', exact:true });

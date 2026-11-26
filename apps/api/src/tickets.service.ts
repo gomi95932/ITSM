@@ -76,6 +76,8 @@ const workQueueConditions: Record<WorkQueue, string> = {
   outgoing: `${activeWork} AND t.assignee_id=$1 AND t.pending_assignee_id IS NOT NULL AND ${ownerMembership}`,
   unassigned: `${activeWork} AND t.assignee_id IS NULL AND t.pending_assignee_id IS NULL AND ${ownerMembership}`,
   triage: `ticket_triage_access(t.id,$1)`,
+  handled: `EXISTS (SELECT 1 FROM ticket_events e WHERE e.ticket_id=t.id AND e.actor_id=$1
+    AND e.action IN ('ACCEPT','ACCEPT_OFFER','ACCEPT_HANDOVER','REQUEST_INFO','WAIT_VENDOR','RESUME_VENDOR','RESOLVE'))`,
 };
 
 function canonical(value: unknown): string {

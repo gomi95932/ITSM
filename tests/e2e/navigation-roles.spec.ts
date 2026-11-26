@@ -8,7 +8,7 @@ for(const viewport of [{width:1440,height:900},{width:390,height:844}]){
     const employee=nav.getByRole('region',{name:'员工服务'});
     const work=nav.getByRole('region',{name:'工单处理'});
     const admin=nav.getByRole('region',{name:'系统管理'});
-    await expect(employee.getByRole('button',{name:'我的工单'})).toBeVisible();
+    await expect(employee.getByRole('button',{name:'我提交的工单'})).toBeVisible();
     await expect(work).toHaveCount(0);
     await expect(admin).toHaveCount(0);
 

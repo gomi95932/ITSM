@@ -38,6 +38,6 @@ for(const viewport of [{name:'desktop',width:1440,height:1000},{name:'mobile',wi
     expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
     await page.getByRole('combobox',{name:'开发身份'}).selectOption('employee-1');
     await expect(page.getByRole('button',{name:'消息通知',exact:true})).toHaveCount(0);
-    await expect(page.getByRole('heading',{name:'我的工单',exact:true})).toBeVisible();
+    await expect(page.getByRole('heading',{name:'我提交的工单',exact:true})).toBeVisible();
   });
 }

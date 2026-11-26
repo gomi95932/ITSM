@@ -33,7 +33,7 @@ for(const viewport of [{name:'desktop',width:1440,height:1000},{name:'mobile',wi
     const processed=await page.request.get(`/api/v1/tickets/${ticket.id}`,{headers:{'X-Dev-User':'employee-1'}});
     expect(await processed.json()).toMatchObject({status:'IN_PROGRESS',version:2});
     await page.getByRole('combobox',{name:'开发身份'}).selectOption('employee-2');
-    await expect(page.getByRole('heading',{name:'我的工单',exact:true})).toBeVisible();
+    await expect(page.getByRole('heading',{name:'我提交的工单',exact:true})).toBeVisible();
     await page.goto(target);
     await expect(page.getByRole('alert')).toBeVisible();
     await expect(page.getByRole('heading',{name:subject,exact:true})).toHaveCount(0);

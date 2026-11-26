@@ -78,7 +78,7 @@ test('catalog grouping preserves service selection and the existing incident sub
   await page.getByRole('button',{name:'核对信息',exact:true}).click();
   await page.getByRole('button',{name:'确认提交',exact:true}).click();
   await expect(page.getByRole('heading',{name:`目录分组回归 ${suffix}`,exact:true})).toBeVisible();
-  await page.getByRole('button',{name:'我的工单',exact:true}).click();
+  await page.getByRole('button',{name:'我提交的工单',exact:true}).click();
   await page.getByRole('button',{name:'提交报障',exact:true}).first().click();
   await expect(page.getByRole('textbox',{name:'问题标题'})).toBeVisible();
 });

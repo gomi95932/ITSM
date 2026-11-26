@@ -46,7 +46,7 @@ for(const viewport of [{name:'desktop',width:1440,height:1000},{name:'mobile',wi
 
     await page.getByRole('combobox',{name:'开发身份'}).selectOption('employee-2');
     await page.goto('/#/fulfillments');
-    await expect(page.getByRole('heading',{name:'我的工单',exact:true})).toBeVisible();
+    await expect(page.getByRole('heading',{name:'我提交的工单',exact:true})).toBeVisible();
     await expect(page.getByRole('region',{name:'交付与回收工作台',exact:true})).toHaveCount(0);
     await expect(page.getByRole('button',{name:'交付与回收',exact:true})).toHaveCount(0);
     const denied=await page.request.get(`/api/v1/fulfillments/${fixture.id}`,{headers:{'X-Dev-User':'employee-2'}});

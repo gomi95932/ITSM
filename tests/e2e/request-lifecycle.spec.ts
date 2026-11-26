@@ -14,7 +14,7 @@ for(const viewport of [{name:'desktop',width:1440,height:1000},{name:'mobile',wi
     expect(accept.status()).toBe(200);
     await page.goto('/');
     await page.getByRole('combobox',{name:'开发身份'}).selectOption('agent-1');
-    await expect(page.getByRole('heading',{name:'我的工单',exact:true})).toBeVisible();
+    await expect(page.getByRole('heading',{name:'我提交的工单',exact:true})).toBeVisible();
     await page.goto(`/#/tickets/${f.ticketId}`);
     await expect(page.getByRole('heading',{name:f.subject,exact:true})).toBeVisible();
     await expect(page.getByRole('alert')).toHaveCount(0);
@@ -43,7 +43,7 @@ for(const viewport of [{name:'desktop',width:1440,height:1000},{name:'mobile',wi
     await expect(page.getByText('待确认',{exact:true}).first()).toBeVisible();
 
     await page.getByRole('combobox',{name:'开发身份'}).selectOption('employee-1');
-    await expect(page.getByRole('heading',{name:'我的工单',exact:true})).toBeVisible();
+    await expect(page.getByRole('heading',{name:'我提交的工单',exact:true})).toBeVisible();
     await page.goto(`/#/tickets/${f.ticketId}`);
     await expect(page.getByRole('region',{name:'申请进度'})).toContainText('已交付');
     await expect(page.getByRole('button',{name:'交付仍有问题',exact:true})).toBeVisible();
