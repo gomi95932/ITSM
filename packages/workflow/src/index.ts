@@ -88,3 +88,4 @@ export async function blockRequestApprovalOnCancellation(client: PoolClient, tic
   await client.query(`INSERT INTO request_approval_events(approval_id,action,from_state,to_state,reason_code)
     VALUES ($1,'APPROVAL_BLOCKED',$2,'BLOCKED','REQUEST_CANCELLED')`,[prior.id,prior.state]);
 }
+export {ensureTriage,completeTriage,maintainTriage} from './triage.js';

@@ -10,6 +10,7 @@ const queues = [
   { value: 'incoming', label: '待我接收', icon: ArrowDownToLine },
   { value: 'outgoing', label: '待对方接收', icon: ArrowUpFromLine },
   { value: 'unassigned', label: '组内未接单', icon: Inbox },
+  { value: 'triage', label: '待我分派', icon: Inbox },
 ] as const;
 const compactCount = (value: number) => value > 9999 ? `${Math.floor(value / 10000)}万+` : String(value);
 </script>
@@ -28,7 +29,7 @@ const compactCount = (value: number) => value > 9999 ? `${Math.floor(value / 100
 </template>
 
 <style scoped>
-.work-queues{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin-bottom:20px}
+.work-queues{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px;margin-bottom:20px}
 .work-queues button{display:grid;grid-template-columns:17px minmax(0,1fr) auto;gap:8px;min-height:52px;padding:10px;border:1px solid #dce2e6;background:#fff;text-align:left;font-size:12px}
 .work-queues button:hover{border-color:#86b7a8;background:#f3f8f6}
 .work-queues button.selected{border-color:#117965;background:#eaf5f0;color:#0c6d5a;box-shadow:inset 0 -2px #117965}

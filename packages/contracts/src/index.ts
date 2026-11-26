@@ -18,7 +18,7 @@ export interface HealthResponse {
 
 export const TICKET_STATUSES = ['NEW', 'QUEUED', 'IN_PROGRESS', 'WAITING_APPROVAL', 'WAITING_USER', 'WAITING_VENDOR', 'PENDING_CONFIRMATION', 'CLOSED', 'CANCELLED', 'REJECTED'] as const;
 export type TicketStatus = typeof TICKET_STATUSES[number];
-export const WORK_QUEUES = ['all', 'assigned', 'incoming', 'outgoing', 'unassigned'] as const;
+export const WORK_QUEUES = ['all', 'assigned', 'incoming', 'outgoing', 'unassigned', 'triage'] as const;
 export type WorkQueue = typeof WORK_QUEUES[number];
 export type WorkQueueCounts = Record<WorkQueue, number>;
 export interface TicketListResponse {
@@ -110,7 +110,7 @@ export interface RoleBindingView extends Omit<RoleBindingInput,'contentClass'> {
   requestedBy:string|null; reviewedBy:string|null; revokedBy:string|null; reviewReason:string|null; revokeReason:string|null;
   version:number; effective:boolean; createdAt:string;
 }
-export interface SessionUser { id: string; name: string; groups: string[]; priorityReviewGroups?: string[]; csrfToken?: string; canManageRoles?:boolean; canManageRouting?:boolean }
+export interface SessionUser { id: string; name: string; groups: string[]; priorityReviewGroups?: string[]; csrfToken?: string; canManageRoles?:boolean; canManageRouting?:boolean; canCoordinate?:boolean }
 export interface TicketView extends TicketReceipt {
   serviceCode: string; serviceType: TicketType; subject: string; description: string;
   priority: Priority; impact: Impact; urgency: Urgency; fields: Record<string, unknown>;
@@ -168,6 +168,7 @@ export interface TicketReceipt {
   assignmentState?: 'PENDING' | 'ACCEPTED' | 'DECLINED' | 'CANCELLED' | 'EXPIRED' | 'INVALIDATED' | null;
   assignmentDueAt?: string | null;
   assignmentPolicyVersionId?: string | null;
+  triage?: {coordinatorId:string|null;coordinatorName:string|null;stage:'PRIMARY'|'BACKUP'|'ESCALATED';reason:string;dueAt:string|null;policyVersion:number}|null;
 }
 export * from './fulfillment.js';
 export * from './operations.js';

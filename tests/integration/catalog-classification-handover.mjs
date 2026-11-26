@@ -107,7 +107,21 @@ try{
   let ticket=await create();
   assert.deepEqual((await row(ticket.id)).navigation_snapshot.path.map(node=>node.name),
     ['信息化系统','其他或不确定系统','业务系统故障待分类']);
-  await assert.rejects(classify(ticket.id),error=>error.getResponse().code==='CLASSIFICATION_OWNER_MUST_CLAIM');
+  await assert.rejects(classify(ticket.id),error=>error.getResponse().code==='CLASSIFICATION_TARGET_NOT_NEEDED');
+  const queuedOriginal=await row(ticket.id);
+  const queuedSla=(await pool.query('SELECT * FROM sla_cycles WHERE ticket_id=$1',[ticket.id])).rows;
+  const queuedCandidates=await tickets.classificationCandidates(desk,ticket.id,{serviceCode:'INC-ERP',formVersion:1,fields:{}});
+  assert.equal(queuedCandidates.crossGroup,false);
+  await classify(ticket.id,{targetAssigneeId:undefined});
+  const corrected=await row(ticket.id);
+  assert.equal(corrected.owner_group_id,'applications');assert.equal(corrected.service_code,'INC-ERP');
+  assert.equal(corrected.assignee_id,null);assert.equal(corrected.status,'QUEUED');
+  assert.deepEqual(corrected.original_navigation_snapshot,queuedOriginal.original_navigation_snapshot);
+  assert.deepEqual((await pool.query('SELECT * FROM sla_cycles WHERE ticket_id=$1',[ticket.id])).rows,queuedSla);
+  await action(ticket.id,engineer.id,'ACCEPT',{comment:'Engineer accepted corrected classification'});
+  await action(ticket.id,engineer.id,'RESOLVE',{comment:'ERP restored',resolutionCategory:'FIX',evidence:'Verified in test'});
+  await action(ticket.id,requester.id,'CONFIRM',{comment:'Confirmed'});
+  ticket=await create();
   await action(ticket.id,desk.id,'ACCEPT',{comment:'Triage started'});
   const original=await row(ticket.id);
   await assert.rejects(classify(ticket.id,{targetAssigneeId:undefined}),error=>error.getResponse().code==='CLASSIFICATION_TARGET_REQUIRED');

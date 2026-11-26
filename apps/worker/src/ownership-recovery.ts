@@ -1,6 +1,6 @@
 import type { Pool,PoolClient } from 'pg';
 import { ownershipCandidatesQuery } from './ownership-query.js';
-import {advanceAutomaticDispatch} from '@itsm/workflow';
+import {advanceAutomaticDispatch,ensureTriage} from '@itsm/workflow';
 
 type RecordOwnership=(client:PoolClient,row:any,action:string,detail:object,from:string,to:string,previous?:any)=>Promise<void>;
 
@@ -24,6 +24,7 @@ export async function recoverOwnership(db:Pool,record:RecordOwnership) {
     if(!row)return;
     await client.query('UPDATE tickets SET ownership_checked_at=clock_timestamp() WHERE id=$1',[row.id]);
     if(await advanceAutomaticDispatch(client,row.id))return;
+    if(await ensureTriage(client,row.id,'UNASSIGNED_RECOVERY'))return;
     const valid = async (employee:string|null,group:string|null) => !employee || !!(await client.query(`SELECT e.id FROM employees e
       JOIN group_memberships m ON m.employee_id=e.id WHERE e.id=$1 AND e.active AND m.group_id=$2 FOR SHARE OF e,m`,[employee,group])).rowCount;
     const groupAvailable = async (group:string) => !!(await client.query(`SELECT e.id FROM employees e

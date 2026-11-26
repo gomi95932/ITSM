@@ -35,11 +35,11 @@ provide(operationLogNavigation,(filter)=>{operationLogFilter.value={...filter};n
 const enterpriseLogin=ref(false),dingtalkWebLogin=ref(false);
 const view=ref<View>('mine'),catalog=ref<CatalogItem[]>([]),tickets=ref<TicketView[]>([]),counts=ref<Record<string,number>>({}),total=ref(0),page=ref(1),filter=ref('');
 const workQueue=ref<WorkQueue>('all');
-const emptyWorkQueues=():WorkQueueCounts=>({all:0,assigned:0,incoming:0,outgoing:0,unassigned:0});
+const emptyWorkQueues=():WorkQueueCounts=>({all:0,assigned:0,incoming:0,outgoing:0,unassigned:0,triage:0});
 const workQueues=ref<WorkQueueCounts>(emptyWorkQueues());
 const selected=ref(''),creating=ref(false),initialCode=ref(''),notices=ref<Delivery[]>([]),notificationMode=ref('disabled'),retrying=ref('');
 const pages=computed(()=>Math.max(1,Math.ceil(total.value/20)));
-const canWorkTickets=computed(()=>!!user.value&&(user.value.groups.length>0||!!user.value.canManageRouting));
+const canWorkTickets=computed(()=>!!user.value&&(user.value.groups.length>0||!!user.value.canManageRouting||!!user.value.canCoordinate));
 const canManageSystem=computed(()=>!!user.value?.canManageRouting);
 const openCount=computed(()=>Object.entries(counts.value).filter(([status])=>!['CLOSED','CANCELLED','REJECTED'].includes(status)).reduce((sum,[,count])=>sum+count,0));
 const noticeLabels:Record<string,string>={PENDING:'待发送',DISPATCHING:'正在提交',SENDING:'平台受理，待确认',DELIVERED:'平台确认发送成功',SIMULATED:'开发模拟',DEAD:'失败待处理',SKIPPED:'已跳过',REVIEW_REQUIRED:'发送结果待核查'};
@@ -202,6 +202,7 @@ onBeforeUnmount(()=>{window.removeEventListener('hashchange',syncHash);if(refres
                     <div class="ticket-ownership">
                       <span>{{ticket.ownerGroupName??ticket.ownerGroupId}}</span>
                       <span>当前处理人：{{ticket.assigneeName??'尚未接单'}}</span>
+                      <span v-if="ticket.triage">待分派负责人：{{ticket.triage.coordinatorName??'等待管理员接管'}}</span>
                       <span v-if="ticket.pendingAssigneeId">{{ticket.assignmentKind==='OFFER'?'已分派责任人':'待交接人'}}：{{ticket.pendingAssigneeName??ticket.pendingAssigneeId}}（待接单）</span>
                     </div>
                   </td>

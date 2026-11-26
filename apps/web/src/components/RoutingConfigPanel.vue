@@ -7,6 +7,7 @@ import { createRequestKey } from '../request-key';
 import { formatDate } from '../labels';
 import ContentBoundary from './ContentBoundary.vue';
 import AutomaticDispatchPanel from './AutomaticDispatchPanel.vue';
+import TriageConfigPanel from './TriageConfigPanel.vue';
 import OperationLogLink from './OperationLogLink.vue';
 
 type Group={id:string;name:string;fallbackGroupId:string|null;routingVersion:number};
@@ -50,7 +51,7 @@ async function propose(){
   if(busy.value||!safe.value||!selected.value||!reason.value.trim())return;
   busy.value=true;error.value='';
   try{
-    await api('/admin/routing-config',{method:'POST',body:{id:proposalId.value,kind:kind.value,groupId:groupId.value,
+    await api('/admin/routing-config/direct',{method:'POST',body:{id:proposalId.value,kind:kind.value,groupId:groupId.value,
       ...(kind.value==='ASSIGNMENT_POLICY'?{priority:priority.value,expectedPolicyId:active.value?.id??null}
         :{expectedRoutingVersion:selected.value.routingVersion}),config:config(),reason:reason.value,contentClass:'GENERAL'}});
     adding.value=false;reason.value='';safe.value=false;proposalId.value=createRequestKey();proposalDates.value=undefined;await load();
@@ -72,6 +73,7 @@ onMounted(load);
 <template>
   <div class="routing-config">
     <AutomaticDispatchPanel/>
+    <TriageConfigPanel/>
     <p v-if="error" class="error-banner" role="alert">{{error}}</p>
     <div class="section-heading"><span class="muted">当前生效配置</span><div class="tools">
       <button class="icon-button" title="刷新路由配置" aria-label="刷新路由配置" :disabled="busy||loading" @click="load"><RefreshCw :size="17" :class="{spin:loading}"/></button>
@@ -101,7 +103,7 @@ onMounted(load);
         </template>
         <template v-else><label>无成员时转至<select v-model="fallbackGroupId"><option value="">不设置备用组</option><option v-for="g in groups.filter(g=>g.id!==groupId)" :key="g.id" :value="g.id">{{g.name}}</option></select></label><p class="muted">当前：{{selected?.fallbackGroupId?label(selected.fallbackGroupId):'未配置'}}</p></template>
         <label>变更依据<textarea v-model="reason" required maxlength="500" rows="3"/></label><ContentBoundary v-model="safe"/>
-        <div class="form-footer"><button class="primary" :disabled="busy||!safe||!reason.trim()||!groupId"><Check :size="16"/>提交独立复核</button></div>
+        <div class="form-footer"><button class="primary" :disabled="busy||!safe||!reason.trim()||!groupId"><Check :size="16"/>保存并生效</button></div>
       </form>
     </section>
     <section class="detail-section"><div class="section-heading"><h2>待处理审批</h2><OperationLogLink module="routing" :disabled="busy||adding||!!decision"/></div>

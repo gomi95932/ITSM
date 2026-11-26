@@ -5,13 +5,14 @@ import { Database } from './database.service.js';
 import type { Identity } from './auth.service.js';
 import { IntakePolicyService } from './intake-policy.service.js';
 import { ROLE_AUTHORIZATION_LOCK, ROLE_EFFECTIVE_SQL } from './role-policy.js';
+import {completeTriage,ensureTriage} from '@itsm/workflow';
 
 type PolicyConfig={enabled:boolean;receiveMinutes?:number;calendar?:ServiceCalendar;validFrom?:string;validTo?:string};
 type FallbackConfig={fallbackGroupId:string|null};
 type Proposal={id:string;kind:'ASSIGNMENT_POLICY'|'FALLBACK';groupId:string;priority:string|null;
   config:PolicyConfig|FallbackConfig;expectedPolicyId:string|null;expectedRoutingVersion:number|null;
   status:'PENDING'|'APPROVED'|'REJECTED';proposedBy:string;reviewedBy:string|null;reason:string;
-  reviewReason:string|null;version:number;createdAt:Date;reviewedAt:Date|null};
+  reviewReason:string|null;version:number;createdAt:Date;reviewedAt:Date|null;managementMode:'REVIEW'|'ADMIN_DIRECT'};
 const uuid=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 const object=(v:unknown):v is Record<string,unknown>=>!!v&&typeof v==='object'&&!Array.isArray(v);
 const only=(v:Record<string,unknown>,keys:string[])=>Object.keys(v).every(key=>keys.includes(key));
@@ -67,11 +68,90 @@ function canonical(value:unknown):string {
 }
 const columns=`id,kind,group_id AS "groupId",priority,config,expected_policy_id AS "expectedPolicyId",
   expected_routing_version AS "expectedRoutingVersion",status,proposed_by AS "proposedBy",
-  reviewed_by AS "reviewedBy",reason,review_reason AS "reviewReason",version,created_at AS "createdAt",reviewed_at AS "reviewedAt"`;
+  reviewed_by AS "reviewedBy",reason,review_reason AS "reviewReason",version,created_at AS "createdAt",reviewed_at AS "reviewedAt",management_mode AS "managementMode"`;
 
 @Injectable()
 export class RoutingConfigService {
   constructor(private readonly db:Database,private readonly intake:IntakePolicyService) {}
+
+  async triage(actor:Identity){
+    await this.admin(this.db.pool,actor.id);
+    const policy=(await this.db.pool.query(`SELECT p.*,e.display_name AS primary_name,e.active AS primary_active,
+      b.display_name AS backup_name,b.active AS backup_active FROM triage_policy_versions p
+      LEFT JOIN employees e ON e.id=p.primary_employee_id LEFT JOIN employees b ON b.id=p.backup_employee_id
+      ORDER BY p.version DESC LIMIT 1`)).rows[0]??null;
+    const backlog=await this.db.pool.query(`SELECT r.*,t.number,t.subject,t.version AS ticket_version,
+      e.display_name AS coordinator_name FROM ticket_triage_responsibilities r JOIN tickets t ON t.id=r.ticket_id
+      LEFT JOIN employees e ON e.id=r.coordinator_id WHERE r.stage<>'COMPLETED'
+      AND t.assignee_id IS NULL AND t.pending_assignee_id IS NULL
+      AND (t.status='QUEUED' OR (t.service_type='REQ' AND t.status='IN_PROGRESS'))
+      ORDER BY r.updated_at,r.ticket_id LIMIT 200`);
+    const counts=(await this.db.pool.query(`SELECT count(*)::integer AS pending,
+      count(*) FILTER(WHERE r.stage='ESCALATED')::integer AS escalated FROM ticket_triage_responsibilities r
+      JOIN tickets t ON t.id=r.ticket_id WHERE r.stage<>'COMPLETED' AND t.assignee_id IS NULL AND t.pending_assignee_id IS NULL
+      AND (t.status='QUEUED' OR (t.service_type='REQ' AND t.status='IN_PROGRESS'))`)).rows[0];
+    return {policy,backlog:backlog.rows,counts};
+  }
+
+  async saveTriage(actor:Identity,body:unknown){
+    if(!object(body)||!only(body,['id','expectedVersion','enabled','primaryEmployeeId','backupEmployeeId','reminderMinutes','reason','contentClass'])
+      ||!uuid.test(String(body.id))||!Number.isInteger(body.expectedVersion)||(body.expectedVersion as number)<0
+      ||typeof body.enabled!=='boolean'||!reason(body.reason)||body.contentClass!=='GENERAL'
+      ||!Number.isInteger(body.reminderMinutes)||(body.reminderMinutes as number)<1||(body.reminderMinutes as number)>10080
+      ||![body.primaryEmployeeId,body.backupEmployeeId].every(id=>id===null||validEmployeeId(id))
+      ||body.enabled&&!body.primaryEmployeeId||body.backupEmployeeId!==null&&body.backupEmployeeId===body.primaryEmployeeId)
+      throw new BadRequestException({code:'INVALID_TRIAGE_CONFIG'});
+    await this.intake.requireGeneral(actor.id,body,'routing-config');
+    return this.db.transaction(async client=>{
+      await this.writeAdmin(client,actor.id);
+      const existing=(await client.query('SELECT * FROM triage_policy_versions WHERE request_id=$1',[body.id])).rows[0];
+      if(existing){
+        if(existing.actor_id!==actor.id||existing.version!==Number(body.expectedVersion)+1||existing.enabled!==body.enabled
+          ||existing.primary_employee_id!==body.primaryEmployeeId||existing.backup_employee_id!==body.backupEmployeeId
+          ||existing.reminder_minutes!==body.reminderMinutes||existing.reason!==String(body.reason).trim())
+          throw new ConflictException({code:'TRIAGE_REQUEST_CONFLICT'});
+        return existing;
+      }
+      const current=(await client.query('SELECT version FROM triage_policy_versions ORDER BY version DESC LIMIT 1')).rows[0]?.version??0;
+      if(current!==body.expectedVersion)throw new ConflictException({code:'TRIAGE_VERSION_CONFLICT'});
+      for(const id of [body.primaryEmployeeId,body.backupEmployeeId])if(id){
+        const person=await client.query(`SELECT e.id FROM employees e WHERE e.id=$1 AND e.active
+          AND EXISTS(SELECT 1 FROM identity_links l WHERE l.employee_id=e.id) FOR SHARE OF e`,[id]);
+        if(!person.rowCount)throw new BadRequestException({code:'TRIAGE_EMPLOYEE_UNAVAILABLE'});
+      }
+      return (await client.query(`INSERT INTO triage_policy_versions
+        (version,request_id,enabled,primary_employee_id,backup_employee_id,reminder_minutes,actor_id,reason)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,[current+1,body.id,body.enabled,body.primaryEmployeeId,
+        body.backupEmployeeId,body.reminderMinutes,actor.id,String(body.reason).trim()])).rows[0];
+    });
+  }
+
+  async transferTriage(actor:Identity,body:unknown){
+    if(!object(body)||!only(body,['id','ticketId','expectedVersion','expectedPolicyVersion','reason','contentClass'])
+      ||!uuid.test(String(body.id))||!uuid.test(String(body.ticketId))||!Number.isInteger(body.expectedVersion)
+      ||!Number.isInteger(body.expectedPolicyVersion)||!reason(body.reason)||body.contentClass!=='GENERAL')
+      throw new BadRequestException({code:'INVALID_TRIAGE_TRANSFER'});
+    await this.intake.requireGeneral(actor.id,body,'routing-config');
+    return this.db.transaction(async client=>{
+      await this.writeAdmin(client,actor.id);
+      const previous=(await client.query('SELECT * FROM triage_transfer_requests WHERE request_id=$1',[body.id])).rows[0];
+      if(previous){if(previous.actor_id!==actor.id||canonical(previous.input)!==canonical(body))
+        throw new ConflictException({code:'TRIAGE_REQUEST_CONFLICT'});return previous.response;}
+      const ticket=(await client.query('SELECT * FROM tickets WHERE id=$1 FOR UPDATE',[body.ticketId])).rows[0];
+      const current=(await client.query('SELECT * FROM triage_policy_versions ORDER BY version DESC LIMIT 1')).rows[0];
+      const responsibility=(await client.query('SELECT * FROM ticket_triage_responsibilities WHERE ticket_id=$1 FOR UPDATE',[body.ticketId])).rows[0];
+      if(!ticket||ticket.version!==body.expectedVersion||!current?.enabled||current.version!==body.expectedPolicyVersion
+        ||!responsibility||responsibility.stage==='COMPLETED'||ticket.assignee_id||ticket.pending_assignee_id
+        ||!(ticket.status==='QUEUED'||ticket.service_type==='REQ'&&ticket.status==='IN_PROGRESS'))
+        throw new ConflictException({code:'TRIAGE_VERSION_CONFLICT'});
+      await completeTriage(client,ticket.id,actor.id);
+      await ensureTriage(client,ticket.id,`MANUAL_TRANSFER: ${String(body.reason).trim()}`,actor.id);
+      const response=(await client.query('SELECT * FROM ticket_triage_responsibilities WHERE ticket_id=$1',[ticket.id])).rows[0];
+      await client.query('INSERT INTO triage_transfer_requests(request_id,ticket_id,actor_id,input,response) VALUES($1,$2,$3,$4,$5)',
+        [body.id,ticket.id,actor.id,JSON.stringify(body),JSON.stringify(response)]);
+      return response;
+    });
+  }
 
   async automatic(actor:Identity){return this.db.transaction(async client=>{
     await client.query('SELECT pg_advisory_xact_lock_shared($1)',[ROLE_AUTHORIZATION_LOCK]);
@@ -207,7 +287,7 @@ export class RoutingConfigService {
       WHERE proposal_id=$1 ORDER BY created_at,id`,[id])).rows};
   }
 
-  async propose(actor:Identity,body:unknown){
+  async propose(actor:Identity,body:unknown,direct=false){
     const input=validateProposal(body);
     await this.intake.requireGeneral(actor.id,input as unknown as Record<string,unknown>,'routing-config');
     return this.db.transaction(async client=>{
@@ -217,7 +297,8 @@ export class RoutingConfigService {
         const p=existing.rows[0];
         if(p.proposedBy!==actor.id||p.kind!==input.kind||p.groupId!==input.groupId||p.priority!==(input.priority??null)
           ||p.expectedPolicyId!==(input.expectedPolicyId??null)||p.expectedRoutingVersion!==(input.expectedRoutingVersion??null)
-          ||canonical(p.config)!==canonical(input.config)||p.reason!==input.reason.trim())
+          ||canonical(p.config)!==canonical(input.config)||p.reason!==input.reason.trim()
+          ||p.managementMode!==(direct?'ADMIN_DIRECT':'REVIEW'))
           throw new ConflictException({code:'ROUTING_ID_CONFLICT'});
         return p;
       }
@@ -238,13 +319,13 @@ export class RoutingConfigService {
           throw new BadRequestException({code:'ROUTING_VALIDITY_INVALID'});
       }
       const inserted=await client.query<Proposal>(`INSERT INTO routing_config_proposals
-        (id,kind,group_id,priority,config,expected_policy_id,expected_routing_version,proposed_by,reason)
-        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING ${columns}`,
+        (id,kind,group_id,priority,config,expected_policy_id,expected_routing_version,proposed_by,reason,management_mode)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING ${columns}`,
       [input.id,input.kind,input.groupId,input.priority??null,JSON.stringify(input.config),input.expectedPolicyId??null,
-        input.expectedRoutingVersion??null,actor.id,input.reason.trim()]);
+        input.expectedRoutingVersion??null,actor.id,input.reason.trim(),direct?'ADMIN_DIRECT':'REVIEW']);
       const proposal=inserted.rows[0];
       await this.audit(client,proposal,actor.id,'PROPOSED',null,proposal,input.reason.trim());
-      return proposal;
+      return direct?this.applyDecision(client,actor,input.id,{expectedVersion:1,decision:'APPROVE',reason:input.reason}):proposal;
     });
   }
 
@@ -254,12 +335,17 @@ export class RoutingConfigService {
     await this.intake.requireGeneral(actor.id,input as unknown as Record<string,unknown>,'routing-config');
     return this.db.transaction(async client=>{
       await this.writeAdmin(client,actor.id);
+      return this.applyDecision(client,actor,id,input);
+    });
+  }
+
+  private async applyDecision(client:PoolClient,actor:Identity,id:string,input:{expectedVersion:number;decision:string;reason:string}){
       const found=await client.query<Proposal>(`SELECT ${columns} FROM routing_config_proposals WHERE id=$1 FOR UPDATE`,[id]);
       if(!found.rowCount)throw new NotFoundException();
       const proposal=found.rows[0];
       if(proposal.version!==input.expectedVersion||proposal.status!=='PENDING')
         throw new ConflictException({code:'ROUTING_VERSION_CONFLICT'});
-      if(proposal.proposedBy===actor.id)throw new ForbiddenException({code:'ROUTING_INDEPENDENT_REVIEW_REQUIRED'});
+      if(proposal.proposedBy===actor.id&&proposal.managementMode!=='ADMIN_DIRECT')throw new ForbiddenException({code:'ROUTING_INDEPENDENT_REVIEW_REQUIRED'});
       const group=await client.query('SELECT * FROM support_groups WHERE id=$1 FOR UPDATE',[proposal.groupId]);
       if(!group.rowCount)throw new ConflictException({code:'ROUTING_GROUP_UNAVAILABLE'});
       const before=proposal.kind==='FALLBACK'
@@ -291,9 +377,9 @@ export class RoutingConfigService {
           await client.query('UPDATE assignment_policy_versions SET active=false WHERE group_id=$1 AND priority=$2 AND active',
             [proposal.groupId,proposal.priority]);
           if(config.enabled)await client.query(`INSERT INTO assignment_policy_versions
-            (group_id,priority,receive_minutes,calendar_snapshot,valid_from,valid_to,proposed_by,approved_by,approved_at,active)
-            VALUES($1,$2,$3,$4,$5,$6,$7,$8,now(),true)`,[proposal.groupId,proposal.priority,config.receiveMinutes,
-            JSON.stringify(config.calendar),config.validFrom,config.validTo,proposal.proposedBy,actor.id]);
+            (group_id,priority,receive_minutes,calendar_snapshot,valid_from,valid_to,proposed_by,approved_by,approved_at,active,management_mode)
+            VALUES($1,$2,$3,$4,$5,$6,$7,$8,now(),true,$9)`,[proposal.groupId,proposal.priority,config.receiveMinutes,
+            JSON.stringify(config.calendar),config.validFrom,config.validTo,proposal.proposedBy,actor.id,proposal.managementMode]);
         }
       }
       const updated=await client.query<Proposal>(`UPDATE routing_config_proposals SET status=$2,reviewed_by=$3,review_reason=$4,
@@ -304,6 +390,5 @@ export class RoutingConfigService {
         :{policyId:await this.currentPolicy(client,proposal.groupId,proposal.priority!)}):before;
       await this.audit(client,updated.rows[0],actor.id,input.decision==='APPROVE'?'APPROVED':'REJECTED',before,after,input.reason.trim());
       return updated.rows[0];
-    });
   }
 }

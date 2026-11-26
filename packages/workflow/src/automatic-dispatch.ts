@@ -1,5 +1,6 @@
 import {randomUUID} from 'node:crypto';
 import type {Pool,PoolClient} from 'pg';
+import {ensureTriage,completeTriage} from './triage.js';
 
 type Snapshot={serviceCode:string;policyVersion:number;primaryMinutes:number;backupMinutes:number;positionId:string|null;groupId:string;backupPositionIds?:string[];backupEmployeeIds?:string[]};
 type Run={id:string;state:string;snapshot:Snapshot};
@@ -30,7 +31,7 @@ export async function initializeAutomaticDispatch(client:PoolClient,ticketId:str
   if(!row||terminal(row.status)||row.assignee_id||row.pending_assignee_id)return;
   const policy=(await client.query(`SELECT * FROM automatic_dispatch_policies WHERE service_code=$1
     ORDER BY version DESC LIMIT 1`,[row.service_code])).rows[0];
-  if(!policy?.enabled)return;
+  if(!policy?.enabled){await ensureTriage(client,ticketId,'AUTOMATIC_POLICY_DISABLED');return;}
   const snapshot:Snapshot={serviceCode:row.service_code,policyVersion:policy.version,primaryMinutes:policy.primary_minutes,
     backupMinutes:policy.backup_minutes,positionId:row.service_routing_snapshot?.primaryPositionId??null,groupId:row.owner_group_id,
     backupPositionIds:policy.backup_position_ids,backupEmployeeIds:policy.backup_employee_ids};
@@ -39,7 +40,9 @@ export async function initializeAutomaticDispatch(client:PoolClient,ticketId:str
   await advanceAutomaticDispatch(client,ticketId);
 }
 
-export async function automaticDispatchAction(client:PoolClient,ticketId:string,action:string):Promise<void>{
+export async function automaticDispatchAction(client:PoolClient,ticketId:string,action:string,actor='system:scheduler'):Promise<void>{
+  if(['ACCEPT','ACCEPT_OFFER','FORCE_TAKEOVER','ASSIGN_OFFER','REASSIGN','INITIATE_HANDOVER','CANCEL','CONFIRM','RESOLVE'].includes(action))
+    await completeTriage(client,ticketId,actor);
   const run=(await client.query<Run>('SELECT * FROM automatic_dispatch_runs WHERE ticket_id=$1 FOR UPDATE',[ticketId])).rows[0];
   if(!run||!['WAITING','OFFERED','ESCALATED'].includes(run.state))return;
   if(action==='DECLINE_OFFER'&&run.state==='OFFERED'){
@@ -65,7 +68,10 @@ export async function advanceAutomaticDispatch(client:PoolClient,ticketId:string
   await client.query('UPDATE automatic_dispatch_runs SET checked_at=clock_timestamp() WHERE id=$1',[run.id]);
   if(terminal(row.status)){await finish(client,run,'STOPPED','CANCELLED');return true;}
   if(row.assignee_id){await finish(client,run,'ACCEPTED','ACCEPTED');return false;}
-  if(run.state==='ESCALATED')return true;
+  if(run.state==='ESCALATED'){
+    await ensureTriage(client,ticketId,'AUTO_DISPATCH_EXHAUSTED');
+    return true;
+  }
   if(row.status==='WAITING_APPROVAL')return true;
   if(!['QUEUED','IN_PROGRESS'].includes(row.status)){await finish(client,run,'MANUAL','CANCELLED');return false;}
   if(row.service_code!==run.snapshot.serviceCode||row.owner_group_id!==run.snapshot.groupId
@@ -133,6 +139,7 @@ export async function advanceAutomaticDispatch(client:PoolClient,ticketId:string
       owner_group_id=EXCLUDED.owner_group_id,opened_at=clock_timestamp(),last_checked_at=clock_timestamp(),resolved_at=NULL`,[ticketId,row.owner_group_id]);
     await record(client,row,'OWNERSHIP_ESCALATION_REQUIRED',{automatic:true,runId:run.id,
       reason:'AUTO_DISPATCH_EXHAUSTED',ownerGroupId:row.owner_group_id,policyVersion:run.snapshot.policyVersion},previous);
+    await ensureTriage(client,ticketId,'AUTO_DISPATCH_EXHAUSTED');
     return true;
   }
   const minutes=candidate.duty==='PRIMARY'?run.snapshot.primaryMinutes:run.snapshot.backupMinutes,previous=row;

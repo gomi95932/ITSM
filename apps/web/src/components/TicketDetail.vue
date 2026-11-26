@@ -4,12 +4,12 @@ import { ArrowLeft,Check,Clock3,LoaderCircle,RefreshCw,Tags } from 'lucide-vue-n
 import { USER_WAIT_REASONS,VENDOR_WAIT_REASONS,type WaitReason,type CatalogItem,type Priority,type SessionUser,type TicketAction,type TicketActionInput,type TicketView } from '@itsm/contracts';
 import { api,errorText,ApiError } from '../api';
 import { createRequestKey } from '../request-key';
-import { actions as ticketActions,priorityActions,continuityActions,duration,formatDate,statuses,waitingReasons } from '../labels';
+import { actions as ticketActions,priorityActions,continuityActions,triageActions,duration,formatDate,statuses,waitingReasons } from '../labels';
 import ContentBoundary from './ContentBoundary.vue';
 import TicketAttachments from './TicketAttachments.vue';
 import PriorityPanel from './PriorityPanel.vue';
 const props=defineProps<{id:string;user:SessionUser}>();
-const actions:Record<string,string>={...ticketActions,...priorityActions,...continuityActions,PRIORITY_CHANGED:'优先级已调整',PRIORITY_SUGGESTED:'提交分级建议'};
+const actions:Record<string,string>={...ticketActions,...priorityActions,...continuityActions,...triageActions,PRIORITY_CHANGED:'优先级已调整',PRIORITY_SUGGESTED:'提交分级建议'};
 const emit=defineEmits<{back:[];changed:[]}>();
 const ticket=ref<TicketView>(),loading=ref(false),busy=ref(false),error=ref(''),action=ref<TicketAction>(),comment=ref(''),reason=ref(''),dueAt=ref(''),vendorReference=ref(''),vendorOwner=ref(''),category=ref(''),evidence=ref(''),target=ref('');
 const groups=ref<{id:string;name:string}[]>([]),key=ref(createRequestKey());
@@ -47,6 +47,7 @@ watch(target,async value=>{
 });
 const isAgent=computed(()=>ticket.value&&props.user.groups.includes(ticket.value.ownerGroupId));
 const mine=computed(()=>ticket.value?.requesterId===props.user.id);
+const coordinatorOnly=computed(()=>ticket.value?.triage?.coordinatorId===props.user.id&&!isAgent.value&&!mine.value&&!props.user.canManageRouting);
 const completionReady=computed(()=>ticket.value?.serviceType!=='REQ'||ticket.value.requestCompletionReady===true);
 const available=computed<TicketAction[]>(()=>{
   if(!ticket.value)return[];const state=ticket.value.status,result:TicketAction[]=[];
@@ -83,7 +84,7 @@ const resolutionCategories=computed(()=>ticket.value?.serviceType==='REQ'?['权�
 const continuationLabels:Record<string,string>={PENDING:'待独立复核',APPROVED:'已批准',REJECTED:'已拒绝',REVOKED:'已撤销'};
 const selectableContinuations=computed(()=>ticket.value?.continuations?.filter(item=>item.current&&
   (action.value==='CONTINUATION_REVOKE'?item.effective:item.status==='PENDING'&&item.proposedBy!==props.user.id&&item.employeeId!==props.user.id))??[]);
-async function load(){loading.value=true;error.value='';try{ticket.value=await api<TicketView>(`/tickets/${props.id}`);catalog.value=(await api<{items:CatalogItem[]}>('/catalog')).items;if(props.user.groups.length||props.user.canManageRouting)groups.value=(await api<{items:{id:string;name:string}[]}>('/support-groups')).items;}catch(e){error.value=errorText(e);}finally{loading.value=false;}}
+async function load(){loading.value=true;error.value='';try{ticket.value=await api<TicketView>(`/tickets/${props.id}`);catalog.value=(await api<{items:CatalogItem[]}>('/catalog')).items;if(props.user.groups.length||props.user.canManageRouting||props.user.canCoordinate)groups.value=(await api<{items:{id:string;name:string}[]}>('/support-groups')).items;}catch(e){error.value=errorText(e);}finally{loading.value=false;}}
 function choose(value:TicketAction){correcting.value=false;action.value=value;comment.value='';reason.value='';dueAt.value='';waitingReason.value='';vendorReference.value='';vendorOwner.value='';category.value='';evidence.value='';target.value=['ASSIGN_OFFER','FORCE_TAKEOVER'].includes(value)?ticket.value?.ownerGroupId??'':'';targetPerson.value='';continuationId.value=selectableContinuations.value[0]?.id??'';contentSafe.value=false;key.value=createRequestKey();error.value='';}
 async function checkClassificationTarget(){
   if(!classificationService.value||classificationChecking.value)return;
@@ -101,7 +102,7 @@ async function submitClassification(){
   if(classificationCrossGroup.value&&(!classificationTarget.value||!classificationCandidates.value.some(person=>person.id===classificationTarget.value))){error.value='请选择目标支持组的接收人';return;}
   busy.value=true;error.value='';
   try{await api(`/tickets/${props.id}/classification`,{method:'POST',key:classificationKey.value,body:{contentClass:'GENERAL',expectedVersion:ticket.value.version,serviceCode:classificationCode.value,formVersion:classificationService.value.formVersion,fields:classificationFields.value,reason:classificationReason.value,...(classificationCrossGroup.value?{targetAssigneeId:classificationTarget.value}:{})}});
-    correcting.value=false;classificationCode.value='';classificationReason.value='';await load();emit('changed');}
+    correcting.value=false;classificationCode.value='';classificationReason.value='';if(coordinatorOnly.value){emit('back');return;}await load();emit('changed');}
   catch(e){if(e instanceof ApiError&&e.status===409){await load();classificationKey.value=createRequestKey();}error.value=errorText(e);}finally{busy.value=false;}
 }
 async function submit(){
@@ -113,7 +114,7 @@ async function submit(){
   if(vendorReference.value)body.vendorReference=vendorReference.value;if(vendorOwner.value)body.vendorOwner=vendorOwner.value;
   if(category.value)body.resolutionCategory=category.value;if(evidence.value)body.evidence=evidence.value;if(target.value&&['REASSIGN','INITIATE_HANDOVER','FORCE_TAKEOVER'].includes(action.value))body.targetGroupId=target.value;if(targetPerson.value)body.targetAssigneeId=targetPerson.value;
   if(continuationId.value&&action.value.startsWith('CONTINUATION_')&&action.value!=='CONTINUATION_PROPOSE')body.continuationId=continuationId.value;
-  try{await api(`/tickets/${props.id}/actions`,{method:'POST',body,key:key.value});action.value=undefined;await load();emit('changed');}
+  try{await api(`/tickets/${props.id}/actions`,{method:'POST',body,key:key.value});action.value=undefined;if(coordinatorOnly.value&&['ASSIGN_OFFER','REASSIGN'].includes(body.action)){emit('back');return;}await load();emit('changed');}
   catch(e){if(e instanceof ApiError&&e.status===409){await load();if(action.value&&!available.value.includes(action.value))action.value=undefined;key.value=createRequestKey();}error.value=errorText(e);}finally{busy.value=false;}
 }
 async function submitPriorityReview(){
@@ -137,6 +138,7 @@ onMounted(load);
 <template>
   <section class="detail-page"><button class="text-button" @click="emit('back')"><ArrowLeft :size="17"/> 返回工单列表</button><div v-if="loading&&!ticket" class="empty-state"><LoaderCircle class="spin"/> 正在加载</div><p v-if="error" class="error-banner" role="alert">{{error}}</p>
     <template v-if="ticket"><div class="page-title"><div><p class="eyebrow">{{ticket.number}}</p><h1>{{ticket.subject}}</h1></div><button class="icon-button" title="刷新" aria-label="刷新工单" :disabled="loading" @click="load"><RefreshCw :size="18" :class="{spin:loading}"/></button></div><div class="ticket-meta"><span class="status" :data-status="ticket.status">{{statuses[ticket.status]}}</span><span class="priority" :data-priority="ticket.priority">{{ticket.priority}}</span><span>{{formatDate(ticket.createdAt)}}</span><span>责任组：{{ticket.ownerGroupName??groups.find(g=>g.id===ticket?.ownerGroupId)?.name??ticket.ownerGroupId}}</span><span>当前处理人：{{ticket.assigneeName??ticket.assigneeId??'尚未接单'}}</span><span v-if="ticket.pendingAssigneeId" class="amber-text">{{ticket.assignmentKind==='OFFER'?'已分派责任人':'待交接人'}}：{{ticket.pendingAssigneeName??ticket.pendingAssigneeId}}（待接单）<template v-if="ticket.assignmentDueAt"> · 截止 {{formatDate(ticket.assignmentDueAt)}}</template></span></div>
+      <p v-if="ticket.triage" class="amber-text" role="status">待分派负责人：{{ticket.triage.coordinatorName??'等待管理员接管'}}<template v-if="ticket.triage.dueAt"> · 分派截止 {{formatDate(ticket.triage.dueAt)}}</template></p>
       <p v-if="ticket.site" class="muted">归属厂区：{{ticket.site.name}} · 配置版本 {{ticket.site.configVersion}}</p>
       <p v-for="cycle in (ticket.sla??[]).filter(s=>s.template)" :key="`template-${cycle.cycle}`" class="muted">第 {{cycle.cycle}} 轮 SLA 模板：{{cycle.template?.name}} · 配置版本 {{cycle.template?.configVersion}}</p>
       <section v-if="isAgent&&(ticket.ownerContinuityRequired||ticket.continuations?.length)" class="detail-section" aria-label="责任连续性">

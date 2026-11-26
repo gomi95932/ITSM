@@ -94,12 +94,17 @@ assert.equal(await sql(`SELECT count(*) FROM outbox_events o JOIN ticket_events 
   WHERE e.ticket_id=${quote(expired.id)} AND e.action='ASSIGNMENT_EXPIRED'`),'1');
 
 let noPolicy=await create('LOW');
-assert.equal((await request(`/tickets/${noPolicy.id}`,dispatcher)).data.canAssignOffer,false);
-assert.equal((await act(noPolicy,dispatcher,'ASSIGN_OFFER',offer)).data.code,'ASSIGNMENT_POLICY_NOT_APPROVED');
+assert.equal((await request(`/tickets/${noPolicy.id}`,dispatcher)).data.canAssignOffer,true);
+noPolicy=await ok(noPolicy,dispatcher,'ASSIGN_OFFER',offer);
+assert.ok(Date.parse(noPolicy.assignmentDueAt)>Date.now(),'missing policy uses a bounded default receipt window');
+noPolicy=await ok(noPolicy,dispatcher,'CANCEL_OFFER',{reason:'Default policy offer verified'});
 let breached=await create();
 await sql(`UPDATE sla_cycles SET started_at=now()-interval '30 days' WHERE ticket_id=${quote(breached.id)}`);
-assert.equal((await request(`/tickets/${breached.id}`,dispatcher)).data.canAssignOffer,false);
-assert.equal((await act(breached,dispatcher,'ASSIGN_OFFER',offer)).data.code,'ASSIGNMENT_BUDGET_EXHAUSTED');
+assert.equal((await request(`/tickets/${breached.id}`,dispatcher)).data.canAssignOffer,true);
+const breachedSla=await sql(`SELECT row_to_json(s)::text FROM sla_cycles s WHERE ticket_id=${quote(breached.id)}`);
+breached=await ok(breached,dispatcher,'ASSIGN_OFFER',offer);
+assert.equal(await sql(`SELECT row_to_json(s)::text FROM sla_cycles s WHERE ticket_id=${quote(breached.id)}`),breachedSla);
+breached=await ok(breached,dispatcher,'CANCEL_OFFER',{reason:'Overdue assignment verified'});
 breached=await ok(breached,dispatcher,'REASSIGN',{targetGroupId:'service-desk',targetAssigneeId:candidate,reason:'Recover breached ticket'});
 assert.equal(breached.assignmentKind,'HANDOVER');
 assert.ok(Date.parse(breached.assignmentDueAt)>Date.now(),'handover remains actionable after an SLA breach');
