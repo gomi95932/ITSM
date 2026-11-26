@@ -6,7 +6,7 @@ import type { PoolClient } from 'pg';
 import { oidcSettings } from './oidc-config.js';
 import { dingtalkWebSettings } from './dingtalk-web-config.js';
 
-export type Identity = { id: string; name: string; groups: string[]; priorityReviewGroups?: string[]; csrfToken?: string; canManageRoles?:boolean; canManageRouting?:boolean };
+export type Identity = { id: string; name: string; groups: string[]; priorityReviewGroups?: string[]; csrfToken?: string; canManageRoles?:boolean; canManageRouting?:boolean; canCoordinate?:boolean };
 export type AuthHeaders = { devUser?: string; cookie?: string; csrf?: string };
 export const devEnabled = () => process.env.NODE_ENV !== 'production' && process.env.ENABLE_DEV_AUTH === 'true';
 const digest = (value: string) => createHash('sha256').update(value).digest('hex');
@@ -37,7 +37,11 @@ export class AuthService {
     const reviews = await this.db.pool.query('SELECT group_id FROM priority_reviewers WHERE employee_id=$1', [id]);
     const roles=await this.db.pool.query(`SELECT DISTINCT r.role_code FROM role_bindings r WHERE r.employee_id=$1
       AND r.role_code IN ('PLATFORM_ADMIN','GROUP_LEAD') AND ${ROLE_EFFECTIVE_SQL}`,[id]);
-    return { id, name: employee.rows[0].display_name, groups: groups.rows.map(r => r.group_id), priorityReviewGroups: reviews.rows.map(r => r.group_id), csrfToken: csrf,
+    const coordinator=await this.db.pool.query(`SELECT 1 WHERE EXISTS(SELECT 1 FROM
+      (SELECT * FROM triage_policy_versions ORDER BY version DESC LIMIT 1) p
+      WHERE p.enabled AND $1 IN (p.primary_employee_id,p.backup_employee_id))
+      OR EXISTS(SELECT 1 FROM ticket_triage_responsibilities r WHERE r.coordinator_id=$1 AND ticket_triage_access(r.ticket_id,$1))`,[id]);
+    return { id, name: employee.rows[0].display_name, groups: groups.rows.map(r => r.group_id), priorityReviewGroups: reviews.rows.map(r => r.group_id), csrfToken: csrf,canCoordinate:!!coordinator.rowCount,
       canManageRoles:!!roles.rowCount,canManageRouting:roles.rows.some(r=>r.role_code==='PLATFORM_ADMIN') };
   }
 

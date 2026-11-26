@@ -29,6 +29,7 @@ type TicketRow = WaitingRow & {
   assignment_kind: 'OFFER' | 'HANDOVER' | null; assignment_state: 'PENDING' | 'ACCEPTED' | 'DECLINED' | 'CANCELLED' | 'EXPIRED' | 'INVALIDATED' | null;
   assignment_offered_at: Date | null; assignment_due_at: Date | null; assignment_policy_version_id: string | null;
   assignee_name?: string | null; pending_assignee_name?: string | null; owner_group_name?: string | null;
+  triage?:TicketReceipt['triage'];
   priority_review_state: PriorityReviewState; priority_candidate_at: Date | null;
   priority_reviewed_at: Date | null; priority_reviewed_by: string | null; priority_review_reason: string | null;
   submitted_by_id: string; delegation_id: string | null; original_catalog_snapshot: Record<string,unknown>;
@@ -50,8 +51,13 @@ const keys = new Set(['contentClass', 'serviceCode', 'formVersion', 'subject', '
 const actionKeys = new Set(['contentClass', 'action', 'expectedVersion', 'comment', 'reason', 'dueAt', 'waitingReason', 'vendorReference', 'vendorOwner', 'resolutionCategory', 'evidence', 'targetGroupId', 'targetAssigneeId', 'continuationId']);
 const names = `(SELECT display_name FROM employees WHERE id=t.assignee_id) AS assignee_name,
   (SELECT display_name FROM employees WHERE id=t.pending_assignee_id) AS pending_assignee_name,
-  (SELECT name FROM support_groups WHERE id=t.owner_group_id) AS owner_group_name`;
-const workAccess = `(owner_group_id IN (SELECT group_id FROM group_memberships WHERE employee_id=$1)
+  (SELECT name FROM support_groups WHERE id=t.owner_group_id) AS owner_group_name,
+  (SELECT jsonb_build_object('coordinatorId',r.coordinator_id,'coordinatorName',e.display_name,'stage',r.stage,
+    'reason',r.reason,'dueAt',r.due_at,'policyVersion',r.policy_version) FROM ticket_triage_responsibilities r
+    LEFT JOIN employees e ON e.id=r.coordinator_id WHERE r.ticket_id=t.id AND r.stage<>'COMPLETED'
+    AND t.assignee_id IS NULL AND t.pending_assignee_id IS NULL
+    AND (t.status='QUEUED' OR (t.service_type='REQ' AND t.status='IN_PROGRESS'))) AS triage`;
+const workAccess = `(ticket_triage_access(t.id,$1) OR owner_group_id IN (SELECT group_id FROM group_memberships WHERE employee_id=$1)
   OR owner_group_id IN (SELECT group_id FROM priority_reviewers WHERE employee_id=$1)
   OR (pending_assignee_id=$1 AND pending_group_id IN (SELECT group_id FROM group_memberships WHERE employee_id=$1)))`;
 const delegatedAccess=(actor:string)=>`EXISTS(SELECT 1 FROM ticket_delegations d JOIN employees r ON r.id=d.requester_id
@@ -69,6 +75,7 @@ const workQueueConditions: Record<WorkQueue, string> = {
     (SELECT group_id FROM group_memberships WHERE employee_id=$1)`,
   outgoing: `${activeWork} AND t.assignee_id=$1 AND t.pending_assignee_id IS NOT NULL AND ${ownerMembership}`,
   unassigned: `${activeWork} AND t.assignee_id IS NULL AND t.pending_assignee_id IS NULL AND ${ownerMembership}`,
+  triage: `ticket_triage_access(t.id,$1)`,
 };
 
 function canonical(value: unknown): string {
@@ -206,13 +213,14 @@ export class TicketsService {
       [ticket.id, eventId, action.startsWith('P1_') ? 'P1_ALERT' : 'TICKET_CHANGED', JSON.stringify({ ticketId: ticket.id, eventId })]);
   }
 
-  private async assignmentPolicy(client: PoolClient, ticket: TicketRow, required: boolean, group=ticket.owner_group_id): Promise<{ id: string; deadline: Date; offeredAt: Date } | null> {
+  private async assignmentPolicy(client: PoolClient, ticket: TicketRow, required: boolean, group=ticket.owner_group_id): Promise<{ id: string|null; deadline: Date; offeredAt: Date } | null> {
     const policy=await client.query<{id:string;receive_minutes:number;calendar_snapshot:ServiceCalendar;clock:Date}>(`SELECT p.*,now() AS clock FROM assignment_policy_versions p
       WHERE p.group_id=$1 AND p.priority=$2 AND p.active AND p.valid_from<=now() AND p.valid_to>now() FOR SHARE OF p`,
       [group,ticket.priority]);
     if (!policy.rowCount) {
-      if (required) throw new ConflictException({code:'ASSIGNMENT_POLICY_NOT_APPROVED'});
-      return null;
+      if (!required) return null;
+      const clock=(await client.query<{clock:Date}>('SELECT clock_timestamp() AS clock')).rows[0].clock;
+      return {id:null,offeredAt:clock,deadline:new Date(clock.getTime()+60*60000)};
     }
     const {id,receive_minutes,calendar_snapshot,clock}=policy.rows[0];
     let deadline=assignmentDeadline(clock,receive_minutes,calendar_snapshot,ticket.priority==='P1');
@@ -227,14 +235,13 @@ export class TicketsService {
         if(!budgets.length)continue;
         const remaining=Math.min(...budgets);
         if (remaining<=0) {
-          if (required) throw new ConflictException({code:'ASSIGNMENT_BUDGET_EXHAUSTED'});
+          // An overdue SLA still needs a responsible engineer; its original clock continues.
           return {id,deadline,offeredAt:clock};
         }
         const slaDeadline=assignmentDeadline(clock,remaining,s.calendar_snapshot,measurement.priority==='P1');
         if (slaDeadline<deadline) deadline=slaDeadline;
       }
     }
-    if (deadline<=clock && required) throw new ConflictException({code:'ASSIGNMENT_BUDGET_EXHAUSTED'});
     return {id,deadline,offeredAt:clock};
   }
 
@@ -300,6 +307,7 @@ export class TicketsService {
       assignmentDueAt:row.assignment_due_at instanceof Date?row.assignment_due_at.toISOString()
         :row.assignment_due_at?new Date(row.assignment_due_at).toISOString():null,
       assignmentPolicyVersionId:row.assignment_policy_version_id,
+      ...(row.triage!==undefined?{triage:row.triage}:{}),
       ...(row.owner_group_name !== undefined ? { ownerGroupName: row.owner_group_name } : {}),
       ...(row.assignee_name !== undefined ? { assigneeName: row.assignee_name } : {}),
       ...(row.pending_assignee_name !== undefined ? { pendingAssigneeName: row.pending_assignee_name } : {}) };
@@ -316,7 +324,7 @@ export class TicketsService {
 
   private async accessible(client: PoolClient, actor: Identity, id: string, lock = false): Promise<TicketRow> {
     if (!uuid.test(id)) throw new NotFoundException();
-    const result = await client.query<TicketRow>(`SELECT t.*,clock_timestamp() AS waiting_clock,${names} FROM tickets t WHERE id=$1 AND (${platformAdminSql('$2')} OR (ticket_site_access(t.id,$2) AND (requester_id=$2 OR owner_group_id IN
+    const result = await client.query<TicketRow>(`SELECT t.*,clock_timestamp() AS waiting_clock,${names} FROM tickets t WHERE id=$1 AND (${platformAdminSql('$2')} OR ticket_triage_access(t.id,$2) OR (ticket_site_access(t.id,$2) AND (requester_id=$2 OR owner_group_id IN
       (SELECT group_id FROM group_memberships WHERE employee_id=$2) OR (pending_assignee_id=$2 AND pending_group_id IN
       (SELECT group_id FROM group_memberships WHERE employee_id=$2)) OR owner_group_id IN
       (SELECT group_id FROM priority_reviewers WHERE employee_id=$2) OR ${delegatedAccess('$2')}))) ${lock ? 'FOR UPDATE OF t' : ''}`,
@@ -338,7 +346,7 @@ export class TicketsService {
     if (!Number.isInteger(page) || page < 1 || !Number.isInteger(size) || size < 1 || size > 100) throw new BadRequestException();
     if (status && !['NEW','QUEUED','IN_PROGRESS','WAITING_APPROVAL','WAITING_USER','WAITING_VENDOR','PENDING_CONFIRMATION','CLOSED','CANCELLED','REJECTED'].includes(status)) throw new BadRequestException();
     if (queue !== undefined && (mine || !WORK_QUEUES.includes(queue as WorkQueue))) throw new BadRequestException({ code: 'INVALID_WORK_QUEUE' });
-    if (!mine && !actor.groups.length && !actor.priorityReviewGroups?.length && !await canAdministerTickets(this.pool,actor.id)) throw new NotFoundException();
+    if (!mine && !actor.groups.length && !actor.priorityReviewGroups?.length && !actor.canCoordinate && !await canAdministerTickets(this.pool,actor.id)) throw new NotFoundException();
     const mineAccess=`(requester_id=$1 OR ${delegatedAccess('$1')})`;
     const condition = workQueueConditions[(queue ?? 'all') as WorkQueue];
     const queueCounts = `jsonb_build_object(${WORK_QUEUES.map(name =>
@@ -346,7 +354,7 @@ export class TicketsService {
     const result = await this.pool.query<{
       items: TicketResponseRow[]; counts: Partial<Record<TicketStatus, number>>; total: number; work_queues?: WorkQueueCounts;
     }>(`WITH scoped AS MATERIALIZED (
-        SELECT t.*,${names} FROM tickets t WHERE ${mine ? `ticket_site_access(t.id,$1) AND ${mineAccess}` : `(${platformAdminSql('$1')} OR (ticket_site_access(t.id,$1) AND ${workAccess}))`}
+        SELECT t.*,${names} FROM tickets t WHERE ${mine ? `ticket_site_access(t.id,$1) AND ${mineAccess}` : `(${platformAdminSql('$1')} OR ticket_triage_access(t.id,$1) OR (ticket_site_access(t.id,$1) AND ${workAccess}))`}
       ), selected AS MATERIALIZED (
         SELECT t.* FROM scoped t WHERE ${condition}
       ), page_rows AS (
@@ -404,7 +412,9 @@ export class TicketsService {
           WHERE a.ticket_id=$1`, [id])
         : null;
       const progressRow = requestProgress?.rows[0];
-      const dispatcher=await canAdministerTickets(client,actor.id)||!!membership.rowCount&&await canDispatch(client,actor.id,ticket.owner_group_id);
+      const coordinator=await this.isCoordinator(client,ticket.id,actor.id);
+      const priorityDispatcher=await canAdministerTickets(client,actor.id)||!!membership.rowCount&&await canDispatch(client,actor.id,ticket.owner_group_id);
+      const dispatcher=priorityDispatcher||coordinator;
       const continuityManager=!!membership.rowCount&&await canManageContinuity(client,actor.id,ticket.owner_group_id);
       const processing=!!membership.rowCount&&(await client.query<{eligible:boolean}>(
         'SELECT ticket_processing_eligible($1,$2) AS eligible',[id,actor.id])).rows[0].eligible;
@@ -421,11 +431,7 @@ export class TicketsService {
       let canAssignOffer=false;
       if(dispatcher && !ticket.assignee_id && !ticket.pending_assignee_id
         && (ticket.status==='QUEUED'||ticket.service_type==='REQ'&&ticket.status==='IN_PROGRESS')) {
-        try {
-          canAssignOffer=!!await this.assignmentPolicy(client,ticket,true);
-        } catch(error) {
-          if(!(error instanceof ConflictException)) throw error;
-        }
+        canAssignOffer=!!await this.assignmentPolicy(client,ticket,true);
       }
       return { ...this.publicTicket(ticket),waiting:ticketWaiting(ticket,ticket.waiting_clock),
         pendingClassification:ticket.pending_classification?{
@@ -453,9 +459,9 @@ export class TicketsService {
         } } : {}),
         canFeedback:actor.id===ticket.requester_id && ['INC','REQ'].includes(ticket.service_type) && ticket.status==='CLOSED' && !feedback?.rowCount,
         feedback:feedback?.rows[0] ?? null,
-        canCorrectClassification:ticket.service_type!=='REQ' && !!membership.rowCount && ['QUEUED','IN_PROGRESS','WAITING_USER','WAITING_VENDOR'].includes(ticket.status)
+        canCorrectClassification:ticket.service_type!=='REQ' && ['QUEUED','IN_PROGRESS','WAITING_USER','WAITING_VENDOR'].includes(ticket.status)
           && !ticket.pending_assignee_id && (ticket.assignee_id===actor.id&&processing||(!ticket.assignee_id&&ticket.status==='QUEUED'&&dispatcher)),
-        canChangePriority:(dispatcher||!!reviewer.rowCount)&&!['CLOSED','CANCELLED','REJECTED','PENDING_CONFIRMATION'].includes(ticket.status),
+        canChangePriority:(priorityDispatcher||!!reviewer.rowCount)&&!['CLOSED','CANCELLED','REJECTED','PENDING_CONFIRMATION'].includes(ticket.status),
         canSuggestPriority:!!membership.rowCount&&ticket.assignee_id===actor.id&&processing&&!['CLOSED','CANCELLED','REJECTED','PENDING_CONFIRMATION'].includes(ticket.status),
         canReviewPriority:!!reviewer.rowCount && actor.id!==ticket.requester_id && actor.id!==ticket.submitted_by_id
           && actor.id!==ticket.priority_changed_by
@@ -600,10 +606,10 @@ export class TicketsService {
       await this.requireActive(client,actor);
       const ticket=await this.accessible(client,actor,id,true);
       const member=await client.query('SELECT 1 FROM group_memberships WHERE employee_id=$1 AND group_id=$2 FOR SHARE',[actor.id,ticket.owner_group_id]);
-      if(!member.rowCount||!(ticket.assignee_id===actor.id||(!ticket.assignee_id&&ticket.status==='QUEUED')))
+      const queuedDispatcher=!ticket.assignee_id&&ticket.status==='QUEUED'&&(await canAdministerTickets(client,actor.id)
+        ||await this.isCoordinator(client,id,actor.id)||!!member.rowCount&&await canDispatch(client,actor.id,ticket.owner_group_id));
+      if(!(ticket.assignee_id===actor.id&&member.rowCount||queuedDispatcher))
         throw new ForbiddenException({code:'CLASSIFICATION_OWNER_REQUIRED'});
-      if(!ticket.assignee_id&&!await canDispatch(client,actor.id,ticket.owner_group_id))
-        throw new ForbiddenException({code:'DISPATCH_ROLE_REQUIRED'});
       const previous=await this.claim(client,actor.id,`classification:${id}`,key,input);
       if(previous)return previous as TicketReceipt;
       if(ticket.version!==input.expectedVersion)throw new ConflictException({code:'VERSION_CONFLICT'});
@@ -616,7 +622,7 @@ export class TicketsService {
         throw new ConflictException({code:'CLASSIFICATION_SITE_CHANGED'});
       if(ticket.service_routing_snapshot.site)service.routingSnapshot.site=ticket.service_routing_snapshot.site;
       if(input.serviceCode===ticket.service_code)throw new ConflictException({code:'CLASSIFICATION_UNCHANGED'});
-      if(service.group_id!==ticket.owner_group_id){
+      if(service.group_id!==ticket.owner_group_id&&!queuedDispatcher){
         if(ticket.service_type!=='INC'||service.type!=='INC')throw new ConflictException({code:'CROSS_GROUP_CLASSIFICATION_INC_ONLY'});
         if(!ticket.assignee_id)throw new ConflictException({code:'CLASSIFICATION_OWNER_MUST_CLAIM'});
         if(!input.targetAssigneeId)throw new BadRequestException({code:'CLASSIFICATION_TARGET_REQUIRED'});
@@ -637,7 +643,7 @@ export class TicketsService {
           {reason:intent.reason,oldServiceCode:ticket.service_code,targetServiceCode:service.code,
             oldGroupId:ticket.owner_group_id,targetGroupId:service.group_id,targetAssigneeId:input.targetAssigneeId,
             assignmentVersion:updated.version,assignmentDueAt:policy!.deadline.toISOString()},requestId,ticket);
-        await automaticDispatchAction(client,id,'REASSIGN');
+        await automaticDispatchAction(client,id,'REASSIGN',actor.id);
         const response=this.receipt(updated);
         await client.query('UPDATE api_idempotency SET response=$4 WHERE actor_id=$1 AND scope=$2 AND key=$3',[actor.id,`classification:${id}`,key,JSON.stringify(response)]);
         return response;
@@ -645,12 +651,14 @@ export class TicketsService {
       if(input.targetAssigneeId)throw new BadRequestException({code:'CLASSIFICATION_TARGET_NOT_NEEDED'});
       if(ticket.assignee_id)await this.requirePosition(client,service.routingSnapshot,ticket.assignee_id,ticket.owner_group_id);
       const snapshot={code:service.code,name:service.name,formVersion:service.form_version,fields:service.field_schema};
-      // A correction never transfers ownership, restarts SLA or overwrites the original classification.
+      if(queuedDispatcher&&service.group_id!==ticket.owner_group_id&&(ticket.service_type!=='INC'||service.type!=='INC'))
+        throw new ConflictException({code:'CROSS_GROUP_CLASSIFICATION_INC_ONLY'});
+      // Queued classification can correct the owning group without resetting SLA or assigning an engineer.
       const updated=await client.query<TicketRow>(`UPDATE tickets SET service_code=$2,service_type=$3,form_version=$4,fields=$5,
-        catalog_snapshot=$6,service_routing_snapshot=$7,navigation_snapshot=$8,version=version+1 WHERE id=$1 RETURNING *`,[id,service.code,service.type,service.form_version,JSON.stringify(input.fields),JSON.stringify(snapshot),JSON.stringify(service.routingSnapshot),JSON.stringify(service.navigationSnapshot)]);
+        catalog_snapshot=$6,service_routing_snapshot=$7,navigation_snapshot=$8,owner_group_id=$9,version=version+1 WHERE id=$1 RETURNING *`,[id,service.code,service.type,service.form_version,JSON.stringify(input.fields),JSON.stringify(snapshot),JSON.stringify(service.routingSnapshot),JSON.stringify(service.navigationSnapshot),service.group_id]);
       await this.record(client,updated.rows[0],actor.id,'CLASSIFICATION_CORRECTED',ticket.status,
-        {reason:input.reason.trim(),oldServiceCode:ticket.service_code,serviceCode:service.code,oldFields:ticket.fields,fields:input.fields},requestId,ticket);
-      await automaticDispatchAction(client,id,'CLASSIFICATION_CORRECTED');
+        {reason:input.reason.trim(),oldServiceCode:ticket.service_code,serviceCode:service.code,oldGroupId:ticket.owner_group_id,ownerGroupId:service.group_id,oldFields:ticket.fields,fields:input.fields},requestId,ticket);
+      await automaticDispatchAction(client,id,'CLASSIFICATION_CORRECTED',actor.id);
       const response=this.receipt(updated.rows[0]);
       await client.query('UPDATE api_idempotency SET response=$4 WHERE actor_id=$1 AND scope=$2 AND key=$3',[actor.id,`classification:${id}`,key,JSON.stringify(response)]);
       return response;
@@ -661,6 +669,10 @@ export class TicketsService {
     const result=await client.query<{eligible:boolean}>('SELECT service_position_eligible($1,$2,$3) AS eligible',
       [JSON.stringify(snapshot),employee,group]);
     if(!result.rows[0].eligible)throw new ForbiddenException({code:'POSITION_APPOINTMENT_REQUIRED'});
+  }
+
+  private async isCoordinator(client:Pick<PoolClient,'query'>,ticketId:string,employee:string):Promise<boolean>{
+    return (await client.query<{allowed:boolean}>('SELECT ticket_triage_access($1,$2) AS allowed',[ticketId,employee])).rows[0].allowed;
   }
 
   private async requireProcessing(client:PoolClient,ticket:TicketRow,employee:string){
@@ -720,7 +732,7 @@ export class TicketsService {
       await client.query('SELECT pg_advisory_xact_lock_shared($1)',[ROLE_AUTHORIZATION_LOCK]);
       await this.requireActive(client,actor);
       const ticket=await this.accessible(client,actor,id);
-      if(ticket.assignee_id!==actor.id&&!await canAdministerTickets(client,actor.id)&&!await canDispatch(client,actor.id,ticket.owner_group_id))throw new NotFoundException();
+      if(ticket.assignee_id!==actor.id&&!await canAdministerTickets(client,actor.id)&&!await this.isCoordinator(client,id,actor.id)&&!await canDispatch(client,actor.id,ticket.owner_group_id))throw new NotFoundException();
       return {items:(await client.query(`SELECT e.id,e.display_name AS name FROM employees e
         JOIN group_memberships m ON m.employee_id=e.id WHERE e.active AND m.group_id=$1
         AND service_position_eligible($2,e.id,$1) ORDER BY e.display_name,e.id`,[group,JSON.stringify(ticket.service_routing_snapshot)])).rows};
@@ -737,10 +749,9 @@ export class TicketsService {
       await client.query('SELECT pg_advisory_xact_lock_shared($1)',[ROLE_AUTHORIZATION_LOCK]);
       await this.requireActive(client,actor);
       const ticket=await this.accessible(client,actor,id);
-      const queuedDispatcher=!ticket.assignee_id&&ticket.status==='QUEUED'
-        &&!!(await client.query('SELECT 1 FROM group_memberships WHERE employee_id=$1 AND group_id=$2 FOR SHARE',
-          [actor.id,ticket.owner_group_id])).rowCount
-        &&await canDispatch(client,actor.id,ticket.owner_group_id);
+      const queuedDispatcher=!ticket.assignee_id&&ticket.status==='QUEUED'&&(await canAdministerTickets(client,actor.id)
+        ||await this.isCoordinator(client,id,actor.id)||!!(await client.query('SELECT 1 FROM group_memberships WHERE employee_id=$1 AND group_id=$2 FOR SHARE',
+          [actor.id,ticket.owner_group_id])).rowCount&&await canDispatch(client,actor.id,ticket.owner_group_id));
       if((ticket.assignee_id!==actor.id&&!queuedDispatcher)||ticket.pending_assignee_id)
         throw new ForbiddenException({code:'CLASSIFICATION_OWNER_REQUIRED'});
       if(ticket.assignee_id)await this.requireProcessing(client,ticket,actor.id);
@@ -749,10 +760,10 @@ export class TicketsService {
       if(input.serviceCode===ticket.service_code)throw new ConflictException({code:'CLASSIFICATION_UNCHANGED'});
       const service=await this.catalogFor(client,actor.id,ticket.requester_id,input.serviceCode,input.formVersion,input.fields,false,true);
       if(service.group_id===ticket.owner_group_id)return {groupId:service.group_id,crossGroup:false,items:[]};
-      if(queuedDispatcher)throw new ConflictException({code:'CLASSIFICATION_OWNER_MUST_CLAIM'});
       if(ticket.service_type!=='INC'||service.type!=='INC')throw new BadRequestException({code:'CROSS_GROUP_CLASSIFICATION_INC_ONLY'});
       if((service.routingSnapshot.site?.id??null)!==((ticket.service_routing_snapshot.site as {id?:string}|undefined)?.id??null))
         throw new ConflictException({code:'CLASSIFICATION_SITE_CHANGED'});
+      if(queuedDispatcher)return {groupId:service.group_id,crossGroup:false,items:[]};
       await this.assignmentPolicy(client,ticket,true,service.group_id);
       return {groupId:service.group_id,crossGroup:true,items:(await client.query(`SELECT e.id,e.display_name AS name FROM employees e
         JOIN group_memberships m ON m.employee_id=e.id WHERE e.active AND m.group_id=$1 AND e.id<>$3
@@ -778,7 +789,7 @@ export class TicketsService {
       const administratorDispatch=!ticket.assignee_id
         &&(ticket.status==='QUEUED'||ticket.service_type==='REQ'&&ticket.status==='IN_PROGRESS')
         &&['REASSIGN','CANCEL_HANDOVER','ASSIGN_OFFER','CANCEL_OFFER'].includes(body.action)
-        &&await canAdministerTickets(client,actor.id);
+        &&(await canAdministerTickets(client,actor.id)||await this.isCoordinator(client,id,actor.id));
       const delegatedInfo=body.action==='ADD_INFO' && !!ticket.delegation_id
         && await this.delegation(client,actor.id,ticket.delegation_id,false)===ticket.requester_id;
       if(['ADD_INFO','CONFIRM','REOPEN','CANCEL'].includes(body.action) && ticket.requester_id!==actor.id && !delegatedInfo)
@@ -926,7 +937,7 @@ export class TicketsService {
           oldFields:ticket.fields,fields:classification.fields,oldGroupId:ticket.owner_group_id,targetGroupId:group},requestId,ticket);
       if (body.action==='ACCEPT_HANDOVER' && group!==ticket.owner_group_id && ticket.priority_review_state==='PENDING')
         await this.record(client,updated.rows[0],actor.id,'P1_REVIEW_ROUTED',next,{ oldGroupId:ticket.owner_group_id,targetGroupId:group,generation:ticket.priority_review_generation },requestId,ticket);
-      await automaticDispatchAction(client,id,body.action);
+      await automaticDispatchAction(client,id,body.action,actor.id);
       const response = this.receipt((await client.query<TicketRow>('SELECT * FROM tickets WHERE id=$1',[id])).rows[0]);
       await client.query('UPDATE api_idempotency SET response=$4 WHERE actor_id=$1 AND scope=$2 AND key=$3', [actor.id, `action:${id}`, key, JSON.stringify(response)]);
       return response;

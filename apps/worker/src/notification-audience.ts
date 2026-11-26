@@ -59,6 +59,19 @@ export function notificationAudience(action: string): Readonly<Audience> {
 export async function notificationRecipients(client: Pick<PoolClient,'query'>, eventId: string, employeeId: string | null = null): Promise<string[]> {
   const event = await client.query<{ action:string }>('SELECT action FROM ticket_events WHERE id=$1',[eventId]);
   if (!event.rowCount) return [];
+  if(['TRIAGE_ASSIGNED','TRIAGE_TRANSFERRED','TRIAGE_ESCALATED'].includes(event.rows[0]!.action)){
+    const result=await client.query<{id:string}>(`SELECT e.id FROM ticket_events v
+      JOIN tickets t ON t.id=v.ticket_id JOIN ticket_triage_responsibilities r ON r.ticket_id=t.id
+      JOIN employees e ON e.active WHERE v.id=$1 AND ($2::text IS NULL OR e.id=$2)
+        AND v.detail->>'triageGeneration'=r.generation::text AND r.stage<>'COMPLETED'
+        AND t.assignee_id IS NULL AND t.pending_assignee_id IS NULL
+        AND (t.status='QUEUED' OR (t.service_type='REQ' AND t.status='IN_PROGRESS'))
+        AND (e.id=r.coordinator_id OR (v.action IN ('TRIAGE_TRANSFERRED','TRIAGE_ESCALATED') AND EXISTS(
+          SELECT 1 FROM role_bindings b WHERE b.employee_id=e.id AND b.role_code='PLATFORM_ADMIN'
+          AND b.status='ACTIVE' AND b.valid_from<=clock_timestamp() AND b.valid_to>clock_timestamp())))
+      ORDER BY e.id`,[eventId,employeeId]);
+    return result.rows.map(row=>row.id);
+  }
   if(event.rows[0]!.action.startsWith('P1_')) {
     const current=await client.query(`SELECT 1 FROM ticket_events v JOIN tickets t ON t.id=v.ticket_id
       WHERE v.id=$1 AND t.priority='P1' AND t.priority_review_state='PENDING'

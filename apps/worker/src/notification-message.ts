@@ -5,6 +5,9 @@ export function notificationLink(publicUrl: string, ticket: {
   if (base.protocol !== 'https:' || base.username || base.password || base.search || base.hash)
     throw new Error('HTTPS_DEEP_LINK_REQUIRED');
   const routingAlert = ticket.action === 'OWNERSHIP_ESCALATION_REQUIRED';
+  const triage:Record<string,string>={TRIAGE_ASSIGNED:'等待人工分派，请待分派负责人安排合格工程师。',
+    TRIAGE_TRANSFERRED:'待分派责任已转至备用负责人，请跟进并安排工程师。',
+    TRIAGE_ESCALATED:'待分派主备均未完成分派，请平台管理员接管积压工单。'};
   const fulfillmentMessages:Record<string,string>={
     DELIVERY_FAILURE_REQUIRED:'交付登记未通过，请独立核查实际授权并登记处置结果。',
     DELIVERY_FAILURE_RESOLVED:'交付登记失败的独立核查结果已记录，请查看工作台。',
@@ -20,7 +23,7 @@ export function notificationLink(publicUrl: string, ticket: {
   if (base.toString().length > 500) throw new Error('HTTPS_DEEP_LINK_REQUIRED');
   return {
     title: `${ticket.action.startsWith('P1_') ? 'P1 候选 · ' : 'IT 服务台 · '}${ticket.number}`,
-    text: waiting ? `工单 ${ticket.number} ${waiting}` : fulfillment ? `工单 ${ticket.number} ${fulfillment}` : ticket.action.startsWith('P1_')
+    text: Object.hasOwn(triage,ticket.action) ? `工单 ${ticket.number} ${triage[ticket.action]}` : waiting ? `工单 ${ticket.number} ${waiting}` : fulfillment ? `工单 ${ticket.number} ${fulfillment}` : ticket.action.startsWith('P1_')
       ? `${ticket.action === 'P1_REVIEW_OVERDUE' ? '主管确认逾期，请立即跟进。' : '请立即响应，主管确认中。'}工单 ${ticket.number}`
       : routingAlert ? `工单 ${ticket.number} 需要调度介入，请查看路由告警并安排人员接管。`
       : ticket.action === 'ASSIGN_OFFER' ? `工单 ${ticket.number} 待您确认接收，请在截止时间前处理。`

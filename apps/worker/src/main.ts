@@ -15,7 +15,7 @@ import { directorySettings,synchronizeDirectory } from './directory-sync.js';
 import { dingtalkPilotUsers } from './dingtalk-pilot.js';
 import { recoverOwnership } from './ownership-recovery.js';
 import {expireAssignments} from './assignment-expiry.js';
-import {maintainAutomaticDispatch} from '@itsm/workflow';
+import {maintainAutomaticDispatch,maintainTriage} from '@itsm/workflow';
 
 const db = new Pool({ host:process.env.DB_HOST ?? 'db',database:process.env.DB_NAME ?? 'itsm',user:process.env.DB_USER ?? 'itsm',password:process.env.DB_PASSWORD,
   application_name:'itsm-worker',connectionTimeoutMillis:5000,statement_timeout:30000 });
@@ -166,6 +166,7 @@ async function tick() {
     scheduleDirectory();
     await maintainAutomaticDispatch(db);
     await recoverOwnership(db,record);
+    await maintainTriage(db);
     if (ticks++ % 15 === 0) { await expireAssignments(db,record); await priorityReviewTimers(); await maintainRequestApprovals(db); await maintainRequestFulfillments(db); await maintainFulfillmentAttention(db,fulfillmentReminders); await maintainWaitingFollowUps(db); await timers(); }
     if(approvalProvider)for(let i=0;i<5&&!stopped;i++)if(!await processNextRequestApproval(db,approvalProvider))break;
     if(approvalProvider&&process.env.ENABLE_MANUAL_REQUEST_DELIVERY==='true')

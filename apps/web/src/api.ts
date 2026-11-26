@@ -30,6 +30,11 @@ export async function attachmentRequest(url:string,method:'GET'|'PUT',headers:Re
   return response;
 }
 export const messages: Record<string,string> = {
+  INVALID_TRIAGE_CONFIG:'请检查主备负责人、分派时限和变更依据；主备不能为同一人。',
+  INVALID_TRIAGE_TRANSFER:'请选择有效工单并填写转交依据。',
+  TRIAGE_VERSION_CONFLICT:'工单或兜底配置已更新，请刷新后重试。',
+  TRIAGE_REQUEST_CONFLICT:'操作标识已用于其他内容，请刷新后重试。',
+  TRIAGE_EMPLOYEE_UNAVAILABLE:'负责人须是已同步且在职的钉钉人员，请刷新人员后重新选择。',
   DIRECTORY_SYNC_NOT_ENABLED:'人员同步尚未启用或配置不完整，请先核对应用配置。',
   DIRECTORY_SYNC_BUSY:'人员正在同步，请稍后刷新状态，不必重复提交。',
   INVALID_AUTOMATIC_DISPATCH:'请填写有效的主备接单时限和变更原因，时限范围为 1 至 10080 自然分钟。',
