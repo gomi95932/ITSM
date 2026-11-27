@@ -18,7 +18,7 @@ export interface HealthResponse {
 
 export const TICKET_STATUSES = ['NEW', 'QUEUED', 'IN_PROGRESS', 'WAITING_APPROVAL', 'WAITING_USER', 'WAITING_VENDOR', 'PENDING_CONFIRMATION', 'CLOSED', 'CANCELLED', 'REJECTED'] as const;
 export type TicketStatus = typeof TICKET_STATUSES[number];
-export const WORK_QUEUES = ['all', 'assigned', 'incoming', 'outgoing', 'unassigned', 'triage'] as const;
+export const WORK_QUEUES = ['all', 'assigned', 'incoming', 'outgoing', 'unassigned', 'triage', 'handled'] as const;
 export type WorkQueue = typeof WORK_QUEUES[number];
 export type WorkQueueCounts = Record<WorkQueue, number>;
 export interface TicketListResponse {

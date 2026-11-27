@@ -35,7 +35,7 @@ provide(operationLogNavigation,(filter)=>{operationLogFilter.value={...filter};n
 const enterpriseLogin=ref(false),dingtalkWebLogin=ref(false);
 const view=ref<View>('mine'),catalog=ref<CatalogItem[]>([]),tickets=ref<TicketView[]>([]),counts=ref<Record<string,number>>({}),total=ref(0),page=ref(1),filter=ref('');
 const workQueue=ref<WorkQueue>('all');
-const emptyWorkQueues=():WorkQueueCounts=>({all:0,assigned:0,incoming:0,outgoing:0,unassigned:0,triage:0});
+const emptyWorkQueues=():WorkQueueCounts=>({all:0,assigned:0,incoming:0,outgoing:0,unassigned:0,triage:0,handled:0});
 const workQueues=ref<WorkQueueCounts>(emptyWorkQueues());
 const selected=ref(''),creating=ref(false),initialCode=ref(''),notices=ref<Delivery[]>([]),notificationMode=ref('disabled'),retrying=ref('');
 const pages=computed(()=>Math.max(1,Math.ceil(total.value/20)));
@@ -44,7 +44,7 @@ const canManageSystem=computed(()=>!!user.value?.canManageRouting);
 const openCount=computed(()=>Object.entries(counts.value).filter(([status])=>!['CLOSED','CANCELLED','REJECTED'].includes(status)).reduce((sum,[,count])=>sum+count,0));
 const noticeLabels:Record<string,string>={PENDING:'待发送',DISPATCHING:'正在提交',SENDING:'平台受理，待确认',DELIVERED:'平台确认发送成功',SIMULATED:'开发模拟',DEAD:'失败待处理',SKIPPED:'已跳过',REVIEW_REQUIRED:'发送结果待核查'};
 const needsNoticeAttention=(item:Delivery)=>['DEAD','REVIEW_REQUIRED'].includes(item.state);
-const title=computed(()=>({mine:'我的工单',catalog:'服务目录',queue:'IT 工作台',notifications:'消息通知',delegations:'代报授权',knowledge:'知识库',reports:'服务报表',roles:'角色授权',routing:'路由告警','routing-config':'派单配置','priority-config':'分级与时限','service-structure':'服务组织','support-structure':'支持组',fulfillments:'交付与回收',directory:'人员同步',operations:'厂区与服务时限',appointments:'岗位任职','operation-logs':'操作日志'})[view.value]);
+const title=computed(()=>({mine:'我提交的工单',catalog:'服务目录',queue:'IT 工作台',notifications:'消息通知',delegations:'代报授权',knowledge:'知识库',reports:'服务报表',roles:'角色授权',routing:'路由告警','routing-config':'派单配置','priority-config':'分级与时限','service-structure':'服务组织','support-structure':'支持组',fulfillments:'交付与回收',directory:'人员同步',operations:'厂区与服务时限',appointments:'岗位任职','operation-logs':'操作日志'})[view.value]);
 let refreshTimer:ReturnType<typeof setInterval>|undefined;
 let generation=0;
 let bootGeneration=0;
@@ -125,7 +125,7 @@ onBeforeUnmount(()=>{window.removeEventListener('hashchange',syncHash);if(refres
     <aside class="sidebar"><a class="brand" href="#" @click.prevent="navigate('mine')"><span class="brand-icon"><Headphones :size="23"/></span><span>IT 服务台<small>祥承科技</small></span></a>
       <nav aria-label="主要导航">
         <section class="nav-group" aria-label="员工服务"><h2 class="nav-caption">员工服务</h2>
-          <button :class="{active:view==='mine'}" @click="navigate('mine')"><ClipboardList :size="19"/>我的工单</button>
+          <button :class="{active:view==='mine'}" @click="navigate('mine')"><ClipboardList :size="19"/>我提交的工单</button>
           <button :class="{active:view==='catalog'}" @click="navigate('catalog')"><LayoutGrid :size="19"/>服务目录</button>
           <button :class="{active:view==='knowledge'}" @click="navigate('knowledge')"><BookOpen :size="19"/>知识库</button>
           <button :class="{active:view==='delegations'}" @click="navigate('delegations')"><UserRound :size="19"/>代报授权</button>

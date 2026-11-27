@@ -48,7 +48,7 @@ test('explicit proxy grant, ordinary GEN intake, correction and revocation stay 
 test('employee and IT workbench complete a real ticket round trip',async({page})=>{
   test.setTimeout(60000);
   await page.setViewportSize({width:1440,height:1000});await page.goto('/');
-  await expect(page.getByRole('heading',{name:'我的工单',exact:true})).toBeVisible();
+  await expect(page.getByRole('heading',{name:'我提交的工单',exact:true})).toBeVisible();
   await page.screenshot({path:'test-results/employee-desktop.png',fullPage:true});
   await page.getByRole('button',{name:'服务目录',exact:true}).click();
   await page.getByRole('button',{name:/业务系统故障/}).click();
@@ -64,7 +64,9 @@ test('employee and IT workbench complete a real ticket round trip',async({page})
   await page.getByRole('button',{name:'IT 工作台',exact:true}).click();
   await page.getByRole('button',{name:'组内未接单'}).click();
   await expect(page.getByRole('button',{name:/E2E WMS 登录异常/})).toBeVisible();
-  await page.getByRole('button',{name:'我负责'}).click();
+  await page.getByRole('button',{name:'我负责的在办工单'}).click();
+  await expect(page.getByRole('button',{name:/E2E WMS 登录异常/})).toHaveCount(0);
+  await page.getByRole('button',{name:'我处理过的工单',exact:true}).click();
   await expect(page.getByRole('button',{name:/E2E WMS 登录异常/})).toHaveCount(0);
   await page.getByRole('button',{name:'全部可见'}).click();
   await page.screenshot({path:'test-results/workbench-desktop.png',fullPage:true});
@@ -76,7 +78,7 @@ test('employee and IT workbench complete a real ticket round trip',async({page})
   await expect(page.getByRole('button',{name:'提交解决方案',exact:true})).toBeVisible();
   await expect(page.locator('.ticket-meta')).toContainText('当前处理人：服务台工程师');
   await page.getByRole('button',{name:'返回工单列表'}).click();
-  await page.getByRole('button',{name:'我负责'}).click();
+  await page.getByRole('button',{name:'我负责的在办工单'}).click();
   await expect(page.getByRole('button',{name:/E2E WMS 登录异常/})).toBeVisible();
   await page.getByRole('button',{name:/E2E WMS 登录异常/}).click();
   await page.getByRole('button',{name:'发起交接',exact:true}).click();
@@ -110,7 +112,7 @@ test('employee and IT workbench complete a real ticket round trip',async({page})
   await expect(page.locator('.ticket-meta')).toContainText('当前处理人：应用支持工程师');
   await expect(page.locator('.ticket-meta')).not.toContainText('待交接');
   await page.getByRole('button',{name:'返回工单列表'}).click();
-  await page.getByRole('button',{name:'我负责'}).click();
+  await page.getByRole('button',{name:'我负责的在办工单'}).click();
   await expect(page.getByRole('button',{name:/E2E WMS 登录异常/})).toBeVisible();
   await page.goto('/'+ticketHash);
   await page.screenshot({path:'test-results/handover-accepted-mobile.png',fullPage:true});
@@ -129,6 +131,24 @@ test('employee and IT workbench complete a real ticket round trip',async({page})
   await page.getByRole('checkbox',{name:'本次内容不含密码、密钥及安全事件证据'}).check();
   await page.getByRole('button',{name:'确认已解决',exact:true}).last().click();
   await expect(page.locator('.ticket-meta .status')).toHaveText('已关闭');
+  await page.getByRole('combobox',{name:'开发身份'}).selectOption('agent-2');
+  await page.getByRole('button',{name:'我提交的工单',exact:true}).click();
+  await expect(page.getByRole('button',{name:/E2E WMS 登录异常/})).toHaveCount(0);
+  await page.getByRole('button',{name:'IT 工作台',exact:true}).click();
+  await page.getByRole('button',{name:'我负责的在办工单',exact:true}).click();
+  await expect(page.getByRole('button',{name:/E2E WMS 登录异常/})).toHaveCount(0);
+  await page.getByRole('button',{name:'我处理过的工单',exact:true}).click();
+  await expect(page.getByRole('button',{name:/E2E WMS 登录异常/})).toBeVisible();
+  await page.screenshot({path:'test-results/handled-queue-desktop.png',fullPage:true});
+  await page.setViewportSize({width:390,height:844});
+  await page.screenshot({path:'test-results/handled-queue-mobile.png',fullPage:true});
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+  const queueButtons=await page.getByRole('group',{name:'工作队列'}).getByRole('button').all();
+  for(const button of queueButtons){
+    expect(await button.evaluate(element=>element.scrollWidth<=element.clientWidth)).toBe(true);
+  }
+  await page.getByRole('combobox',{name:'开发身份'}).selectOption('employee-1');
+  await page.goto('/'+ticketHash);
   const feedback=page.getByRole('region',{name:'服务评价'});
   await feedback.getByRole('combobox',{name:'满意度'}).selectOption('4');
   await feedback.getByRole('textbox',{name:'补充意见（选填）'}).fill('问题已恢复');
@@ -139,7 +159,7 @@ test('employee and IT workbench complete a real ticket round trip',async({page})
   await expect(feedback.getByRole('button',{name:'提交评价'})).toHaveCount(0);
   await page.setViewportSize({width:390,height:844});await page.screenshot({path:'test-results/ticket-mobile.png',fullPage:true});
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
-  await page.getByRole('button',{name:'我的工单',exact:true}).click();
+  await page.getByRole('button',{name:'我提交的工单',exact:true}).click();
   await page.screenshot({path:'test-results/employee-mobile.png',fullPage:true});
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
   await page.getByRole('button',{name:'提交报障',exact:true}).click();await page.getByRole('button',{name:'语音输入',exact:true}).click();

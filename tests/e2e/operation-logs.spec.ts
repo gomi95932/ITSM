@@ -65,6 +65,6 @@ test('ordinary employee cannot see global operation logs',async({page})=>{
     const body=path==='/auth/config'?{mode:'enterprise',configured:true}:path==='/auth/me'?{id:'fixture-employee',name:'测试员工',groups:[],canManageRoles:false,canManageRouting:false}:path==='/tickets'?{items:[],total:0,counts:{}}:{items:[]};
     return route.fulfill({json:body});
   });
-  await page.goto('/');await expect(page.getByRole('heading',{name:'我的工单',exact:true})).toBeVisible();
+  await page.goto('/');await expect(page.getByRole('heading',{name:'我提交的工单',exact:true})).toBeVisible();
   await expect(page.getByRole('button',{name:'操作日志',exact:true})).toHaveCount(0);
 });

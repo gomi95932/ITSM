@@ -44,11 +44,14 @@ assert.equal((await request('/tickets?mine=false&queue=unknown',a)).status,400);
 assert.equal((await request('/tickets?mine=false&queue=assigned')).status,404);
 await inQueue(t,a,'unassigned',true);
 await inQueue(t,a,'assigned',false);
+await inQueue(t,a,'handled',false);
 const race=await Promise.all([act(t,a,'ACCEPT',{comment:'Investigating'}),act(t,b,'ACCEPT',{comment:'Investigating'})]);
 assert.deepEqual(race.map(r=>r.status).sort(),[200,409]);
 t=race.find(r=>r.status===200).data;
 const owner=t.assigneeId,peer=owner===a?b:a;
 await inQueue(t,owner,'assigned',true);
+await inQueue(t,owner,'handled',true);
+await inQueue(t,peer,'handled',false);
 await inQueue(t,peer,'assigned',false);
 await inQueue(t,owner,'unassigned',false);
 const peerDenied=await act(t,peer,'RESOLVE',{comment:'Restored',resolutionCategory:'FIX',evidence:'Verified'});
@@ -62,6 +65,7 @@ assert.equal(t.assigneeId,owner);assert.equal(t.ownerGroupId,'service-desk');ass
 await inQueue(t,owner,'outgoing',true);
 await inQueue(t,owner,'assigned',true);
 await inQueue(t,c,'incoming',true);
+await inQueue(t,c,'handled',false);
 await inQueue(t,c,'assigned',false);
 await inQueue(t,b,'unassigned',false);
 const scoped=await queue(c,'incoming','QUEUED');
@@ -77,6 +81,7 @@ assert.ok((await request('/tickets?mine=false&page=1&size=100',c)).data.items.so
 assert.equal((await act(t,peer,'ACCEPT_HANDOVER',{comment:'Not intended recipient'})).status,409);
 assert.equal((await act(t,owner,'REASSIGN',handoverBody)).status,409);
 t=await ok(t,c,'DECLINE_HANDOVER',{reason:'More information needed'});
+assert.equal((await queue(c,'handled')).items.some(row=>row.id===t.id),false,'declining a handover is not handling');
 await inQueue(t,c,'incoming',false);
 await inQueue(t,owner,'outgoing',false);
 assert.equal(t.assigneeId,owner);assert.equal(t.pendingAssigneeId,null);assert.equal((await request(`/tickets/${t.id}`,c)).status,404);
@@ -88,7 +93,9 @@ const slaBefore=await sql(`SELECT row_to_json(s)::text FROM sla_cycles s WHERE t
 t=await ok(t,c,'ACCEPT_HANDOVER',{comment:'Received by applications'});
 await inQueue(t,c,'incoming',false);
 await inQueue(t,c,'assigned',true);
+await inQueue(t,c,'handled',true);
 await inQueue(t,owner,'assigned',false);
+await inQueue(t,owner,'handled',false);
 assert.equal(t.ownerGroupId,'applications');assert.equal(t.assigneeId,c);assert.equal(t.pendingAssigneeId,null);
 assert.equal((await request(`/tickets/${t.id}`,owner)).status,404);
 assert.equal(await sql(`SELECT row_to_json(s)::text FROM sla_cycles s WHERE ticket_id=${quote(t.id)}`),slaBefore,'handover does not reset SLA');
@@ -96,6 +103,30 @@ assert.equal(await sql(`SELECT count(*) FROM audit_logs WHERE ticket_id=${quote(
   AND before_value->>'assigneeId'=${quote(owner)} AND after_value->>'assigneeId'=${quote(c)}`),'1');
 assert.equal(await sql(`SELECT count(*) FROM ticket_events e WHERE e.ticket_id=${quote(t.id)} AND NOT EXISTS
   (SELECT 1 FROM audit_logs a JOIN outbox_events o ON o.event_id=a.event_id WHERE a.event_id=e.id)`),'0');
+// History survives a same-group handover and closure, but never grants new read access.
+let history=await create();
+await inQueue(history,owner,'handled',false);
+history=await ok(history,owner,'ACCEPT',{comment:'Investigating history scenario'});
+history=await ok(history,owner,'REASSIGN',{targetGroupId:'service-desk',targetAssigneeId:peer,reason:'Peer continues work'});
+await inQueue(history,peer,'handled',false);
+history=await ok(history,peer,'ACCEPT_HANDOVER',{comment:'Continuing investigation'});
+await inQueue(history,owner,'handled',true);
+await inQueue(history,owner,'assigned',false);
+history=await ok(history,peer,'RESOLVE',{comment:'Restored service',resolutionCategory:'FIX',evidence:'Verified with requester'});
+await inQueue(history,peer,'assigned',true);
+history=await ok(history,'employee-1','CONFIRM');
+await inQueue(history,peer,'assigned',false);
+await inQueue(history,owner,'handled',true);
+await inQueue(history,peer,'handled',true);
+const closedHistory=await queue(peer,'handled','CLOSED');
+assert.ok(closedHistory.items.some(row=>row.id===history.id));
+assert.equal(closedHistory.workQueues.handled,(await queue(peer,'handled','IN_PROGRESS')).workQueues.handled);
+assert.equal((await request('/tickets?mine=true&queue=handled',owner)).status,400);
+assert.equal((await request('/tickets?mine=false&queue=handled')).status,404);
+await sql(`DELETE FROM group_memberships WHERE employee_id=${quote(peer)} AND group_id='service-desk'`);
+assert.equal((await request(`/tickets/${history.id}`,peer)).status,404);
+assert.equal((await request('/tickets?mine=false&queue=handled',peer)).status,404);
+await sql(`INSERT INTO group_memberships(employee_id,group_id) VALUES (${quote(peer)},'service-desk')`);
 async function until(check){for(let i=0;i<80;i++){if(await check())return;await new Promise(resolve=>setTimeout(resolve,1000));}throw new Error('OWNERSHIP_RECOVERY_TIMEOUT');}
 // Disable only disposable users; do not change shared browser fixtures or real employees.
 await sql(`UPDATE employees SET active=false WHERE id=${quote(c)}`);
